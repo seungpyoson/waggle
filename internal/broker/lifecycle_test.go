@@ -275,4 +275,3 @@ func TestLifecycle_IdleTimeout(t *testing.T) {
 		t.Error("socket should be removed after idle timeout")
 	}
 }
-
