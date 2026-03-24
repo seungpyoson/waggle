@@ -147,3 +147,132 @@ func TestLifecycle_SocketPermissions0700(t *testing.T) {
 	}
 }
 
+// TestLifecycle_AutoStart verifies the auto-start workflow checks PID file
+// and process existence correctly.
+func TestLifecycle_AutoStart(t *testing.T) {
+	tmpDir := t.TempDir()
+	pidFile := filepath.Join(tmpDir, "broker.pid")
+	sockPath := filepath.Join(tmpDir, "broker.sock")
+
+	// Case 1: No PID file, no socket — should allow start
+	if err := EnsureNotRunning(pidFile); err != nil {
+		t.Errorf("EnsureNotRunning should succeed when no PID file: %v", err)
+	}
+
+	// Case 2: Stale PID file — should cleanup and allow start
+	stalePID := 99999
+	if err := os.WriteFile(pidFile, []byte(fmt.Sprintf("%d", stalePID)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sockPath, []byte{}, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	if IsRunning(pidFile) {
+		t.Fatal("stale PID should not be running")
+	}
+
+	if err := CleanupStale(pidFile, sockPath); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := EnsureNotRunning(pidFile); err != nil {
+		t.Errorf("EnsureNotRunning should succeed after cleanup: %v", err)
+	}
+
+	// Case 3: Live PID file — should prevent start
+	if err := WritePID(pidFile); err != nil {
+		t.Fatal(err)
+	}
+
+	if !IsRunning(pidFile) {
+		t.Fatal("current process should be running")
+	}
+
+	if err := EnsureNotRunning(pidFile); err == nil {
+		t.Fatal("EnsureNotRunning should fail when broker is running")
+	}
+}
+
+// TestLifecycle_MultipleStartsUseSameBroker verifies that multiple start
+// attempts detect an already-running broker and reuse it.
+func TestLifecycle_MultipleStartsUseSameBroker(t *testing.T) {
+	tmpDir := t.TempDir()
+	pidFile := filepath.Join(tmpDir, "broker.pid")
+
+	// Write PID file (simulating running broker)
+	if err := WritePID(pidFile); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify IsRunning returns true
+	if !IsRunning(pidFile) {
+		t.Fatal("expected IsRunning to return true")
+	}
+
+	// Attempt to start again should fail
+	if err := EnsureNotRunning(pidFile); err == nil {
+		t.Fatal("expected EnsureNotRunning to fail when broker is running")
+	}
+
+	// Read PID and verify it's the same process
+	pid, err := ReadPID(pidFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pid != os.Getpid() {
+		t.Errorf("PID mismatch: got %d, want %d", pid, os.Getpid())
+	}
+}
+
+// TestLifecycle_IdleTimeout verifies that the broker shuts down after
+// the idle timeout when there are no active sessions.
+func TestLifecycle_IdleTimeout(t *testing.T) {
+	tmpDir := t.TempDir()
+	sockPath := fmt.Sprintf("/tmp/waggle-idle-test-%d.sock", time.Now().UnixNano())
+	dbPath := filepath.Join(tmpDir, "state.db")
+	defer os.Remove(sockPath)
+
+	// Create broker with short idle timeout
+	b, err := New(Config{
+		SocketPath:  sockPath,
+		DBPath:      dbPath,
+		IdleTimeout: 2 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Start broker in goroutine and capture any error
+	serveDone := make(chan error, 1)
+	go func() {
+		serveDone <- b.Serve()
+	}()
+	time.Sleep(100 * time.Millisecond)
+
+	// Verify broker is running
+	if _, err := os.Stat(sockPath); err != nil {
+		t.Fatal("socket should exist")
+	}
+
+	// Wait for idle timeout (2s + buffer for shutdown to complete)
+	time.Sleep(4 * time.Second)
+
+	// Verify Serve() returned without error
+	select {
+	case err := <-serveDone:
+		if err != nil {
+			t.Errorf("Serve() returned error: %v", err)
+		}
+	case <-time.After(1 * time.Second):
+		t.Error("Serve() did not return after idle timeout")
+	}
+
+	// Verify broker shut down (socket removed)
+	// Give a bit more time for cleanup
+	time.Sleep(100 * time.Millisecond)
+	if _, err := os.Stat(sockPath); !os.IsNotExist(err) {
+		t.Error("socket should be removed after idle timeout")
+	}
+}
+

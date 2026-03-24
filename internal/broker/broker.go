@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/seungpyoson/waggle/internal/config"
 	"github.com/seungpyoson/waggle/internal/events"
 	"github.com/seungpyoson/waggle/internal/locks"
 	"github.com/seungpyoson/waggle/internal/tasks"
@@ -41,7 +42,7 @@ func New(cfg Config) (*Broker, error) {
 		cfg.LeaseCheckPeriod = 30 * time.Second
 	}
 	if cfg.IdleTimeout == 0 {
-		cfg.IdleTimeout = 5 * time.Minute
+		cfg.IdleTimeout = config.Defaults.IdleTimeout
 	}
 
 	// Open task store
@@ -100,6 +101,13 @@ func (b *Broker) Serve() error {
 		tasks.StartLeaseChecker(b.store, b.config.LeaseCheckPeriod, b.stopCh)
 	}()
 
+	// Start idle timeout monitor
+	b.wg.Add(1)
+	go func() {
+		defer b.wg.Done()
+		b.monitorIdleTimeout()
+	}()
+
 	// Accept loop
 	for {
 		conn, err := b.listener.Accept()
@@ -152,6 +160,38 @@ func (b *Broker) Shutdown() error {
 	}
 
 	return nil
+}
+
+// monitorIdleTimeout monitors session count and shuts down broker after idle timeout
+func (b *Broker) monitorIdleTimeout() {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	var idleStart time.Time
+
+	for {
+		select {
+		case <-b.stopCh:
+			return
+		case <-ticker.C:
+			b.mu.RLock()
+			sessionCount := len(b.sessions)
+			b.mu.RUnlock()
+
+			if sessionCount == 0 {
+				if idleStart.IsZero() {
+					idleStart = time.Now()
+				} else if time.Since(idleStart) >= b.config.IdleTimeout {
+					log.Printf("broker: idle timeout reached, shutting down")
+					// Shutdown the broker
+					go b.Shutdown()
+					return
+				}
+			} else {
+				idleStart = time.Time{} // reset
+			}
+		}
+	}
 }
 
 // cleanupSocket removes stale socket file
