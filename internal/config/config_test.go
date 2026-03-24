@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"regexp"
 	"testing"
+	"time"
 )
 
 // C8, C5 partial: no .git anywhere → error mentions WAGGLE_ROOT
@@ -247,5 +248,19 @@ func TestPaths_SocketHashLength(t *testing.T) {
 	}
 	if filepath.Base(p.Socket) != "broker.sock" {
 		t.Fatalf("socket filename = %q, want %q", filepath.Base(p.Socket), "broker.sock")
+	}
+}
+
+// LeaseDuration is set to 5 minutes for task claims
+func TestDefaults_LeaseDuration(t *testing.T) {
+	if Defaults.LeaseDuration != 5*time.Minute {
+		t.Fatalf("LeaseDuration = %v, want %v (5 minutes)", Defaults.LeaseDuration, 5*time.Minute)
+	}
+}
+
+// MaxRetries is set to 3 for task retry attempts
+func TestDefaults_MaxRetries(t *testing.T) {
+	if Defaults.MaxRetries != 3 {
+		t.Fatalf("MaxRetries = %d, want %d", Defaults.MaxRetries, 3)
 	}
 }
