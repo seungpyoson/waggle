@@ -21,6 +21,7 @@ var Defaults = struct {
 	MaxLogSize      int64
 	MaxMessageSize  int64
 	LeaseDuration   time.Duration
+	IdleTimeout     time.Duration
 	MaxRetries      int
 }{
 	DirName:    ".waggle",
@@ -35,6 +36,7 @@ var Defaults = struct {
 	MaxLogSize:      10 * 1024 * 1024,
 	MaxMessageSize:  1024 * 1024, // 1MB buffer for large AI agent payloads
 	LeaseDuration:   5 * time.Minute,
+	IdleTimeout:     5 * time.Minute,
 	MaxRetries:      3,
 }
 
