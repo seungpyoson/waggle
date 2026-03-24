@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/seungpyoson/waggle/internal/broker"
@@ -115,11 +116,11 @@ func connectToBroker() (*client.Client, error) {
 	return client.Connect(paths.Socket)
 }
 
-// getUniqueSessionName generates a session name for CLI commands
-// Uses "cli" as a shared session name so that tasks claimed by one CLI
-// invocation can be completed by another CLI invocation
+// getUniqueSessionName generates a unique session name for CLI commands
+// Uses cli-{pid} to ensure each CLI process has a unique session
+// This prevents session conflicts when multiple CLI commands run simultaneously
 func getUniqueSessionName() string {
-	return "cli"
+	return "cli-" + strconv.Itoa(os.Getpid())
 }
 
 // connectWithSession establishes a connection and creates a session
