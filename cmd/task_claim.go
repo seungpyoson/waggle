@@ -20,7 +20,7 @@ var taskClaimCmd = &cobra.Command{
 	Use:   "claim",
 	Short: "Claim the next eligible task",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		c, err := connectWithSession("cli")
+		c, err := connectWithSession("")
 		if err != nil {
 			printErr("BROKER_NOT_RUNNING", err.Error())
 			return nil
