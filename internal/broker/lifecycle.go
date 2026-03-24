@@ -105,3 +105,43 @@ func EnsureDirs(dirs ...string) error {
 	return nil
 }
 
+// StartDaemon forks the broker as a background process.
+// It redirects stdout/stderr to logFile and returns immediately.
+func StartDaemon(waggleDir, socketDir, logFile string, args []string) error {
+	// Ensure directories exist
+	if err := EnsureDirs(waggleDir, socketDir); err != nil {
+		return err
+	}
+
+	// Open log file for stdout/stderr
+	log, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	if err != nil {
+		return fmt.Errorf("opening log file: %w", err)
+	}
+	defer log.Close()
+
+	// Get current executable path
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("getting executable path: %w", err)
+	}
+
+	// Start process with --foreground flag
+	procAttr := &os.ProcAttr{
+		Files: []*os.File{nil, log, log}, // stdin=nil, stdout=log, stderr=log
+		Dir:   "",
+		Env:   os.Environ(),
+	}
+
+	process, err := os.StartProcess(exe, args, procAttr)
+	if err != nil {
+		return fmt.Errorf("starting daemon: %w", err)
+	}
+
+	// Release the process (don't wait for it)
+	if err := process.Release(); err != nil {
+		return fmt.Errorf("releasing daemon process: %w", err)
+	}
+
+	return nil
+}
