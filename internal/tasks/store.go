@@ -602,6 +602,32 @@ func (s *Store) RequeueAllClaimed() (int, error) {
 	return int(rows), nil
 }
 
+// RequeueByOwner requeues all tasks claimed by a specific owner (for session cleanup)
+func (s *Store) RequeueByOwner(owner string) (int, error) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	res, err := s.db.Exec(`
+		UPDATE tasks
+		SET state = 'pending',
+		    claimed_by = NULL,
+		    claim_token = NULL,
+		    claimed_at = NULL,
+		    lease_expires_at = NULL,
+		    retry_count = retry_count + 1,
+		    updated_at = ?
+		WHERE state = 'claimed' AND claimed_by = ?
+	`, now, owner)
+	if err != nil {
+		return 0, err
+	}
+
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+
+	return int(rows), nil
+}
+
 // RequeueExpiredLeases finds expired leases and re-queues them or marks them as failed
 func (s *Store) RequeueExpiredLeases() (int, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
