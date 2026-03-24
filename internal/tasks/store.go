@@ -602,3 +602,60 @@ func (s *Store) RequeueAllClaimed() (int, error) {
 	return int(rows), nil
 }
 
+// RequeueExpiredLeases finds expired leases and re-queues them or marks them as failed
+func (s *Store) RequeueExpiredLeases() (int, error) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	totalCount := 0
+
+	// First, mark tasks that have exceeded max retries as failed
+	res1, err := s.db.Exec(`
+		UPDATE tasks
+		SET state = 'failed',
+		    failure_reason = 'max_retries_exceeded',
+		    retry_count = retry_count + 1,
+		    claimed_by = NULL,
+		    claim_token = NULL,
+		    claimed_at = NULL,
+		    lease_expires_at = NULL,
+		    updated_at = ?
+		WHERE state = 'claimed'
+		  AND lease_expires_at < ?
+		  AND retry_count + 1 >= max_retries
+	`, now, now)
+	if err != nil {
+		return 0, err
+	}
+
+	rows1, err := res1.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	totalCount += int(rows1)
+
+	// Then, re-queue tasks that haven't exceeded max retries
+	res2, err := s.db.Exec(`
+		UPDATE tasks
+		SET state = 'pending',
+		    retry_count = retry_count + 1,
+		    claimed_by = NULL,
+		    claim_token = NULL,
+		    claimed_at = NULL,
+		    lease_expires_at = NULL,
+		    updated_at = ?
+		WHERE state = 'claimed'
+		  AND lease_expires_at < ?
+		  AND retry_count + 1 < max_retries
+	`, now, now)
+	if err != nil {
+		return 0, err
+	}
+
+	rows2, err := res2.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	totalCount += int(rows2)
+
+	return totalCount, nil
+}
+
