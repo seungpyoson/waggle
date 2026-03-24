@@ -300,10 +300,14 @@ func scanTask(row *sql.Row) (*Task, error) {
 
 	// Unmarshal JSON arrays
 	if tagsJSON.Valid && tagsJSON.String != "" {
-		json.Unmarshal([]byte(tagsJSON.String), &t.Tags)
+		if err := json.Unmarshal([]byte(tagsJSON.String), &t.Tags); err != nil {
+			return nil, fmt.Errorf("unmarshaling tags: %w", err)
+		}
 	}
 	if dependsOnJSON.Valid && dependsOnJSON.String != "" {
-		json.Unmarshal([]byte(dependsOnJSON.String), &t.DependsOn)
+		if err := json.Unmarshal([]byte(dependsOnJSON.String), &t.DependsOn); err != nil {
+			return nil, fmt.Errorf("unmarshaling depends_on: %w", err)
+		}
 	}
 
 	return &t, nil
@@ -556,10 +560,14 @@ func (s *Store) List(filter ListFilter) ([]*Task, error) {
 
 		// Unmarshal JSON arrays
 		if tagsJSON.Valid && tagsJSON.String != "" {
-			json.Unmarshal([]byte(tagsJSON.String), &t.Tags)
+			if err := json.Unmarshal([]byte(tagsJSON.String), &t.Tags); err != nil {
+				return nil, fmt.Errorf("unmarshaling tags: %w", err)
+			}
 		}
 		if dependsOnJSON.Valid && dependsOnJSON.String != "" {
-			json.Unmarshal([]byte(dependsOnJSON.String), &t.DependsOn)
+			if err := json.Unmarshal([]byte(dependsOnJSON.String), &t.DependsOn); err != nil {
+				return nil, fmt.Errorf("unmarshaling depends_on: %w", err)
+			}
 		}
 
 		tasks = append(tasks, &t)

@@ -299,6 +299,13 @@ func TestStore_RequeueAllClaimed(t *testing.T) {
 	if len(tasks) != 2 {
 		t.Errorf("expected 2 pending, got %d", len(tasks))
 	}
+
+	// Verify retry_count was incremented
+	for _, task := range tasks {
+		if task.RetryCount != 1 {
+			t.Errorf("task %d: retry_count = %d, want 1", task.ID, task.RetryCount)
+		}
+	}
 }
 
 func TestStore_Heartbeat(t *testing.T) {
