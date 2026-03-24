@@ -58,14 +58,12 @@ func (s *Session) cleanup() {
 		// Release all locks
 		s.broker.lockMgr.ReleaseAll(s.name)
 
-		// Re-queue all claimed tasks
-		// Note: This re-queues ALL claimed tasks, not just this session's.
-		// This is intentional per the spec requirement.
-		count, err := s.broker.store.RequeueAllClaimed()
+		// Re-queue tasks claimed by this session only
+		count, err := s.broker.store.RequeueByOwner(s.name)
 		if err != nil {
-			log.Printf("session: error requeuing tasks: %v", err)
+			log.Printf("session: error requeuing tasks for %s: %v", s.name, err)
 		} else if count > 0 {
-			log.Printf("session: requeued %d tasks on disconnect", count)
+			log.Printf("session: requeued %d tasks for %s", count, s.name)
 		}
 
 		// Unsubscribe from all events

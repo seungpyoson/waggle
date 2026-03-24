@@ -257,3 +257,41 @@ func TestBroker_InvalidJSONReturnsError(t *testing.T) {
 	}
 }
 
+
+// Test: Worker A disconnects, Worker B's claimed task should NOT be re-queued
+func TestBroker_DisconnectOnlyRequeuesOwnTasks(t *testing.T) {
+	sockPath, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	// Worker A connects and claims task 1
+	c1, _ := client.Connect(sockPath)
+	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "worker-a"})
+	c1.Send(protocol.Request{Cmd: protocol.CmdTaskCreate, Payload: json.RawMessage(`{"desc":"task1"}`), Type: "test"})
+	resp1, _ := c1.Send(protocol.Request{Cmd: protocol.CmdTaskClaim})
+	var claim1 struct{ ID int64 `json:"ID"` }
+	json.Unmarshal(resp1.Data, &claim1)
+
+	// Worker B connects and claims task 2
+	c2, _ := client.Connect(sockPath)
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "worker-b"})
+	c2.Send(protocol.Request{Cmd: protocol.CmdTaskCreate, Payload: json.RawMessage(`{"desc":"task2"}`), Type: "test"})
+	resp2, _ := c2.Send(protocol.Request{Cmd: protocol.CmdTaskClaim})
+	var claim2 struct{ ID int64 `json:"ID"` }
+	json.Unmarshal(resp2.Data, &claim2)
+
+	// Worker A disconnects
+	c1.Close()
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify Worker B's task is still claimed
+	resp, _ := c2.Send(protocol.Request{Cmd: protocol.CmdTaskGet, TaskID: fmt.Sprintf("%d", claim2.ID)})
+	var task struct{ State string `json:"State"` }
+	json.Unmarshal(resp.Data, &task)
+	if task.State != "claimed" {
+		t.Errorf("Worker B's task state = %q, want claimed (should NOT be re-queued when Worker A disconnects)", task.State)
+	}
+
+	c2.Close()
+}
+
+
