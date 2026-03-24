@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 
+	"github.com/seungpyoson/waggle/internal/config"
 	"github.com/seungpyoson/waggle/internal/protocol"
 )
 
@@ -23,8 +24,9 @@ func Connect(socketPath string) (*Client, error) {
 	}
 
 	scanner := bufio.NewScanner(conn)
-	// Set 1MB buffer to handle large payloads (default is 64KB)
-	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+	// Use configurable buffer size for large payloads (default 1MB, vs 64KB default)
+	bufSize := int(config.Defaults.MaxMessageSize)
+	scanner.Buffer(make([]byte, bufSize), bufSize)
 
 	return &Client{
 		conn:    conn,

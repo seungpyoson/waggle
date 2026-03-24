@@ -19,6 +19,7 @@ var Defaults = struct {
 	ShutdownTimeout time.Duration
 	PollInterval    time.Duration
 	MaxLogSize      int64
+	MaxMessageSize  int64
 	LeaseDuration   time.Duration
 	MaxRetries      int
 }{
@@ -32,6 +33,7 @@ var Defaults = struct {
 	ShutdownTimeout: 5 * time.Second,
 	PollInterval:    500 * time.Millisecond,
 	MaxLogSize:      10 * 1024 * 1024,
+	MaxMessageSize:  1024 * 1024, // 1MB buffer for large AI agent payloads
 	LeaseDuration:   5 * time.Minute,
 	MaxRetries:      3,
 }

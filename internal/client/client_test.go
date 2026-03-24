@@ -22,14 +22,27 @@ func TestClient_SendAndReceive(t *testing.T) {
 	defer ln.Close()
 
 	go func() {
-		conn, _ := ln.Accept()
+		conn, err := ln.Accept()
+		if err != nil {
+			t.Errorf("mock server accept: %v", err)
+			return
+		}
 		defer conn.Close()
 		buf := make([]byte, 4096)
-		conn.Read(buf)
+		if _, err := conn.Read(buf); err != nil {
+			t.Errorf("mock server read: %v", err)
+			return
+		}
 		resp := protocol.OKResponse(json.RawMessage(`{"id":1}`))
-		data, _ := json.Marshal(resp)
+		data, err := json.Marshal(resp)
+		if err != nil {
+			t.Errorf("mock server marshal: %v", err)
+			return
+		}
 		data = append(data, '\n')
-		conn.Write(data)
+		if _, err := conn.Write(data); err != nil {
+			t.Errorf("mock server write: %v", err)
+		}
 	}()
 
 	c, err := Connect(sockPath)
@@ -64,7 +77,11 @@ func TestClient_ReadStream(t *testing.T) {
 	defer ln.Close()
 
 	go func() {
-		conn, _ := ln.Accept()
+		conn, err := ln.Accept()
+		if err != nil {
+			t.Errorf("mock server accept: %v", err)
+			return
+		}
 		defer conn.Close()
 		// Send 3 events
 		for i := 1; i <= 3; i++ {
@@ -74,9 +91,16 @@ func TestClient_ReadStream(t *testing.T) {
 				Data:  json.RawMessage(fmt.Sprintf(`{"num":%d}`, i)),
 				TS:    "2024-01-01T00:00:00Z",
 			}
-			data, _ := json.Marshal(event)
+			data, err := json.Marshal(event)
+			if err != nil {
+				t.Errorf("mock server marshal event %d: %v", i, err)
+				return
+			}
 			data = append(data, '\n')
-			conn.Write(data)
+			if _, err := conn.Write(data); err != nil {
+				t.Errorf("mock server write event %d: %v", i, err)
+				return
+			}
 		}
 	}()
 
@@ -121,19 +145,34 @@ func TestClient_LargePayload(t *testing.T) {
 	largeData := strings.Repeat("x", 100*1024) // 100KB
 
 	go func() {
-		conn, _ := ln.Accept()
+		conn, err := ln.Accept()
+		if err != nil {
+			t.Errorf("mock server accept: %v", err)
+			return
+		}
 		defer conn.Close()
-		
+
 		// Read request
 		scanner := bufio.NewScanner(conn)
 		scanner.Buffer(make([]byte, 1024*1024), 1024*1024) // 1MB buffer
-		scanner.Scan()
-		
+		if !scanner.Scan() {
+			if err := scanner.Err(); err != nil {
+				t.Errorf("mock server scan: %v", err)
+			}
+			return
+		}
+
 		// Send large response
 		resp := protocol.OKResponse(json.RawMessage(fmt.Sprintf(`{"data":"%s"}`, largeData)))
-		data, _ := json.Marshal(resp)
+		data, err := json.Marshal(resp)
+		if err != nil {
+			t.Errorf("mock server marshal: %v", err)
+			return
+		}
 		data = append(data, '\n')
-		conn.Write(data)
+		if _, err := conn.Write(data); err != nil {
+			t.Errorf("mock server write: %v", err)
+		}
 	}()
 
 	c, err := Connect(sockPath)
