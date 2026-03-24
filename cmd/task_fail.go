@@ -23,7 +23,7 @@ var taskFailCmd = &cobra.Command{
 		taskID := args[0]
 		reason := args[1]
 
-		c, err := connectWithSession("cli")
+		c, err := connectWithSession("")
 		if err != nil {
 			printErr("BROKER_NOT_RUNNING", err.Error())
 			return nil

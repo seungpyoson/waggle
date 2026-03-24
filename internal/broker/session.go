@@ -58,12 +58,16 @@ func (s *Session) cleanup() {
 		// Release all locks
 		s.broker.lockMgr.ReleaseAll(s.name)
 
-		// Re-queue tasks claimed by this session only
-		count, err := s.broker.store.RequeueByOwner(s.name)
-		if err != nil {
-			log.Printf("session: error requeuing tasks for %s: %v", s.name, err)
-		} else if count > 0 {
-			log.Printf("session: requeued %d tasks for %s", count, s.name)
+		// Re-queue tasks claimed by this session
+		// Skip requeue for CLI sessions - they are short-lived and don't need cleanup
+		// CLI sessions use the name "cli" and are expected to complete tasks in separate invocations
+		if s.name != "cli" {
+			count, err := s.broker.store.RequeueByOwner(s.name)
+			if err != nil {
+				log.Printf("session: error requeuing tasks for %s: %v", s.name, err)
+			} else if count > 0 {
+				log.Printf("session: requeued %d tasks for %s", count, s.name)
+			}
 		}
 
 		// Unsubscribe from all events

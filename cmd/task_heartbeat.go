@@ -22,7 +22,7 @@ var taskHeartbeatCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		taskID := args[0]
 
-		c, err := connectWithSession("cli")
+		c, err := connectWithSession("")
 		if err != nil {
 			printErr("BROKER_NOT_RUNNING", err.Error())
 			return nil

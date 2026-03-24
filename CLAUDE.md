@@ -63,11 +63,11 @@ Claim tasks, do work, complete them.
 
 while true; do
   TASK=$(waggle task claim --type code-edit)
-  
+
   if [ $? -eq 0 ]; then
-    ID=$(echo $TASK | jq -r '.data.id')
-    TOKEN=$(echo $TASK | jq -r '.data.claim_token')
-    PAYLOAD=$(echo $TASK | jq -r '.data.payload')
+    ID=$(echo $TASK | jq -r '.data.ID')
+    TOKEN=$(echo $TASK | jq -r '.data.ClaimToken')
+    PAYLOAD=$(echo $TASK | jq -r '.data.Payload')
     
     # Do the work
     # ...
@@ -92,9 +92,9 @@ Decompose work, create tasks with dependencies, monitor progress.
 # Controller pattern
 
 # Create task graph
-T1=$(waggle task create '{"desc": "write tests"}' --type test | jq -r '.data.id')
-T2=$(waggle task create '{"desc": "implement"}' --type code --depends-on $T1 | jq -r '.data.id')
-T3=$(waggle task create '{"desc": "docs"}' --type docs --depends-on $T2 | jq -r '.data.id')
+T1=$(waggle task create '{"desc": "write tests"}' --type test | jq -r '.data.ID')
+T2=$(waggle task create '{"desc": "implement"}' --type code --depends-on $T1 | jq -r '.data.ID')
+T3=$(waggle task create '{"desc": "docs"}' --type docs --depends-on $T2 | jq -r '.data.ID')
 
 # Monitor completion
 waggle events subscribe task.events | while read EVENT; do
@@ -177,7 +177,7 @@ Never complete a task without the claim token. The token proves you still own th
 ```bash
 # ✅ Correct
 TASK=$(waggle task claim --type test)
-TOKEN=$(echo $TASK | jq -r '.data.claim_token')
+TOKEN=$(echo $TASK | jq -r '.data.ClaimToken')
 waggle task complete $ID '{"result": "pass"}' --token $TOKEN
 
 # ❌ Wrong - missing token
@@ -211,8 +211,8 @@ Tasks with `--depends-on` stay blocked until dependencies complete.
 
 ```bash
 # Create dependency chain
-T1=$(waggle task create '{"step": 1}' | jq -r '.data.id')
-T2=$(waggle task create '{"step": 2}' --depends-on $T1 | jq -r '.data.id')
+T1=$(waggle task create '{"step": 1}' | jq -r '.data.ID')
+T2=$(waggle task create '{"step": 2}' --depends-on $T1 | jq -r '.data.ID')
 
 # T2 won't be claimable until T1 completes
 ```
@@ -259,8 +259,8 @@ waggle events subscribe task.events | while read EVENT; do
   if [ "$(echo $EVENT | jq -r '.event')" = "task.failed" ]; then
     ID=$(echo $EVENT | jq -r '.id')
     ORIGINAL=$(waggle task get $ID)
-    PAYLOAD=$(echo $ORIGINAL | jq -r '.data.payload')
-    
+    PAYLOAD=$(echo $ORIGINAL | jq -r '.data.Payload')
+
     # Create retry task
     waggle task create "$PAYLOAD" --type retry --priority 5
   fi

@@ -58,45 +58,55 @@ Output:
 {
   "ok": true,
   "data": {
-    "id": 1,
-    "state": "pending",
-    "type": "feature",
-    "payload": {"desc": "implement login feature"}
+    "ID": 1,
+    "State": "pending",
+    "Type": "feature",
+    "Payload": "{\"desc\": \"implement login feature\"}"
   }
 }
 ```
 
-### 2. Claim and work on it
+### 2. Claim and complete in a script
+
+**Important:** Claim and complete must happen in the same process to maintain the session.
 
 ```bash
-waggle task claim --type feature
+#!/bin/bash
+# worker.sh
+
+# Claim a task
+TASK=$(waggle task claim --type feature)
+ID=$(echo $TASK | jq -r '.data.ID')
+TOKEN=$(echo $TASK | jq -r '.data.ClaimToken')
+
+echo "Working on task $ID..."
+
+# Do the work
+# ...
+
+# Complete the task
+waggle task complete $ID '{"status": "done"}' --token $TOKEN
 ```
 
-Output:
+Output from claim:
 ```json
 {
   "ok": true,
   "data": {
-    "id": 1,
-    "claim_token": "abc123...",
-    "payload": {"desc": "implement login feature"}
+    "ID": 1,
+    "ClaimToken": "abc123...",
+    "Payload": "{\"desc\": \"implement login feature\"}"
   }
 }
 ```
 
-### 3. Complete the task
-
-```bash
-waggle task complete 1 '{"status": "done", "files": ["src/login.py"]}' --token abc123...
-```
-
-### 4. Monitor progress
+### 3. Monitor progress
 
 ```bash
 # List all tasks
 waggle task list
 
-# Subscribe to task events
+# Subscribe to task events (runs until interrupted)
 waggle events subscribe task.events
 ```
 
@@ -347,9 +357,9 @@ while true; do
   TASK=$(waggle task claim --type code-edit)
 
   if [ $? -eq 0 ]; then
-    ID=$(echo $TASK | jq -r '.data.id')
-    TOKEN=$(echo $TASK | jq -r '.data.claim_token')
-    DESC=$(echo $TASK | jq -r '.data.payload.desc')
+    ID=$(echo $TASK | jq -r '.data.ID')
+    TOKEN=$(echo $TASK | jq -r '.data.ClaimToken')
+    DESC=$(echo $TASK | jq -r '.data.Payload | fromjson | .desc')
 
     echo "Working on task $ID: $DESC"
 
@@ -372,10 +382,10 @@ done
 
 # Create dependent tasks
 TASK1=$(waggle task create '{"desc": "write tests"}' --type test)
-ID1=$(echo $TASK1 | jq -r '.data.id')
+ID1=$(echo $TASK1 | jq -r '.data.ID')
 
 TASK2=$(waggle task create '{"desc": "implement feature"}' --type code-edit --depends-on $ID1)
-ID2=$(echo $TASK2 | jq -r '.data.id')
+ID2=$(echo $TASK2 | jq -r '.data.ID')
 
 TASK3=$(waggle task create '{"desc": "update docs"}' --type docs --depends-on $ID2)
 

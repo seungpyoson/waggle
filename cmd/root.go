@@ -115,8 +115,20 @@ func connectToBroker() (*client.Client, error) {
 	return client.Connect(paths.Socket)
 }
 
+// getUniqueSessionName generates a session name for CLI commands
+// Uses "cli" as a shared session name so that tasks claimed by one CLI
+// invocation can be completed by another CLI invocation
+func getUniqueSessionName() string {
+	return "cli"
+}
+
 // connectWithSession establishes a connection and creates a session
+// If name is empty, generates a unique session name
 func connectWithSession(name string) (*client.Client, error) {
+	if name == "" {
+		name = getUniqueSessionName()
+	}
+
 	c, err := client.Connect(paths.Socket)
 	if err != nil {
 		return nil, err
