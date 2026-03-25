@@ -15,8 +15,8 @@ func TestBuildShellCommand_Simple(t *testing.T) {
 	if !strings.Contains(got, "KEY='val'") {
 		t.Errorf("expected KEY='val' in output, got: %s", got)
 	}
-	if !strings.Contains(got, "echo hello") {
-		t.Errorf("expected 'echo hello' in output, got: %s", got)
+	if !strings.Contains(got, "echo 'hello'") {
+		t.Errorf("expected 'echo 'hello'' in output, got: %s", got)
 	}
 }
 
@@ -75,8 +75,8 @@ func TestBuildShellCommand_NoEnv(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(got, "echo test") {
-		t.Errorf("expected 'echo test' in output, got: %s", got)
+	if !strings.Contains(got, "echo 'test'") {
+		t.Errorf("expected 'echo 'test'' in output, got: %s", got)
 	}
 }
 
@@ -103,8 +103,20 @@ func TestBuildShellCommand_MultipleArgs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(got, "echo arg1 arg2 arg3") {
-		t.Errorf("expected 'echo arg1 arg2 arg3' in output, got: %s", got)
+	if !strings.Contains(got, "echo 'arg1' 'arg2' 'arg3'") {
+		t.Errorf("expected 'echo 'arg1' 'arg2' 'arg3'' in output, got: %s", got)
+	}
+}
+
+// TestBuildShellCommand_ArgsWithSpaces tests args with spaces are correctly quoted
+func TestBuildShellCommand_ArgsWithSpaces(t *testing.T) {
+	result, err := BuildShellCommand(nil, "claude", []string{"--prompt=do this", "-v"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	expected := "claude '--prompt=do this' '-v'"
+	if result != expected {
+		t.Errorf("got %q, want %q", result, expected)
 	}
 }
 

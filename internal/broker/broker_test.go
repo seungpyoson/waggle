@@ -1849,6 +1849,52 @@ func TestBroker_SpawnRegisterDuplicate(t *testing.T) {
 	}
 }
 
+// TestBroker_SpawnUpdatePID — register then update PID
+func TestBroker_SpawnUpdatePID(t *testing.T) {
+	sockPath, _, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c, _ := client.Connect(sockPath)
+	defer c.Close()
+
+	c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "spawner"})
+
+	// Register with PID=0
+	regData, _ := json.Marshal(map[string]any{"pid": 0, "type": "claude"})
+	resp, _ := c.Send(protocol.Request{
+		Cmd:     protocol.CmdSpawnRegister,
+		Name:    "worker-1",
+		Payload: regData,
+	})
+	if !resp.OK {
+		t.Fatalf("register failed: %s", resp.Error)
+	}
+
+	// Update PID
+	pidData, _ := json.Marshal(map[string]any{"pid": 12345})
+	resp, _ = c.Send(protocol.Request{
+		Cmd:     protocol.CmdSpawnUpdatePID,
+		Name:    "worker-1",
+		Payload: pidData,
+	})
+	if !resp.OK {
+		t.Fatalf("update-pid failed: %s", resp.Error)
+	}
+
+	// Verify via status
+	resp, _ = c.Send(protocol.Request{Cmd: protocol.CmdStatus})
+	var status map[string]interface{}
+	json.Unmarshal(resp.Data, &status)
+	spawned := status["spawned"].([]interface{})
+	if len(spawned) != 1 {
+		t.Fatalf("spawned len = %d, want 1", len(spawned))
+	}
+	agent := spawned[0].(map[string]interface{})
+	if int(agent["pid"].(float64)) != 12345 {
+		t.Errorf("pid = %v, want 12345", agent["pid"])
+	}
+}
+
 // TestBroker_SpawnStatusAfterStop — spawned list is empty after shutdown
 func TestBroker_SpawnStatusAfterStop(t *testing.T) {
 	_, b, _ := startTestBroker(t)

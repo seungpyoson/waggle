@@ -55,6 +55,18 @@ func (m *Manager) Remove(name string) {
 	delete(m.agents, name)
 }
 
+func (m *Manager) UpdatePID(name string, pid int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	agent, exists := m.agents[name]
+	if !exists {
+		return fmt.Errorf("agent %q not found", name)
+	}
+	agent.PID = pid
+	return nil
+}
+
 func (m *Manager) List() []*Agent {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

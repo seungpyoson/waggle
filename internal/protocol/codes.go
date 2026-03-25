@@ -28,7 +28,8 @@ const (
 	CmdAck      = "ack"
 	CmdPresence = "presence"
 
-	CmdSpawnRegister = "spawn.register"
+	CmdSpawnRegister  = "spawn.register"
+	CmdSpawnUpdatePID = "spawn.update-pid"
 )
 
 // Error code constants — the `code` field values in Response

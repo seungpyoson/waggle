@@ -78,6 +78,8 @@ func route(s *Session, req protocol.Request) protocol.Response {
 		return handlePresence(s)
 	case protocol.CmdSpawnRegister:
 		return handleSpawnRegister(s, req)
+	case protocol.CmdSpawnUpdatePID:
+		return handleSpawnUpdatePID(s, req)
 	default:
 		return protocol.ErrResponse(protocol.ErrInvalidRequest, "unknown command")
 	}
@@ -671,6 +673,25 @@ func handleSpawnRegister(s *Session, req protocol.Request) protocol.Response {
 	}
 
 	if err := s.broker.spawnMgr.Add(req.Name, spawnData.Type, spawnData.PID); err != nil {
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, err.Error())
+	}
+
+	return protocol.OKResponse(nil)
+}
+
+func handleSpawnUpdatePID(s *Session, req protocol.Request) protocol.Response {
+	if req.Name == "" {
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, "name required")
+	}
+
+	var data struct {
+		PID int `json:"pid"`
+	}
+	if err := json.Unmarshal(req.Payload, &data); err != nil {
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, fmt.Sprintf("invalid data: %v", err))
+	}
+
+	if err := s.broker.spawnMgr.UpdatePID(req.Name, data.PID); err != nil {
 		return protocol.ErrResponse(protocol.ErrInvalidRequest, err.Error())
 	}
 

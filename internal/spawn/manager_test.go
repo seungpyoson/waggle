@@ -226,3 +226,31 @@ func TestManager_IsPIDAliveZero(t *testing.T) {
 	}
 }
 
+// TestManager_UpdatePID — update PID of existing agent
+func TestManager_UpdatePID(t *testing.T) {
+	m := NewManager()
+	m.Add("worker", "claude", 0)
+
+	err := m.UpdatePID("worker", 12345)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	agents := m.List()
+	if len(agents) != 1 {
+		t.Fatalf("List() len = %d, want 1", len(agents))
+	}
+	if agents[0].PID != 12345 {
+		t.Errorf("PID = %d, want 12345", agents[0].PID)
+	}
+}
+
+// TestManager_UpdatePID_NotFound — update PID of nonexistent agent returns error
+func TestManager_UpdatePID_NotFound(t *testing.T) {
+	m := NewManager()
+	err := m.UpdatePID("nonexistent", 12345)
+	if err == nil {
+		t.Fatal("expected error for nonexistent agent")
+	}
+}
+

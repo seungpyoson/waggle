@@ -30,8 +30,10 @@ func BuildShellCommand(env EnvMap, cmd string, args []string) (string, error) {
 	// Add command
 	parts = append(parts, cmd)
 
-	// Add args
-	parts = append(parts, args...)
+	// Add args (quoted for safety)
+	for _, arg := range args {
+		parts = append(parts, shellQuote(arg))
+	}
 
 	return strings.Join(parts, " "), nil
 }

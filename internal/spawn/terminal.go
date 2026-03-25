@@ -52,9 +52,9 @@ func Detect() Terminal {
 
 // OpenTab opens a new terminal tab with the given command and env vars.
 // Returns the PID of the spawned process.
-func OpenTab(t Terminal, name string, cmd string, env map[string]string) (int, error) {
+func OpenTab(t Terminal, name string, cmd string, args []string, env map[string]string) (int, error) {
 	// Build shell command with env vars using safe builder
-	shellCmd, err := BuildShellCommand(env, cmd, nil)
+	shellCmd, err := BuildShellCommand(env, cmd, args)
 	if err != nil {
 		return 0, fmt.Errorf("failed to build shell command: %w", err)
 	}

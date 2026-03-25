@@ -73,30 +73,15 @@ var spawnCmd = &cobra.Command{
 			env["WAGGLE_PROJECT_ID"] = projectID
 		}
 
-		// 6. Build command
-		agentCmd := agent.Cmd
-		if len(agent.Args) > 0 {
-			for _, arg := range agent.Args {
-				agentCmd += " " + arg
-			}
-		}
-
-		// 7. Open tab
-		pid, err := spawn.OpenTab(term, spawnName, agentCmd, env)
-		if err != nil {
-			printErr("SPAWN_ERROR", err.Error())
-			return nil
-		}
-
-		// 8. Determine actual agent type for output
+		// 6. Determine actual agent type for output
 		agentType := spawnType
 		if agentType == "" {
 			agentType = agentCfg.Default
 		}
 
-		// 9. Register with broker — fail hard on error
+		// 7. Register with broker FIRST (PID=0, will update after tab opens)
 		spawnData, _ := json.Marshal(map[string]any{
-			"pid":  pid,
+			"pid":  0,
 			"type": agentType,
 		})
 		resp, err := c.Send(protocol.Request{
@@ -105,15 +90,36 @@ var spawnCmd = &cobra.Command{
 			Payload: spawnData,
 		})
 		if err != nil {
-			printErr("SPAWN_ERROR", fmt.Sprintf("tab opened but registration failed: %v", err))
+			printErr("SPAWN_ERROR", fmt.Sprintf("registration failed: %v", err))
 			return nil
 		}
 		if !resp.OK {
-			printErr(resp.Code, fmt.Sprintf("tab opened but registration failed: %s", resp.Error))
+			printErr(resp.Code, fmt.Sprintf("registration failed: %s", resp.Error))
 			return nil
 		}
 
-		// 10. Print success (only if everything worked)
+		// 8. Open tab (registration succeeded, name is reserved)
+		pid, err := spawn.OpenTab(term, spawnName, agent.Cmd, agent.Args, env)
+		if err != nil {
+			// Tab failed — deregister (best effort, ignore errors)
+			// We don't have a deregister command, so the entry stays with PID=0/alive=false
+			// which is harmless and will be cleaned up on broker stop
+			printErr("SPAWN_ERROR", err.Error())
+			return nil
+		}
+
+		// 9. Update PID with broker (if we got a real PID)
+		if pid > 0 {
+			pidData, _ := json.Marshal(map[string]any{"pid": pid})
+			c.Send(protocol.Request{
+				Cmd:     protocol.CmdSpawnUpdatePID,
+				Name:    spawnName,
+				Payload: pidData,
+			})
+			// Non-fatal if this fails — agent is still registered with PID=0
+		}
+
+		// 10. Print success
 		printJSON(map[string]any{
 			"ok":      true,
 			"message": fmt.Sprintf("spawned %s (%s) in new tab — PID %d", spawnName, agentType, pid),
