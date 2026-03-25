@@ -157,7 +157,39 @@ func TestBroker_DisconnectRequeuesClaimedTasks(t *testing.T) {
 	}
 }
 
+// Test 3b: Clean disconnect does NOT requeue claimed tasks
+func TestBroker_CleanDisconnectDoesNotRequeue(t *testing.T) {
+	sockPath, cleanup := startTestBroker(t)
+	defer cleanup()
 
+	c, _ := client.Connect(sockPath)
+	c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "w-1"})
+
+	// Create and claim task
+	c.Send(protocol.Request{
+		Cmd:     protocol.CmdTaskCreate,
+		Payload: json.RawMessage(`{"desc":"test"}`),
+		Type:    "test",
+	})
+	resp, _ := c.Send(protocol.Request{Cmd: protocol.CmdTaskClaim})
+	if !resp.OK {
+		t.Fatalf("claim: %s", resp.Error)
+	}
+
+	// Clean disconnect (send disconnect command)
+	c.Send(protocol.Request{Cmd: protocol.CmdDisconnect})
+	c.Close()
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify task NOT re-queued (should still be claimed)
+	c2, _ := client.Connect(sockPath)
+	defer c2.Close()
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "w-2"})
+	resp, _ = c2.Send(protocol.Request{Cmd: protocol.CmdTaskClaim})
+	if resp.OK {
+		t.Error("task should NOT be re-queued after clean disconnect")
+	}
+}
 
 // Test 4: Disconnect unsubscribes from events
 func TestBroker_DisconnectUnsubscribesEvents(t *testing.T) {

@@ -82,6 +82,7 @@ func handleConnect(s *Session, req protocol.Request) protocol.Response {
 }
 
 func handleDisconnect(s *Session) protocol.Response {
+	s.cleanDisconnect = true
 	s.cleanup()
 	return protocol.OKResponse(nil)
 }
