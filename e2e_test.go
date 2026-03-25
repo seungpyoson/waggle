@@ -26,11 +26,8 @@ func TestE2E_TaskRoundTrip(t *testing.T) {
 		t.Fatalf("build: %s\n%s", err, out)
 	}
 
-	// Create fake project with .git
+	// Create project directory
 	project := t.TempDir()
-	if err := os.Mkdir(filepath.Join(project, ".git"), 0755); err != nil {
-		t.Fatalf("create .git: %v", err)
-	}
 
 	// Create temp HOME in /tmp to avoid socket path length issues
 	// Unix domain sockets have a 104-byte path limit on macOS
@@ -45,7 +42,7 @@ func TestE2E_TaskRoundTrip(t *testing.T) {
 	// Start broker in background
 	startCmd := exec.Command(tmpBin, "start", "--foreground")
 	startCmd.Dir = project
-	startCmd.Env = append(os.Environ(), "HOME="+tmpHome)
+	startCmd.Env = append(os.Environ(), "HOME="+tmpHome, "WAGGLE_PROJECT_ID=e2e-test-project")
 	if err := startCmd.Start(); err != nil {
 		t.Fatalf("start broker: %v", err)
 	}
