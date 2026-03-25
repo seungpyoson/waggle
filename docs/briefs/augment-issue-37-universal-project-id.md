@@ -299,12 +299,24 @@ Closes #37"
 
 PR reviewer (`gemini-3.1-pro`) checks: invariant holds, no removed-field refs in cmd/, daemon env injection, multi-root sort, git failure fallthrough, FindProjectRoot preserved.
 
-## What NOT To Do
+## Traps to Avoid
 
-- Do NOT modify broker core, session, router, tasks, events, locks, client, or wire protocol
-- Do NOT use `FindProjectRoot()` to feed into `NewPaths()` — old pattern
-- Do NOT leave references to `paths.Root`, `paths.WaggleDir`, `paths.Config` in cmd/
-- Do NOT skip live smoke tests — they ARE the acceptance criteria
-- Do NOT use `os.Environ()` alone in StartDaemon — must append WAGGLE_PROJECT_ID
-- Do NOT batch subtasks into one commit
-- Do NOT use `filepath.Abs`/`EvalSymlinks` on WAGGLE_ROOT in ResolveProjectID — just `"path:" + root`
+- Do NOT modify or delete `FindProjectRoot()` or its 6 tests (`TestFindProjectRoot_*`). It stays unchanged — decoupled from identity, not removed.
+- Do NOT remove `Defaults.ConfigFile` from the Defaults struct. It becomes unused by `NewPaths` but removing it changes struct layout and breaks `ValidateDefaults` reflection.
+- Do NOT use `t.Parallel()` in any test that calls `chdir()` or `t.Setenv()` — they mutate shared process state.
+- Do NOT modify broker core, session, router, tasks, events, locks, client, or wire protocol.
+- Do NOT use `FindProjectRoot()` to feed into `NewPaths()` — that's the old pattern.
+- Do NOT leave references to `paths.Root`, `paths.WaggleDir`, or `paths.Config` anywhere in cmd/.
+- Do NOT skip live smoke tests — they ARE the acceptance criteria.
+- Do NOT use `os.Environ()` alone in StartDaemon — must append `WAGGLE_PROJECT_ID`.
+- Do NOT batch subtasks into one commit.
+- Do NOT use `filepath.Abs`/`EvalSymlinks` on WAGGLE_ROOT in ResolveProjectID — just `"path:" + root`.
+
+## Must-Read Task Detail Files
+
+The brief compresses some code for brevity. Complete test code and replacement tests are in:
+- `docs/superpowers/plans/tasks/2026-03-25-universal-project-id/task-1-resolve-tests.md` — full 7 test functions
+- `docs/superpowers/plans/tasks/2026-03-25-universal-project-id/task-3-paths-update.md` — full 6 new tests + all 7 rewritten tests
+- `docs/superpowers/plans/tasks/2026-03-25-universal-project-id/task-5-callers.md` — full replacement code for root.go and start.go
+
+Read these BEFORE implementing each subtask. The brief's inline code is a summary; the task files are the source of truth.
