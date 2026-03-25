@@ -154,7 +154,7 @@ func disconnectAndClose(c *client.Client) {
 	// treat the socket drop as an unclean disconnect and requeue tasks.
 	// This is the correct fallback: better to requeue than hang.
 	if err := c.SetDeadline(2 * time.Second); err == nil {
-		c.Send(protocol.Request{Cmd: protocol.CmdDisconnect})
+		_, _ = c.Send(protocol.Request{Cmd: protocol.CmdDisconnect})
 	}
 	// If SetDeadline failed, connection is already broken — skip Send, just close.
 	c.Close()

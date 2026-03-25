@@ -3,10 +3,13 @@ package broker
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"log"
 	"net"
-	"strings"
+	"sync"
+	"syscall"
 
+	"github.com/seungpyoson/waggle/internal/config"
 	"github.com/seungpyoson/waggle/internal/protocol"
 )
 
@@ -18,14 +21,20 @@ type Session struct {
 	scan            *bufio.Scanner
 	broker          *Broker
 	cleanDisconnect bool // Set to true when disconnect command is received
+	cleanupOnce     sync.Once
 }
 
 // newSession creates a new session
 func newSession(conn net.Conn, broker *Broker) *Session {
+	scan := bufio.NewScanner(conn)
+	// Match client buffer size for large AI agent payloads.
+	// Uses config.Defaults.MaxMessageSize (single source of truth) to avoid asymmetry.
+	bufSize := int(config.Defaults.MaxMessageSize)
+	scan.Buffer(make([]byte, bufSize), bufSize)
 	return &Session{
 		conn:   conn,
 		enc:    json.NewEncoder(conn),
-		scan:   bufio.NewScanner(conn),
+		scan:   scan,
 		broker: broker,
 	}
 }
@@ -65,19 +74,24 @@ func (s *Session) readLoop() {
 	}
 }
 
-// isConnectionClosed checks if an error is due to a closed connection (expected on disconnect)
+// isConnectionClosed checks if an error is due to a closed connection (expected on disconnect).
+// Uses typed error matching instead of fragile string comparison.
 func isConnectionClosed(err error) bool {
 	if err == nil {
 		return false
 	}
-	msg := err.Error()
-	return strings.Contains(msg, "use of closed network connection") ||
-		strings.Contains(msg, "connection reset by peer") ||
-		strings.Contains(msg, "broken pipe")
+	return errors.Is(err, net.ErrClosed) ||
+		errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, syscall.EPIPE)
 }
 
-// cleanup releases resources on disconnect
+// cleanup releases resources on disconnect. Safe to call multiple times —
+// handleDisconnect calls it eagerly, and readLoop defers it as a safety net.
 func (s *Session) cleanup() {
+	s.cleanupOnce.Do(s.doCleanup)
+}
+
+func (s *Session) doCleanup() {
 	if s.name != "" {
 		// Release all locks
 		s.broker.lockMgr.ReleaseAll(s.name)
@@ -105,4 +119,3 @@ func (s *Session) cleanup() {
 
 	s.conn.Close()
 }
-
