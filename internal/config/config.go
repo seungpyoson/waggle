@@ -67,9 +67,10 @@ var Defaults = struct {
 	BusyTimeout         time.Duration
 	LeaseCheckPeriod    time.Duration
 	IdleCheckInterval   time.Duration
-	StartupPollInterval time.Duration
-	StartupTimeout      time.Duration
-	MaxRetries          int
+	StartupPollInterval  time.Duration
+	StartupTimeout       time.Duration
+	DisconnectTimeout    time.Duration
+	MaxRetries           int
 	MaxPriority         int
 	MaxFieldLength      int
 }{
@@ -89,8 +90,9 @@ var Defaults = struct {
 	BusyTimeout:         5 * time.Second,
 	LeaseCheckPeriod:    30 * time.Second,
 	IdleCheckInterval:   1 * time.Second,
-	StartupPollInterval: 100 * time.Millisecond,
-	StartupTimeout:      2 * time.Second,
+	StartupPollInterval:  100 * time.Millisecond,
+	StartupTimeout:       2 * time.Second,
+	DisconnectTimeout:    2 * time.Second,
 	MaxRetries:          3,
 	MaxPriority:         100,
 	MaxFieldLength:      256,

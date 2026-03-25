@@ -145,7 +145,7 @@ func disconnectAndClose(c *client.Client) {
 	// If the broker is unresponsive, we close anyway — the broker will
 	// treat the socket drop as an unclean disconnect and requeue tasks.
 	// This is the correct fallback: better to requeue than hang.
-	if err := c.SetDeadline(2 * time.Second); err == nil {
+	if err := c.SetDeadline(config.Defaults.DisconnectTimeout); err == nil {
 		_, _ = c.Send(protocol.Request{Cmd: protocol.CmdDisconnect})
 	}
 	// If SetDeadline failed, connection is already broken — skip Send, just close.
