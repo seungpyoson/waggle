@@ -15,9 +15,6 @@ var (
 	ErrNotRecipient    = errors.New("not recipient")
 )
 
-// validPriorities defines the allowed message priority values.
-var validPriorities = map[string]bool{"critical": true, "normal": true, "bulk": true}
-
 // Message represents a message in the store
 type Message struct {
 	ID        int64  `json:"id"`
@@ -117,8 +114,15 @@ func (s *Store) Send(from, to, body, priority string, ttl *int) (*Message, error
 	if priority == "" {
 		priority = config.Defaults.DefaultMsgPriority
 	}
-	if !validPriorities[priority] {
-		return nil, fmt.Errorf("invalid priority: must be critical, normal, or bulk")
+	valid := false
+	for _, v := range config.Defaults.ValidMsgPriorities {
+		if priority == v {
+			valid = true
+			break
+		}
+	}
+	if !valid {
+		return nil, fmt.Errorf("invalid priority: must be one of %v", config.Defaults.ValidMsgPriorities)
 	}
 
 	// Validate TTL
@@ -323,5 +327,15 @@ func (s *Store) MarkPushed(id int64) error {
 		return fmt.Errorf("marking message as pushed: %w", err)
 	}
 	return nil
+}
+
+// GetState returns the current state of a message by ID.
+func (s *Store) GetState(id int64) (string, error) {
+	var state string
+	err := s.db.QueryRow("SELECT state FROM messages WHERE id = ?", id).Scan(&state)
+	if err != nil {
+		return "", fmt.Errorf("querying message state: %w", err)
+	}
+	return state, nil
 }
 

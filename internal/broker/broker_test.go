@@ -16,7 +16,7 @@ import (
 	"github.com/seungpyoson/waggle/internal/protocol"
 )
 
-func startTestBroker(t *testing.T) (string, func()) {
+func startTestBroker(t *testing.T) (string, *Broker, func()) {
 	t.Helper()
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
@@ -32,13 +32,13 @@ func startTestBroker(t *testing.T) (string, func()) {
 
 	go b.Serve()
 	time.Sleep(100 * time.Millisecond)
-	return sockPath, func() {
+	return sockPath, b, func() {
 		b.Shutdown()
 		os.Remove(sockPath)
 	}
 }
 
-func startTestBrokerWithTTL(t *testing.T, ttlCheckPeriod time.Duration) (string, func()) {
+func startTestBrokerWithTTL(t *testing.T, ttlCheckPeriod time.Duration) (string, *Broker, func()) {
 	t.Helper()
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
@@ -57,7 +57,7 @@ func startTestBrokerWithTTL(t *testing.T, ttlCheckPeriod time.Duration) (string,
 
 	go b.Serve()
 	time.Sleep(100 * time.Millisecond)
-	return sockPath, func() {
+	return sockPath, b, func() {
 		b.Shutdown()
 		os.Remove(sockPath)
 	}
@@ -65,7 +65,7 @@ func startTestBrokerWithTTL(t *testing.T, ttlCheckPeriod time.Duration) (string,
 
 // Test 1: Full round trip — create, claim, complete
 func TestBroker_FullRoundTrip_CreateClaimComplete(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c, err := client.Connect(sockPath)
@@ -128,7 +128,7 @@ func TestBroker_FullRoundTrip_CreateClaimComplete(t *testing.T) {
 
 // Test 2: Disconnect cleans up locks
 func TestBroker_DisconnectCleansUpLocks(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c, _ := client.Connect(sockPath)
@@ -156,7 +156,7 @@ func TestBroker_DisconnectCleansUpLocks(t *testing.T) {
 
 // Test 3: Disconnect re-queues claimed tasks
 func TestBroker_DisconnectRequeuesClaimedTasks(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c, _ := client.Connect(sockPath)
@@ -189,7 +189,7 @@ func TestBroker_DisconnectRequeuesClaimedTasks(t *testing.T) {
 
 // Test 3b: Clean disconnect does NOT requeue claimed tasks
 func TestBroker_CleanDisconnectDoesNotRequeue(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c, _ := client.Connect(sockPath)
@@ -223,7 +223,7 @@ func TestBroker_CleanDisconnectDoesNotRequeue(t *testing.T) {
 
 // Test 3c: Events subscribe returns raw event JSON (not wrapped in Response)
 func TestBroker_EventsSubscribeFormat(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c, _ := client.Connect(sockPath)
@@ -270,7 +270,7 @@ func TestBroker_EventsSubscribeFormat(t *testing.T) {
 
 // Test 3d: Status includes task counts by state
 func TestBroker_StatusIncludesTaskCounts(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c, _ := client.Connect(sockPath)
@@ -316,7 +316,7 @@ func TestBroker_StatusIncludesTaskCounts(t *testing.T) {
 
 // Test 4: Disconnect unsubscribes from events
 func TestBroker_DisconnectUnsubscribesEvents(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c, _ := client.Connect(sockPath)
@@ -350,7 +350,7 @@ func TestBroker_DisconnectUnsubscribesEvents(t *testing.T) {
 
 // Test 5: Task events auto-published on state transitions
 func TestBroker_PublishesTaskEventsOnStateTransitions(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c, _ := client.Connect(sockPath)
@@ -390,7 +390,7 @@ func TestBroker_PublishesTaskEventsOnStateTransitions(t *testing.T) {
 
 // Test 6: Invalid request returns error
 func TestBroker_InvalidJSONReturnsError(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c, _ := client.Connect(sockPath)
@@ -415,7 +415,7 @@ func TestBroker_InvalidJSONReturnsError(t *testing.T) {
 
 // Test: Worker A disconnects, Worker B's claimed task should NOT be re-queued
 func TestBroker_DisconnectOnlyRequeuesOwnTasks(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	// Worker A connects and claims task 1
@@ -451,7 +451,7 @@ func TestBroker_DisconnectOnlyRequeuesOwnTasks(t *testing.T) {
 
 // Test 6: Input validation rejects invalid values
 func TestBroker_InputValidation(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c, _ := client.Connect(sockPath)
@@ -500,7 +500,7 @@ func TestBroker_InputValidation(t *testing.T) {
 // not a hardcoded constant. This test sends a payload larger than Go's
 // default bufio.Scanner limit (64KB) but within config.MaxMessageSize.
 func TestBroker_LargePayloadRoundTrip(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c, _ := client.Connect(sockPath)
@@ -533,7 +533,7 @@ func TestBroker_ScannerBufferMatchesConfig(t *testing.T) {
 // === Class B: Double cleanup — cleanup must be idempotent ===
 
 func TestBroker_CleanDisconnectCleansUpOnce(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c, _ := client.Connect(sockPath)
@@ -611,7 +611,7 @@ func TestIsConnectionClosed_UnrelatedError(t *testing.T) {
 
 // TestBroker_SendMessage — client1 sends to client2, client2 inbox returns it
 func TestBroker_SendMessage(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c1, _ := client.Connect(sockPath)
@@ -662,7 +662,7 @@ func TestBroker_SendMessage(t *testing.T) {
 
 // TestBroker_SendPushDelivery — client2 connected, receives push immediately on send
 func TestBroker_SendPushDelivery(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c1, _ := client.Connect(sockPath)
@@ -761,7 +761,7 @@ func TestBroker_SendPushDelivery(t *testing.T) {
 
 // TestBroker_SendOfflineDelivery — send to offline name, name connects later, inbox has message
 func TestBroker_SendOfflineDelivery(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c1, _ := client.Connect(sockPath)
@@ -805,7 +805,7 @@ func TestBroker_SendOfflineDelivery(t *testing.T) {
 
 // TestBroker_SendRequiresName — send with empty name returns INVALID_REQUEST
 func TestBroker_SendRequiresName(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c, _ := client.Connect(sockPath)
@@ -827,7 +827,7 @@ func TestBroker_SendRequiresName(t *testing.T) {
 
 // TestBroker_SendRequiresMessage — send with empty message returns INVALID_REQUEST
 func TestBroker_SendRequiresMessage(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c, _ := client.Connect(sockPath)
@@ -849,7 +849,7 @@ func TestBroker_SendRequiresMessage(t *testing.T) {
 
 // TestBroker_SendRequiresSession — send without connect returns NOT_CONNECTED
 func TestBroker_SendRequiresSession(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c, _ := client.Connect(sockPath)
@@ -932,7 +932,7 @@ func TestBroker_MessagesSurviveRestart(t *testing.T) {
 
 // TestBroker_InboxPersistsAcrossReconnect — send, recipient disconnects, reconnects, inbox still has message
 func TestBroker_InboxPersistsAcrossReconnect(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c1, _ := client.Connect(sockPath)
@@ -976,7 +976,7 @@ func TestBroker_InboxPersistsAcrossReconnect(t *testing.T) {
 
 // TestBroker_MultipleSendersOrdering — A sends to C, B sends to C, C's inbox has both in order
 func TestBroker_MultipleSendersOrdering(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c1, _ := client.Connect(sockPath)
@@ -1048,7 +1048,7 @@ func TestBroker_MultipleSendersOrdering(t *testing.T) {
 
 // TestBroker_SendToSelf — send to own name, verify no protocol corruption, verify message appears in inbox
 func TestBroker_SendToSelf(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c, _ := client.Connect(sockPath)
@@ -1094,7 +1094,7 @@ func TestBroker_SendToSelf(t *testing.T) {
 
 // TestBroker_SessionNameCollision — connect same name twice, disconnect first, verify second still works for push
 func TestBroker_SessionNameCollision(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	// Alice connects on first connection
@@ -1141,7 +1141,7 @@ func TestBroker_SessionNameCollision(t *testing.T) {
 
 // TestBroker_ConcurrentSendToSameRecipient — 10 goroutines all sending to same connected recipient under -race
 func TestBroker_ConcurrentSendToSameRecipient(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	// Bob connects and will receive all messages
@@ -1202,7 +1202,7 @@ func TestBroker_ConcurrentSendToSameRecipient(t *testing.T) {
 
 // TestBroker_SubscribeAndPushRace — session is subscribed to events AND receives push message concurrently under -race
 func TestBroker_SubscribeAndPushRace(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	// Alice subscribes to task.events
@@ -1255,7 +1255,7 @@ func TestBroker_SubscribeAndPushRace(t *testing.T) {
 
 // TestBroker_SendRecipientNameTooLong — validate recipient name length
 func TestBroker_SendRecipientNameTooLong(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c, _ := client.Connect(sockPath)
@@ -1279,7 +1279,7 @@ func TestBroker_SendRecipientNameTooLong(t *testing.T) {
 
 // TestBroker_SendMessageBodyTooLarge — validate message body size
 func TestBroker_SendMessageBodyTooLarge(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c, _ := client.Connect(sockPath)
@@ -1298,7 +1298,7 @@ func TestBroker_SendMessageBodyTooLarge(t *testing.T) {
 
 // TestBroker_Ack — send, ack, verify state transition end-to-end
 func TestBroker_Ack(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c1, _ := client.Connect(sockPath)
@@ -1354,7 +1354,7 @@ func TestBroker_Ack(t *testing.T) {
 
 // TestBroker_AckNonexistent — ack id=99999 → MESSAGE_NOT_FOUND response
 func TestBroker_AckNonexistent(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c, _ := client.Connect(sockPath)
@@ -1375,7 +1375,7 @@ func TestBroker_AckNonexistent(t *testing.T) {
 
 // TestBroker_AckForbidden — alice acks bob's message → FORBIDDEN response
 func TestBroker_AckForbidden(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c1, _ := client.Connect(sockPath)
@@ -1416,7 +1416,7 @@ func TestBroker_AckForbidden(t *testing.T) {
 
 // TestBroker_FullAckLifecycle — queued → pushed → seen (inbox) → acked (ack cmd)
 func TestBroker_FullAckLifecycle(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, b, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c1, _ := client.Connect(sockPath)
@@ -1442,6 +1442,15 @@ func TestBroker_FullAckLifecycle(t *testing.T) {
 	}
 	json.Unmarshal(resp.Data, &msgData)
 
+	// After send, state could be "queued" or "pushed" (push happens synchronously for connected recipients)
+	state, err := b.msgStore.GetState(msgData.ID)
+	if err != nil {
+		t.Fatalf("GetState: %v", err)
+	}
+	if state != "queued" && state != "pushed" {
+		t.Errorf("after send: state = %q, want queued or pushed", state)
+	}
+
 	// Bob receives push
 	c2.Receive()
 
@@ -1451,6 +1460,15 @@ func TestBroker_FullAckLifecycle(t *testing.T) {
 		t.Fatalf("inbox failed: %s", resp.Error)
 	}
 
+	// After inbox (marks seen)
+	state, err = b.msgStore.GetState(msgData.ID)
+	if err != nil {
+		t.Fatalf("GetState: %v", err)
+	}
+	if state != "seen" {
+		t.Errorf("after inbox: state = %q, want seen", state)
+	}
+
 	// Bob acks (state: seen → acked)
 	resp, _ = c2.Send(protocol.Request{
 		Cmd:       protocol.CmdAck,
@@ -1458,6 +1476,15 @@ func TestBroker_FullAckLifecycle(t *testing.T) {
 	})
 	if !resp.OK {
 		t.Fatalf("ack failed: %s", resp.Error)
+	}
+
+	// After ack
+	state, err = b.msgStore.GetState(msgData.ID)
+	if err != nil {
+		t.Fatalf("GetState: %v", err)
+	}
+	if state != "acked" {
+		t.Errorf("after ack: state = %q, want acked", state)
 	}
 
 	// Verify message no longer in inbox
@@ -1475,7 +1502,7 @@ func TestBroker_FullAckLifecycle(t *testing.T) {
 
 // TestBroker_AwaitAck — sender blocks, receiver acks, sender unblocks
 func TestBroker_AwaitAck(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c1, _ := client.Connect(sockPath)
@@ -1526,7 +1553,7 @@ func TestBroker_AwaitAck(t *testing.T) {
 
 // TestBroker_AwaitAckTimeout — sender blocks with timeout=1, no ack, TIMEOUT error
 func TestBroker_AwaitAckTimeout(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c1, _ := client.Connect(sockPath)
@@ -1557,7 +1584,7 @@ func TestBroker_AwaitAckTimeout(t *testing.T) {
 
 // TestBroker_AwaitAckNoLeak — after timeout, broker.ackWaiters is empty
 func TestBroker_AwaitAckNoLeak(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, b, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c1, _ := client.Connect(sockPath)
@@ -1580,9 +1607,15 @@ func TestBroker_AwaitAckNoLeak(t *testing.T) {
 	// Wait for timeout
 	time.Sleep(2 * time.Second)
 
-	// Verify ackWaiters is empty (no leak)
-	// We can't directly access broker.ackWaiters from here, but we can verify
-	// by trying to ack the message and ensuring it doesn't crash
+	// Directly verify ackWaiters map is empty (no leak)
+	b.ackWaitersMu.Lock()
+	waiterCount := len(b.ackWaiters)
+	b.ackWaitersMu.Unlock()
+	if waiterCount != 0 {
+		t.Errorf("ackWaiters count = %d, want 0 (leak detected)", waiterCount)
+	}
+
+	// Also verify by trying to ack the message and ensuring it doesn't crash
 	pushResp, _ := c2.Receive()
 	var pushData struct {
 		ID int64 `json:"id"`
@@ -1654,7 +1687,7 @@ func TestBroker_AwaitAckBrokerShutdown(t *testing.T) {
 
 // TestBroker_PresenceShowsConnected — two clients connect; presence lists both
 func TestBroker_PresenceShowsConnected(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c1, _ := client.Connect(sockPath)
@@ -1692,7 +1725,7 @@ func TestBroker_PresenceShowsConnected(t *testing.T) {
 
 // TestBroker_PresenceConnectDisconnect — connect → present; disconnect → absent
 func TestBroker_PresenceConnectDisconnect(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c1, _ := client.Connect(sockPath)
@@ -1727,7 +1760,7 @@ func TestBroker_PresenceConnectDisconnect(t *testing.T) {
 
 // TestBroker_PresenceEvents — connect fires presence.events
 func TestBroker_PresenceEvents(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c1, _ := client.Connect(sockPath)
@@ -1763,7 +1796,7 @@ func TestBroker_PresenceEvents(t *testing.T) {
 
 // TestBroker_SendWithPriority — send msg_priority=critical; inbox shows priority=critical
 func TestBroker_SendWithPriority(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c1, _ := client.Connect(sockPath)
@@ -1806,7 +1839,7 @@ func TestBroker_SendWithPriority(t *testing.T) {
 
 // TestBroker_SendWithTTL — send ttl=1; wait; inbox empty
 func TestBroker_SendWithTTL(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c1, _ := client.Connect(sockPath)
@@ -1850,7 +1883,7 @@ func TestBroker_SendWithTTL(t *testing.T) {
 // TestBroker_TTLCheckerRuns — broker starts TTL checker; expired msg absent
 func TestBroker_TTLCheckerRuns(t *testing.T) {
 	// Use short TTL check period so the goroutine actually fires during the test
-	sockPath, cleanup := startTestBrokerWithTTL(t, 500*time.Millisecond)
+	sockPath, b, cleanup := startTestBrokerWithTTL(t, 500*time.Millisecond)
 	defer cleanup()
 
 	c1, _ := client.Connect(sockPath)
@@ -1872,11 +1905,25 @@ func TestBroker_TTLCheckerRuns(t *testing.T) {
 		t.Fatalf("send failed: %s", resp.Error)
 	}
 
+	var msgData struct {
+		ID int64 `json:"id"`
+	}
+	json.Unmarshal(resp.Data, &msgData)
+
 	// Bob receives push
 	c2.Receive()
 
 	// Wait for TTL to expire (1s) and checker to fire (500ms period)
 	time.Sleep(2 * time.Second)
+
+	// Verify TTL checker actually marked the message as expired in DB
+	state, err := b.msgStore.GetState(msgData.ID)
+	if err != nil {
+		t.Fatalf("GetState: %v", err)
+	}
+	if state != "expired" {
+		t.Errorf("TTL checker: state = %q, want expired", state)
+	}
 
 	// Bob checks inbox
 	resp, _ = c2.Send(protocol.Request{Cmd: protocol.CmdInbox})
@@ -1901,7 +1948,7 @@ func TestBroker_TTLCheckerRuns(t *testing.T) {
 //
 // The fix registers the waiter BEFORE the push, ensuring any ack finds the waiter.
 func TestBroker_AwaitAckRaceEarlyAck(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c1, _ := client.Connect(sockPath)
@@ -1952,7 +1999,7 @@ func TestBroker_AwaitAckRaceEarlyAck(t *testing.T) {
 
 // TestBroker_PresenceEventOnDisconnect — disconnect fires presence.offline event
 func TestBroker_PresenceEventOnDisconnect(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	// Observer subscribes to presence events

@@ -80,6 +80,7 @@ var Defaults = struct {
 	AwaitAckDefaultTimeout time.Duration
 	MaxTTL                 int
 	DefaultMsgPriority     string
+	ValidMsgPriorities     []string
 }{
 	DirName:    ".waggle",
 	DBFile:     "state.db",
@@ -107,6 +108,7 @@ var Defaults = struct {
 	AwaitAckDefaultTimeout: 30 * time.Second,
 	MaxTTL:                 86400,
 	DefaultMsgPriority:     "normal",
+	ValidMsgPriorities:     []string{"critical", "normal", "bulk"},
 }
 
 type Paths struct {
