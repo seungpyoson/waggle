@@ -37,12 +37,27 @@ type Broker struct {
 
 // New creates a new broker instance
 func New(cfg Config) (*Broker, error) {
-	// Set defaults
-	if cfg.LeaseCheckPeriod == 0 {
-		cfg.LeaseCheckPeriod = 30 * time.Second
+	if err := config.ValidateDefaults(); err != nil {
+		return nil, fmt.Errorf("invalid config: %w", err)
 	}
-	if cfg.IdleTimeout == 0 {
-		cfg.IdleTimeout = config.Defaults.IdleTimeout
+
+	// Apply defaults and validate all duration fields.
+	// Pattern: default-then-validate pairs so no field can slip through.
+	type durField struct {
+		name string
+		val  *time.Duration
+		def  time.Duration
+	}
+	for _, f := range []durField{
+		{"LeaseCheckPeriod", &cfg.LeaseCheckPeriod, config.Defaults.LeaseCheckPeriod},
+		{"IdleTimeout", &cfg.IdleTimeout, config.Defaults.IdleTimeout},
+	} {
+		if *f.val == 0 {
+			*f.val = f.def
+		}
+		if *f.val <= 0 {
+			return nil, fmt.Errorf("broker.Config.%s must be positive, got %v", f.name, *f.val)
+		}
 	}
 
 	// Open task store
@@ -164,7 +179,7 @@ func (b *Broker) Shutdown() error {
 
 // monitorIdleTimeout monitors session count and shuts down broker after idle timeout
 func (b *Broker) monitorIdleTimeout() {
-	ticker := time.NewTicker(1 * time.Second)
+	ticker := time.NewTicker(config.Defaults.IdleCheckInterval)
 	defer ticker.Stop()
 
 	var idleStart time.Time

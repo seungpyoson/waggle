@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/seungpyoson/waggle/internal/broker"
 	"github.com/seungpyoson/waggle/internal/config"
@@ -95,19 +94,19 @@ var startCmd = &cobra.Command{
 		}
 
 		// Wait for broker to start
-		for i := 0; i < 20; i++ {
-			time.Sleep(100 * time.Millisecond)
-			if broker.IsRunning(paths.PID) {
-				pid, _ := broker.ReadPID(paths.PID)
-				printJSON(map[string]any{
-					"ok":      true,
-					"message": fmt.Sprintf("broker started (PID %d)", pid),
-				})
-				return nil
-			}
+		if err := broker.WaitForReady(paths.PID, config.Defaults.StartupTimeout, config.Defaults.StartupPollInterval); err != nil {
+			return fmt.Errorf("broker failed to start (check %s): %w", paths.Log, err)
 		}
 
-		return fmt.Errorf("broker failed to start (check %s)", paths.Log)
+		pid, err := broker.ReadPID(paths.PID)
+		if err != nil {
+			return fmt.Errorf("broker started but cannot read PID: %w", err)
+		}
+		printJSON(map[string]any{
+			"ok":      true,
+			"message": fmt.Sprintf("broker started (PID %d)", pid),
+		})
+		return nil
 	},
 }
 

@@ -22,3 +22,4 @@ Thumbs.db
 
 # Waggle runtime
 .waggle/
+.claude/findings/

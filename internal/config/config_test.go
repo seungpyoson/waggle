@@ -5,9 +5,27 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 )
+
+// setDefaultField sets a Defaults struct field by name and registers a cleanup
+// to restore the original value. This centralizes the save/set/restore pattern
+// and makes it safe against panics mid-test. Tests that use this MUST NOT call
+// t.Parallel() — Defaults is shared global state.
+func setDefaultField(t *testing.T, fieldName string, val any) {
+	t.Helper()
+	v := reflect.ValueOf(&Defaults).Elem()
+	fv := v.FieldByName(fieldName)
+	if !fv.IsValid() {
+		t.Fatalf("no field %q in Defaults", fieldName)
+	}
+	orig := reflect.New(fv.Type()).Elem()
+	orig.Set(fv)
+	t.Cleanup(func() { fv.Set(orig) })
+	fv.Set(reflect.ValueOf(val))
+}
 
 // C8, C5 partial: no .git anywhere → error mentions WAGGLE_ROOT
 func TestFindProjectRoot_NoGitDir(t *testing.T) {
@@ -262,5 +280,103 @@ func TestDefaults_LeaseDuration(t *testing.T) {
 func TestDefaults_MaxRetries(t *testing.T) {
 	if Defaults.MaxRetries != 3 {
 		t.Fatalf("MaxRetries = %d, want %d", Defaults.MaxRetries, 3)
+	}
+}
+
+// New config fields for #35: all tunables centralized
+func TestDefaults_BusyTimeout(t *testing.T) {
+	if Defaults.BusyTimeout != 5*time.Second {
+		t.Fatalf("BusyTimeout = %v, want 5s", Defaults.BusyTimeout)
+	}
+}
+
+func TestDefaults_LeaseCheckPeriod(t *testing.T) {
+	if Defaults.LeaseCheckPeriod != 30*time.Second {
+		t.Fatalf("LeaseCheckPeriod = %v, want 30s", Defaults.LeaseCheckPeriod)
+	}
+}
+
+func TestDefaults_IdleCheckInterval(t *testing.T) {
+	if Defaults.IdleCheckInterval != 1*time.Second {
+		t.Fatalf("IdleCheckInterval = %v, want 1s", Defaults.IdleCheckInterval)
+	}
+}
+
+func TestDefaults_StartupPollInterval(t *testing.T) {
+	if Defaults.StartupPollInterval != 100*time.Millisecond {
+		t.Fatalf("StartupPollInterval = %v, want 100ms", Defaults.StartupPollInterval)
+	}
+}
+
+func TestDefaults_StartupTimeout(t *testing.T) {
+	if Defaults.StartupTimeout != 2*time.Second {
+		t.Fatalf("StartupTimeout = %v, want 2s", Defaults.StartupTimeout)
+	}
+}
+
+func TestValidateDefaults_PassesWithDefaults(t *testing.T) {
+	if err := ValidateDefaults(); err != nil {
+		t.Fatalf("ValidateDefaults() failed on stock defaults: %v", err)
+	}
+}
+
+func TestValidateDefaults_RejectsNegativeDurations(t *testing.T) {
+	setDefaultField(t, "LeaseCheckPeriod", -1*time.Second)
+	if err := ValidateDefaults(); err == nil {
+		t.Fatal("ValidateDefaults() should reject negative LeaseCheckPeriod")
+	}
+}
+
+func TestValidateDefaults_RejectsSubSecondLeaseDuration(t *testing.T) {
+	setDefaultField(t, "LeaseDuration", 500*time.Millisecond)
+	err := ValidateDefaults()
+	if err == nil {
+		t.Fatal("ValidateDefaults() should reject sub-second LeaseDuration")
+	}
+	if got := err.Error(); !strings.Contains(got, "LeaseDuration") || !strings.Contains(got, ">= 1s") {
+		t.Fatalf("unexpected error: %s", got)
+	}
+}
+
+// TestValidateDefaults_RejectsZeroOnEveryNumericField uses reflection to zero
+// each int/int64/Duration field and verify ValidateDefaults catches it.
+// This is the comprehensive test — individual per-field tests are unnecessary
+// because this auto-discovers all fields. MUST NOT use t.Parallel().
+func TestValidateDefaults_RejectsZeroOnEveryNumericField(t *testing.T) {
+	v := reflect.ValueOf(&Defaults).Elem()
+	typ := v.Type()
+	for i := 0; i < v.NumField(); i++ {
+		field := typ.Field(i)
+		fv := v.Field(i)
+		if fv.Kind() != reflect.Int && fv.Kind() != reflect.Int64 {
+			continue
+		}
+		t.Run(field.Name, func(t *testing.T) {
+			// NOT parallel — mutates shared Defaults
+			orig := fv.Int()
+			t.Cleanup(func() { fv.SetInt(orig) })
+			fv.SetInt(0)
+
+			err := ValidateDefaults()
+			if err == nil {
+				t.Fatalf("ValidateDefaults() should reject zero %s", field.Name)
+			}
+			if !strings.Contains(err.Error(), field.Name) {
+				t.Fatalf("error should mention %s, got: %s", field.Name, err.Error())
+			}
+		})
+	}
+}
+
+func TestValidateDefaults_DeterministicErrorOrder(t *testing.T) {
+	setDefaultField(t, "ShutdownTimeout", time.Duration(0))
+	for i := 0; i < 10; i++ {
+		err := ValidateDefaults()
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if got := err.Error(); got != "config.Defaults.ShutdownTimeout must be positive, got 0s" {
+			t.Fatalf("run %d: unexpected error: %s", i, got)
+		}
 	}
 }
