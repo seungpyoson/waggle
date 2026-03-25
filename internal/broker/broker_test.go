@@ -419,4 +419,47 @@ func TestBroker_DisconnectOnlyRequeuesOwnTasks(t *testing.T) {
 	c2.Close()
 }
 
+// Test 6: Input validation rejects invalid values
+func TestBroker_InputValidation(t *testing.T) {
+	sockPath, cleanup := startTestBroker(t)
+	defer cleanup()
 
+	c, _ := client.Connect(sockPath)
+	c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "w-1"})
+
+	// Test negative priority
+	resp, _ := c.Send(protocol.Request{
+		Cmd:      protocol.CmdTaskCreate,
+		Payload:  json.RawMessage(`{"test":true}`),
+		Priority: -1,
+	})
+	if resp.OK {
+		t.Error("expected error for negative priority")
+	}
+	if resp.Code != protocol.ErrInvalidRequest {
+		t.Errorf("expected code=%s, got %s", protocol.ErrInvalidRequest, resp.Code)
+	}
+
+	// Test priority > 100
+	resp, _ = c.Send(protocol.Request{
+		Cmd:      protocol.CmdTaskCreate,
+		Payload:  json.RawMessage(`{"test":true}`),
+		Priority: 101,
+	})
+	if resp.OK {
+		t.Error("expected error for priority > 100")
+	}
+
+	// Test name too long (> 256 chars)
+	longName := string(make([]byte, 257))
+	for i := range longName {
+		longName = longName[:i] + "a"
+	}
+	resp, _ = c.Send(protocol.Request{
+		Cmd:  protocol.CmdConnect,
+		Name: longName,
+	})
+	if resp.OK {
+		t.Error("expected error for name > 256 chars")
+	}
+}

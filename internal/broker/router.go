@@ -71,6 +71,9 @@ func handleConnect(s *Session, req protocol.Request) protocol.Response {
 	if req.Name == "" {
 		return protocol.ErrResponse(protocol.ErrInvalidRequest, "name required")
 	}
+	if len(req.Name) > 256 {
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, "name too long (max 256 chars)")
+	}
 	if s.name != "" {
 		return protocol.ErrResponse(protocol.ErrAlreadyConnected, "already connected")
 	}
@@ -119,6 +122,19 @@ func handleSubscribe(s *Session, req protocol.Request) protocol.Response {
 }
 
 func handleTaskCreate(s *Session, req protocol.Request) protocol.Response {
+
+	// Validate priority
+	if req.Priority < 0 || req.Priority > 100 {
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, "priority must be between 0 and 100")
+	}
+
+	// Validate field lengths
+	if len(req.Type) > 256 {
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, "type too long (max 256 chars)")
+	}
+	if len(req.IdempotencyKey) > 256 {
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, "idempotency_key too long (max 256 chars)")
+	}
 
 	// Parse tags
 	var tags []string
@@ -326,6 +342,11 @@ func handleTaskUpdate(s *Session, req protocol.Request) protocol.Response {
 	taskID, err := strconv.ParseInt(req.TaskID, 10, 64)
 	if err != nil {
 		return protocol.ErrResponse(protocol.ErrInvalidRequest, "invalid task_id")
+	}
+
+	// Validate priority if provided
+	if req.Priority != 0 && (req.Priority < 0 || req.Priority > 100) {
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, "priority must be between 0 and 100")
 	}
 
 	var params tasks.UpdateParams
