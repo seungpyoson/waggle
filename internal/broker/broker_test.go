@@ -191,6 +191,53 @@ func TestBroker_CleanDisconnectDoesNotRequeue(t *testing.T) {
 	}
 }
 
+// Test 3c: Events subscribe returns raw event JSON (not wrapped in Response)
+func TestBroker_EventsSubscribeFormat(t *testing.T) {
+	sockPath, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c, _ := client.Connect(sockPath)
+	c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "subscriber"})
+
+	// Subscribe to task.events
+	resp, _ := c.Send(protocol.Request{Cmd: protocol.CmdSubscribe, Topic: "task.events"})
+	if !resp.OK {
+		t.Fatalf("subscribe: %s", resp.Error)
+	}
+
+	// Start reading events
+	eventCh, err := c.ReadStream()
+	if err != nil {
+		t.Fatalf("read stream: %v", err)
+	}
+
+	// Create a task to trigger an event
+	c2, _ := client.Connect(sockPath)
+	defer c2.Close()
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "creator"})
+	c2.Send(protocol.Request{
+		Cmd:     protocol.CmdTaskCreate,
+		Payload: json.RawMessage(`{"test":true}`),
+		Type:    "test",
+	})
+
+	// Read the event with timeout
+	select {
+	case evt := <-eventCh:
+		if evt.Topic != "task.events" {
+			t.Errorf("expected topic=task.events, got %q", evt.Topic)
+		}
+		if evt.Event != "task.created" {
+			t.Errorf("expected event=task.created, got %q", evt.Event)
+		}
+		if len(evt.Data) == 0 {
+			t.Error("expected event data")
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("timeout waiting for event")
+	}
+}
+
 // Test 4: Disconnect unsubscribes from events
 func TestBroker_DisconnectUnsubscribesEvents(t *testing.T) {
 	sockPath, cleanup := startTestBroker(t)

@@ -103,15 +103,13 @@ func handleSubscribe(s *Session, req protocol.Request) protocol.Response {
 	ch := s.broker.hub.Subscribe(req.Topic, s.name)
 
 	// Switch to streaming mode
+	// Messages from the hub are already marshaled Event objects
+	// Write them directly to the connection without wrapping
 	go func() {
 		for msg := range ch {
-			evt := protocol.Event{
-				Topic: req.Topic,
-				Event: "message",
-				Data:  msg,
-				TS:    time.Now().UTC().Format(time.RFC3339),
-			}
-			s.enc.Encode(evt)
+			// msg is already a marshaled Event, write it directly
+			s.conn.Write(msg)
+			s.conn.Write([]byte("\n"))
 		}
 	}()
 

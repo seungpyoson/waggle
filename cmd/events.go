@@ -55,30 +55,23 @@ var subscribeCmd = &cobra.Command{
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-		// Read events in a goroutine
-		eventCh := make(chan protocol.Response)
-		errCh := make(chan error)
-
-		go func() {
-			for {
-				event, err := c.Receive()
-				if err != nil {
-					errCh <- err
-					return
-				}
-				eventCh <- event
-			}
-		}()
+		// Start reading event stream
+		eventCh, err := c.ReadStream()
+		if err != nil {
+			printErr("INTERNAL_ERROR", err.Error())
+			return nil
+		}
 
 		// Print events until interrupted
 		for {
 			select {
 			case <-sigCh:
 				return nil
-			case err := <-errCh:
-				printErr("INTERNAL_ERROR", err.Error())
-				return nil
-			case event := <-eventCh:
+			case event, ok := <-eventCh:
+				if !ok {
+					// Channel closed, broker disconnected
+					return nil
+				}
 				data, _ := json.Marshal(event)
 				fmt.Println(string(data))
 			}
