@@ -133,10 +133,19 @@ The hook/skill maintains the waggle connection and sends heartbeats for any clai
 **e) Auto-claim on assignment:**
 If the orchestrator creates a task with `--assign deployer`, the deployer's session auto-claims it when the message arrives.
 
-**Cross-platform expansion (post Claude Code):**
-- Gemini CLI: equivalent `GEMINI.md` instructions + startup script
-- Codex: `AGENTS.md` instructions + startup script
-- Generic: `waggle agent start --name worker` wrapper that maintains connection + polls inbox
+**Cross-platform strategy — one protocol, not one client per platform:**
+
+The broker speaks one protocol (NDJSON over Unix socket). Every platform that can run shell commands already speaks it. Per-platform work is only for zero-knowledge participation — making waggle invisible.
+
+| Platform | Integration | Effort | How |
+|----------|------------|--------|-----|
+| Claude Code | SessionStart hook + `/waggle` skill | Medium | Superpowers pattern — auto-connect, message injection, auto-heartbeat |
+| Gemini CLI | `GEMINI.md` instructions | Small | Document waggle commands in Gemini's config file |
+| Codex | `AGENTS.md` instructions | Small | Document waggle commands in Codex's config file |
+| Augment Code | Workspace notes | Small | Add waggle workflow to Augment workspace |
+| Any bash script | Nothing | Zero | Already works — just call `waggle` commands |
+
+**Do NOT build separate clients.** Build Claude Code integration properly (Phase 2), then write a one-page integration guide per platform. The guides are just "put these waggle commands in your agent's config." The protocol is identical everywhere.
 
 ### 3. Spawn — Visible Terminal Sessions
 
