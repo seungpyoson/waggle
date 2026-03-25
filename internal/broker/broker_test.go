@@ -1782,9 +1782,9 @@ func TestBroker_SpawnRegister(t *testing.T) {
 		"type": "claude",
 	})
 	resp, _ := c.Send(protocol.Request{
-		Cmd:  protocol.CmdSpawnRegister,
-		Name: "worker-1",
-		Data: spawnData,
+		Cmd:     protocol.CmdSpawnRegister,
+		Name:    "worker-1",
+		Payload: spawnData,
 	})
 	if !resp.OK {
 		t.Fatalf("spawn.register failed: %s", resp.Error)
@@ -1830,9 +1830,9 @@ func TestBroker_SpawnRegisterDuplicate(t *testing.T) {
 
 	// First register
 	resp, _ := c.Send(protocol.Request{
-		Cmd:  protocol.CmdSpawnRegister,
-		Name: "worker-1",
-		Data: spawnData,
+		Cmd:     protocol.CmdSpawnRegister,
+		Name:    "worker-1",
+		Payload: spawnData,
 	})
 	if !resp.OK {
 		t.Fatalf("first spawn.register failed: %s", resp.Error)
@@ -1840,9 +1840,9 @@ func TestBroker_SpawnRegisterDuplicate(t *testing.T) {
 
 	// Second register same name
 	resp, _ = c.Send(protocol.Request{
-		Cmd:  protocol.CmdSpawnRegister,
-		Name: "worker-1",
-		Data: spawnData,
+		Cmd:     protocol.CmdSpawnRegister,
+		Name:    "worker-1",
+		Payload: spawnData,
 	})
 	if resp.OK {
 		t.Error("duplicate spawn.register should fail")

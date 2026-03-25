@@ -53,23 +53,16 @@ func Detect() Terminal {
 // OpenTab opens a new terminal tab with the given command and env vars.
 // Returns the PID of the spawned process.
 func OpenTab(t Terminal, name string, cmd string, env map[string]string) (int, error) {
-	// Build env string
-	var envParts []string
-	for k, v := range env {
-		envParts = append(envParts, fmt.Sprintf("%s=%s", k, v))
-	}
-	envStr := strings.Join(envParts, " ")
-
-	// Build full command with env vars
-	fullCmd := cmd
-	if envStr != "" {
-		fullCmd = envStr + " " + cmd
+	// Build shell command with env vars using safe builder
+	shellCmd, err := BuildShellCommand(env, cmd, nil)
+	if err != nil {
+		return 0, fmt.Errorf("failed to build shell command: %w", err)
 	}
 
 	switch t {
 	case TerminalApp:
 		// Use AppleScript to open a new tab in Terminal.app
-		script := fmt.Sprintf(`tell application "Terminal" to do script "%s"`, fullCmd)
+		script := BuildAppleScript(TerminalApp, shellCmd)
 		execCmd := exec.Command("osascript", "-e", script)
 		if err := execCmd.Run(); err != nil {
 			return 0, fmt.Errorf("failed to open Terminal.app tab: %w", err)
@@ -84,7 +77,7 @@ func OpenTab(t Terminal, name string, cmd string, env map[string]string) (int, e
 
 	case ITerm2:
 		// Use AppleScript to open a new tab in iTerm2
-		script := fmt.Sprintf(`tell application "iTerm2" to tell current window to create tab with default profile command "%s"`, fullCmd)
+		script := BuildAppleScript(ITerm2, shellCmd)
 		execCmd := exec.Command("osascript", "-e", script)
 		if err := execCmd.Run(); err != nil {
 			return 0, fmt.Errorf("failed to open iTerm2 tab: %w", err)
@@ -100,7 +93,7 @@ func OpenTab(t Terminal, name string, cmd string, env map[string]string) (int, e
 	case LinuxDefault:
 		// Try gnome-terminal first
 		if _, err := exec.LookPath("gnome-terminal"); err == nil {
-			execCmd := exec.Command("gnome-terminal", "--", "bash", "-c", fullCmd)
+			execCmd := exec.Command("gnome-terminal", "--", "bash", "-c", shellCmd)
 			if err := execCmd.Start(); err != nil {
 				return 0, fmt.Errorf("failed to open gnome-terminal: %w", err)
 			}
@@ -109,7 +102,7 @@ func OpenTab(t Terminal, name string, cmd string, env map[string]string) (int, e
 
 		// Try xterm
 		if _, err := exec.LookPath("xterm"); err == nil {
-			execCmd := exec.Command("xterm", "-e", fullCmd)
+			execCmd := exec.Command("xterm", "-e", shellCmd)
 			if err := execCmd.Start(); err != nil {
 				return 0, fmt.Errorf("failed to open xterm: %w", err)
 			}
@@ -118,7 +111,7 @@ func OpenTab(t Terminal, name string, cmd string, env map[string]string) (int, e
 
 		// Try x-terminal-emulator
 		if _, err := exec.LookPath("x-terminal-emulator"); err == nil {
-			execCmd := exec.Command("x-terminal-emulator", "-e", fullCmd)
+			execCmd := exec.Command("x-terminal-emulator", "-e", shellCmd)
 			if err := execCmd.Start(); err != nil {
 				return 0, fmt.Errorf("failed to open x-terminal-emulator: %w", err)
 			}
@@ -140,7 +133,7 @@ func OpenTab(t Terminal, name string, cmd string, env map[string]string) (int, e
 // Returns the PID if found within the timeout, or an error if not found.
 func findSpawnedPID(name string, timeout time.Duration) (int, error) {
 	deadline := time.Now().Add(timeout)
-	searchPattern := "WAGGLE_AGENT_NAME=" + name
+	searchPattern := BuildPgrepPattern(name)
 
 	for time.Now().Before(deadline) {
 		// pgrep -f searches the full command line including env vars

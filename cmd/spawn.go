@@ -100,9 +100,9 @@ var spawnCmd = &cobra.Command{
 			"type": agentType,
 		})
 		resp, err := c.Send(protocol.Request{
-			Cmd:  protocol.CmdSpawnRegister,
-			Name: spawnName,
-			Data: spawnData,
+			Cmd:     protocol.CmdSpawnRegister,
+			Name:    spawnName,
+			Payload: spawnData,
 		})
 		if err != nil {
 			printErr("SPAWN_ERROR", fmt.Sprintf("tab opened but registration failed: %v", err))
