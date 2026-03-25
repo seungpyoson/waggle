@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 )
 
 // WritePID writes the current process ID to the specified file.
@@ -93,6 +94,24 @@ func RemovePID(pidFile string) error {
 		return fmt.Errorf("removing PID file: %w", err)
 	}
 	return nil
+}
+
+// WaitForReady polls until the broker process is running or the timeout expires.
+func WaitForReady(pidFile string, timeout, interval time.Duration) error {
+	if timeout <= 0 {
+		return fmt.Errorf("WaitForReady: timeout must be positive, got %v", timeout)
+	}
+	if interval <= 0 {
+		return fmt.Errorf("WaitForReady: interval must be positive, got %v", interval)
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if IsRunning(pidFile) {
+			return nil
+		}
+		time.Sleep(interval)
+	}
+	return fmt.Errorf("broker failed to start within %v", timeout)
 }
 
 // EnsureDirs creates the specified directories if they don't exist.

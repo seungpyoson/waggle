@@ -264,3 +264,60 @@ func TestDefaults_MaxRetries(t *testing.T) {
 		t.Fatalf("MaxRetries = %d, want %d", Defaults.MaxRetries, 3)
 	}
 }
+
+// New config fields for #35: all tunables centralized
+func TestDefaults_BusyTimeout(t *testing.T) {
+	if Defaults.BusyTimeout != 5*time.Second {
+		t.Fatalf("BusyTimeout = %v, want 5s", Defaults.BusyTimeout)
+	}
+}
+
+func TestDefaults_LeaseCheckPeriod(t *testing.T) {
+	if Defaults.LeaseCheckPeriod != 30*time.Second {
+		t.Fatalf("LeaseCheckPeriod = %v, want 30s", Defaults.LeaseCheckPeriod)
+	}
+}
+
+func TestDefaults_IdleCheckInterval(t *testing.T) {
+	if Defaults.IdleCheckInterval != 1*time.Second {
+		t.Fatalf("IdleCheckInterval = %v, want 1s", Defaults.IdleCheckInterval)
+	}
+}
+
+func TestDefaults_StartupPollInterval(t *testing.T) {
+	if Defaults.StartupPollInterval != 100*time.Millisecond {
+		t.Fatalf("StartupPollInterval = %v, want 100ms", Defaults.StartupPollInterval)
+	}
+}
+
+func TestDefaults_StartupTimeout(t *testing.T) {
+	if Defaults.StartupTimeout != 2*time.Second {
+		t.Fatalf("StartupTimeout = %v, want 2s", Defaults.StartupTimeout)
+	}
+}
+
+func TestValidateDefaults_PassesWithDefaults(t *testing.T) {
+	if err := ValidateDefaults(); err != nil {
+		t.Fatalf("ValidateDefaults() failed on stock defaults: %v", err)
+	}
+}
+
+func TestValidateDefaults_RejectsZeroDurations(t *testing.T) {
+	orig := Defaults.BusyTimeout
+	Defaults.BusyTimeout = 0
+	defer func() { Defaults.BusyTimeout = orig }()
+
+	if err := ValidateDefaults(); err == nil {
+		t.Fatal("ValidateDefaults() should reject zero BusyTimeout")
+	}
+}
+
+func TestValidateDefaults_RejectsNegativeDurations(t *testing.T) {
+	orig := Defaults.LeaseCheckPeriod
+	Defaults.LeaseCheckPeriod = -1 * time.Second
+	defer func() { Defaults.LeaseCheckPeriod = orig }()
+
+	if err := ValidateDefaults(); err == nil {
+		t.Fatal("ValidateDefaults() should reject negative LeaseCheckPeriod")
+	}
+}

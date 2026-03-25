@@ -37,9 +37,13 @@ type Broker struct {
 
 // New creates a new broker instance
 func New(cfg Config) (*Broker, error) {
+	if err := config.ValidateDefaults(); err != nil {
+		return nil, fmt.Errorf("invalid config: %w", err)
+	}
+
 	// Set defaults
 	if cfg.LeaseCheckPeriod == 0 {
-		cfg.LeaseCheckPeriod = 30 * time.Second
+		cfg.LeaseCheckPeriod = config.Defaults.LeaseCheckPeriod
 	}
 	if cfg.IdleTimeout == 0 {
 		cfg.IdleTimeout = config.Defaults.IdleTimeout
@@ -164,7 +168,7 @@ func (b *Broker) Shutdown() error {
 
 // monitorIdleTimeout monitors session count and shuts down broker after idle timeout
 func (b *Broker) monitorIdleTimeout() {
-	ticker := time.NewTicker(1 * time.Second)
+	ticker := time.NewTicker(config.Defaults.IdleCheckInterval)
 	defer ticker.Stop()
 
 	var idleStart time.Time

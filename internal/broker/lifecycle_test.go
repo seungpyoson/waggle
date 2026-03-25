@@ -225,6 +225,30 @@ func TestLifecycle_MultipleStartsUseSameBroker(t *testing.T) {
 	}
 }
 
+// TestWaitForReady_RejectsZeroInterval verifies WaitForReady returns error for zero interval
+func TestWaitForReady_RejectsZeroInterval(t *testing.T) {
+	err := WaitForReady("/nonexistent/pid", 1*time.Second, 0)
+	if err == nil {
+		t.Fatal("expected error for zero interval")
+	}
+}
+
+// TestWaitForReady_RejectsZeroTimeout verifies WaitForReady returns error for zero timeout
+func TestWaitForReady_RejectsZeroTimeout(t *testing.T) {
+	err := WaitForReady("/nonexistent/pid", 0, 100*time.Millisecond)
+	if err == nil {
+		t.Fatal("expected error for zero timeout")
+	}
+}
+
+// TestWaitForReady_RejectsNegativeInterval verifies WaitForReady returns error for negative interval
+func TestWaitForReady_RejectsNegativeInterval(t *testing.T) {
+	err := WaitForReady("/nonexistent/pid", 1*time.Second, -1*time.Millisecond)
+	if err == nil {
+		t.Fatal("expected error for negative interval")
+	}
+}
+
 // TestLifecycle_IdleTimeout verifies that the broker shuts down after
 // the idle timeout when there are no active sessions.
 func TestLifecycle_IdleTimeout(t *testing.T) {

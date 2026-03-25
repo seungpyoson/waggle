@@ -2,6 +2,7 @@ package broker
 
 import (
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -73,7 +74,7 @@ func handleConnect(s *Session, req protocol.Request) protocol.Response {
 		return protocol.ErrResponse(protocol.ErrInvalidRequest, "name required")
 	}
 	if len(req.Name) > config.Defaults.MaxFieldLength {
-		return protocol.ErrResponse(protocol.ErrInvalidRequest, "name too long (max 256 chars)")
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, fmt.Sprintf("name too long (max %d chars)", config.Defaults.MaxFieldLength))
 	}
 	if s.name != "" {
 		return protocol.ErrResponse(protocol.ErrAlreadyConnected, "already connected")
@@ -126,15 +127,15 @@ func handleTaskCreate(s *Session, req protocol.Request) protocol.Response {
 
 	// Validate priority
 	if req.Priority < 0 || req.Priority > config.Defaults.MaxPriority {
-		return protocol.ErrResponse(protocol.ErrInvalidRequest, "priority must be between 0 and 100")
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, fmt.Sprintf("priority must be between 0 and %d", config.Defaults.MaxPriority))
 	}
 
 	// Validate field lengths
 	if len(req.Type) > config.Defaults.MaxFieldLength {
-		return protocol.ErrResponse(protocol.ErrInvalidRequest, "type too long (max 256 chars)")
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, fmt.Sprintf("type too long (max %d chars)", config.Defaults.MaxFieldLength))
 	}
 	if len(req.IdempotencyKey) > config.Defaults.MaxFieldLength {
-		return protocol.ErrResponse(protocol.ErrInvalidRequest, "idempotency_key too long (max 256 chars)")
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, fmt.Sprintf("idempotency_key too long (max %d chars)", config.Defaults.MaxFieldLength))
 	}
 
 	// Parse tags
@@ -347,7 +348,7 @@ func handleTaskUpdate(s *Session, req protocol.Request) protocol.Response {
 
 	// Validate priority if provided
 	if req.Priority != 0 && (req.Priority < 0 || req.Priority > config.Defaults.MaxPriority) {
-		return protocol.ErrResponse(protocol.ErrInvalidRequest, "priority must be between 0 and 100")
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, fmt.Sprintf("priority must be between 0 and %d", config.Defaults.MaxPriority))
 	}
 
 	var params tasks.UpdateParams

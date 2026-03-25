@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"time"
 
 	"github.com/seungpyoson/waggle/internal/broker"
 	"github.com/seungpyoson/waggle/internal/client"
@@ -65,15 +64,8 @@ var (
 				}
 
 				// Wait for broker to start
-				for i := 0; i < 20; i++ {
-					time.Sleep(100 * time.Millisecond)
-					if broker.IsRunning(paths.PID) {
-						break
-					}
-				}
-
-				if !broker.IsRunning(paths.PID) {
-					return fmt.Errorf("broker failed to start")
+				if err := broker.WaitForReady(paths.PID, config.Defaults.StartupTimeout, config.Defaults.StartupPollInterval); err != nil {
+					return err
 				}
 			}
 

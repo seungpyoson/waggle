@@ -81,6 +81,10 @@ type Store struct {
 
 // NewStore creates a new task store
 func NewStore(dbPath string) (*Store, error) {
+	if err := config.ValidateDefaults(); err != nil {
+		return nil, fmt.Errorf("invalid config: %w", err)
+	}
+
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, err
@@ -92,7 +96,7 @@ func NewStore(dbPath string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("setting WAL mode: %w", err)
 	}
-	if _, err := db.Exec("PRAGMA busy_timeout=5000"); err != nil {
+	if _, err := db.Exec(fmt.Sprintf("PRAGMA busy_timeout=%d", config.Defaults.BusyTimeout.Milliseconds())); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("setting busy_timeout: %w", err)
 	}
@@ -129,9 +133,12 @@ func (s *Store) migrate() error {
 	}
 
 	// Create schema
-	schema := `
+	// DEFAULTs are safety nets — Go Create() always provides explicit values for
+	// lease_duration and max_retries. These defaults exist only to protect against
+	// a future INSERT path that omits these columns.
+	schema := fmt.Sprintf(`
 	CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
-	
+
 	CREATE TABLE IF NOT EXISTS tasks (
 		id              INTEGER PRIMARY KEY AUTOINCREMENT,
 		idempotency_key TEXT UNIQUE,
@@ -146,18 +153,18 @@ func (s *Store) migrate() error {
 		claimed_by      TEXT,
 		claimed_at      TEXT,
 		lease_expires_at TEXT,
-		lease_duration  INTEGER DEFAULT 300,
-		max_retries     INTEGER DEFAULT 3,
+		lease_duration  INTEGER DEFAULT %d,
+		max_retries     INTEGER DEFAULT %d,
 		retry_count     INTEGER DEFAULT 0,
 		result          TEXT,
 		failure_reason  TEXT,
-		created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-		updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+		created_at      TEXT NOT NULL DEFAULT (strftime('%%Y-%%m-%%dT%%H:%%M:%%SZ', 'now')),
+		updated_at      TEXT NOT NULL DEFAULT (strftime('%%Y-%%m-%%dT%%H:%%M:%%SZ', 'now'))
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_tasks_claimable ON tasks (state, blocked, priority DESC, created_at ASC);
 	CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_idempotency ON tasks (idempotency_key) WHERE idempotency_key IS NOT NULL;
-	`
+	`, int(config.Defaults.LeaseDuration.Seconds()), config.Defaults.MaxRetries)
 
 	if _, err := s.db.Exec(schema); err != nil {
 		return fmt.Errorf("creating schema: %w", err)

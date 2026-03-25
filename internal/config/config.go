@@ -8,6 +8,29 @@ import (
 	"time"
 )
 
+// ValidateDefaults checks that all duration and numeric config fields have
+// valid (positive) values. Returns an error describing the first invalid field.
+// Called from store.NewStore() and broker.New() before using config values.
+func ValidateDefaults() error {
+	durations := map[string]time.Duration{
+		"ShutdownTimeout":     Defaults.ShutdownTimeout,
+		"PollInterval":        Defaults.PollInterval,
+		"LeaseDuration":       Defaults.LeaseDuration,
+		"IdleTimeout":         Defaults.IdleTimeout,
+		"BusyTimeout":         Defaults.BusyTimeout,
+		"LeaseCheckPeriod":    Defaults.LeaseCheckPeriod,
+		"IdleCheckInterval":   Defaults.IdleCheckInterval,
+		"StartupPollInterval": Defaults.StartupPollInterval,
+		"StartupTimeout":      Defaults.StartupTimeout,
+	}
+	for name, d := range durations {
+		if d <= 0 {
+			return fmt.Errorf("config.Defaults.%s must be positive, got %v", name, d)
+		}
+	}
+	return nil
+}
+
 var Defaults = struct {
 	DirName    string
 	DBFile     string
@@ -16,15 +39,20 @@ var Defaults = struct {
 	LockFile   string
 	LogFile    string
 
-	ShutdownTimeout time.Duration
-	PollInterval    time.Duration
-	MaxLogSize      int64
-	MaxMessageSize  int64
-	LeaseDuration   time.Duration
-	IdleTimeout     time.Duration
-	MaxRetries      int
-	MaxPriority     int
-	MaxFieldLength  int
+	ShutdownTimeout     time.Duration
+	PollInterval        time.Duration
+	MaxLogSize          int64
+	MaxMessageSize      int64
+	LeaseDuration       time.Duration
+	IdleTimeout         time.Duration
+	BusyTimeout         time.Duration
+	LeaseCheckPeriod    time.Duration
+	IdleCheckInterval   time.Duration
+	StartupPollInterval time.Duration
+	StartupTimeout      time.Duration
+	MaxRetries          int
+	MaxPriority         int
+	MaxFieldLength      int
 }{
 	DirName:    ".waggle",
 	DBFile:     "state.db",
@@ -33,15 +61,20 @@ var Defaults = struct {
 	LockFile:   "waggle.lock",
 	LogFile:    "waggle.log",
 
-	ShutdownTimeout: 5 * time.Second,
-	PollInterval:    500 * time.Millisecond,
-	MaxLogSize:      10 * 1024 * 1024,
-	MaxMessageSize:  1024 * 1024, // 1MB buffer for large AI agent payloads
-	LeaseDuration:   5 * time.Minute,
-	IdleTimeout:     5 * time.Minute,
-	MaxRetries:      3,
-	MaxPriority:     100,
-	MaxFieldLength:  256,
+	ShutdownTimeout:     5 * time.Second,
+	PollInterval:        500 * time.Millisecond,
+	MaxLogSize:          10 * 1024 * 1024,
+	MaxMessageSize:      1024 * 1024, // 1MB buffer for large AI agent payloads
+	LeaseDuration:       5 * time.Minute,
+	IdleTimeout:         5 * time.Minute,
+	BusyTimeout:         5 * time.Second,
+	LeaseCheckPeriod:    30 * time.Second,
+	IdleCheckInterval:   1 * time.Second,
+	StartupPollInterval: 100 * time.Millisecond,
+	StartupTimeout:      2 * time.Second,
+	MaxRetries:          3,
+	MaxPriority:         100,
+	MaxFieldLength:      256,
 }
 
 type Paths struct {
