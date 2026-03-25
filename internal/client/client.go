@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"time"
 
 	"github.com/seungpyoson/waggle/internal/config"
 	"github.com/seungpyoson/waggle/internal/protocol"
@@ -94,6 +95,12 @@ func (c *Client) ReadStream() (<-chan protocol.Event, error) {
 	}()
 
 	return eventChan, nil
+}
+
+// SetDeadline sets a deadline on the underlying connection for all future I/O.
+// Returns error if the deadline cannot be set (e.g., connection already broken).
+func (c *Client) SetDeadline(timeout time.Duration) error {
+	return c.conn.SetDeadline(time.Now().Add(timeout))
 }
 
 // Close closes the connection.

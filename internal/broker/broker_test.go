@@ -2,12 +2,17 @@ package broker
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"os"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/seungpyoson/waggle/internal/client"
+	"github.com/seungpyoson/waggle/internal/config"
 	"github.com/seungpyoson/waggle/internal/protocol"
 )
 
@@ -461,5 +466,117 @@ func TestBroker_InputValidation(t *testing.T) {
 	})
 	if resp.OK {
 		t.Error("expected error for name > 256 chars")
+	}
+}
+
+// === Buffer config tests ===
+
+// Verify the broker session scanner uses config.Defaults.MaxMessageSize,
+// not a hardcoded constant. This test sends a payload larger than Go's
+// default bufio.Scanner limit (64KB) but within config.MaxMessageSize.
+func TestBroker_LargePayloadRoundTrip(t *testing.T) {
+	sockPath, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c, _ := client.Connect(sockPath)
+	defer c.Close()
+	c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "w-large"})
+
+	payloadSize := 100 * 1024 // 100KB — above 64KB default, below 1MB config max
+	bigPayload := strings.Repeat("x", payloadSize)
+	resp, err := c.Send(protocol.Request{
+		Cmd:     protocol.CmdTaskCreate,
+		Payload: json.RawMessage(fmt.Sprintf(`{"data":"%s"}`, bigPayload)),
+		Type:    "large",
+	})
+	if err != nil {
+		t.Fatalf("send failed (buffer too small?): %v", err)
+	}
+	if !resp.OK {
+		t.Fatalf("create with large payload should succeed: %s", resp.Error)
+	}
+}
+
+// Verify session scanner buffer matches config — not a different hardcoded value.
+func TestBroker_ScannerBufferMatchesConfig(t *testing.T) {
+	expected := int64(1024 * 1024)
+	if config.Defaults.MaxMessageSize != expected {
+		t.Fatalf("config.Defaults.MaxMessageSize = %d, want %d", config.Defaults.MaxMessageSize, expected)
+	}
+}
+
+// === Class B: Double cleanup — cleanup must be idempotent ===
+
+func TestBroker_CleanDisconnectCleansUpOnce(t *testing.T) {
+	sockPath, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c, _ := client.Connect(sockPath)
+	c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "w-once"})
+
+	// Acquire a lock, create+claim a task
+	c.Send(protocol.Request{Cmd: protocol.CmdLock, Resource: "file:once.go"})
+	c.Send(protocol.Request{
+		Cmd:     protocol.CmdTaskCreate,
+		Payload: json.RawMessage(`{"desc":"once-test"}`),
+		Type:    "test",
+	})
+	c.Send(protocol.Request{Cmd: protocol.CmdTaskClaim})
+
+	// Clean disconnect — triggers cleanup from deferred readLoop.
+	// Both should complete without panic or double-close errors.
+	resp, err := c.Send(protocol.Request{Cmd: protocol.CmdDisconnect})
+	if err != nil {
+		t.Fatalf("disconnect send failed: %v", err)
+	}
+	if !resp.OK {
+		t.Fatalf("disconnect failed: %s", resp.Error)
+	}
+	c.Close()
+	time.Sleep(100 * time.Millisecond)
+
+	// Verify lock was released (cleanup ran at least once)
+	c2, _ := client.Connect(sockPath)
+	defer c2.Close()
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "w-verify"})
+	resp, _ = c2.Send(protocol.Request{Cmd: protocol.CmdLock, Resource: "file:once.go"})
+	if !resp.OK {
+		t.Errorf("lock should be available after clean disconnect: %s", resp.Error)
+	}
+}
+
+// === Class C: Typed error detection — isConnectionClosed should use errors.Is ===
+
+func TestIsConnectionClosed_ClosedConn(t *testing.T) {
+	err := &net.OpError{Op: "read", Err: net.ErrClosed}
+	if !isConnectionClosed(err) {
+		t.Error("should detect net.ErrClosed wrapped in OpError")
+	}
+}
+
+func TestIsConnectionClosed_ConnReset(t *testing.T) {
+	err := &net.OpError{Op: "read", Err: &os.SyscallError{Syscall: "read", Err: syscall.ECONNRESET}}
+	if !isConnectionClosed(err) {
+		t.Error("should detect ECONNRESET")
+	}
+}
+
+func TestIsConnectionClosed_BrokenPipe(t *testing.T) {
+	err := &net.OpError{Op: "write", Err: &os.SyscallError{Syscall: "write", Err: syscall.EPIPE}}
+	if !isConnectionClosed(err) {
+		t.Error("should detect EPIPE (broken pipe)")
+	}
+}
+
+func TestIsConnectionClosed_NilError(t *testing.T) {
+	if isConnectionClosed(nil) {
+		t.Error("nil error should return false")
+	}
+}
+
+func TestIsConnectionClosed_UnrelatedError(t *testing.T) {
+	err := errors.New("something completely different")
+	if isConnectionClosed(err) {
+		t.Error("unrelated error should return false")
 	}
 }

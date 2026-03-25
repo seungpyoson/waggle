@@ -3,9 +3,13 @@ package broker
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"log"
 	"net"
+	"sync"
+	"syscall"
 
+	"github.com/seungpyoson/waggle/internal/config"
 	"github.com/seungpyoson/waggle/internal/protocol"
 )
 
@@ -17,14 +21,20 @@ type Session struct {
 	scan            *bufio.Scanner
 	broker          *Broker
 	cleanDisconnect bool // Set to true when disconnect command is received
+	cleanupOnce     sync.Once
 }
 
 // newSession creates a new session
 func newSession(conn net.Conn, broker *Broker) *Session {
+	scan := bufio.NewScanner(conn)
+	// Match client buffer size for large AI agent payloads.
+	// Uses config.Defaults.MaxMessageSize (single source of truth) to avoid asymmetry.
+	bufSize := int(config.Defaults.MaxMessageSize)
+	scan.Buffer(make([]byte, bufSize), bufSize)
 	return &Session{
 		conn:   conn,
 		enc:    json.NewEncoder(conn),
-		scan:   bufio.NewScanner(conn),
+		scan:   scan,
 		broker: broker,
 	}
 }
@@ -43,18 +53,45 @@ func (s *Session) readLoop() {
 
 		resp := route(s, req)
 		if err := s.enc.Encode(resp); err != nil {
-			log.Printf("session: error encoding response: %v", err)
+			// Suppress errors after disconnect — client may have already closed
+			if !s.cleanDisconnect {
+				log.Printf("session %s: error encoding response: %v", s.name, err)
+			}
+			return
+		}
+
+		// After clean disconnect, stop reading — client is closing
+		if s.cleanDisconnect {
 			return
 		}
 	}
 
 	if err := s.scan.Err(); err != nil {
-		log.Printf("session: scan error: %v", err)
+		// Suppress expected EOF/closed connection errors
+		if !s.cleanDisconnect && !isConnectionClosed(err) {
+			log.Printf("session %s: scan error: %v", s.name, err)
+		}
 	}
 }
 
-// cleanup releases resources on disconnect
+// isConnectionClosed checks if an error is due to a closed connection (expected on disconnect).
+// Uses typed error matching instead of fragile string comparison.
+func isConnectionClosed(err error) bool {
+	if err == nil {
+		return false
+	}
+	return errors.Is(err, net.ErrClosed) ||
+		errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, syscall.EPIPE)
+}
+
+// cleanup releases resources on disconnect. Safe to call multiple times —
+// handleDisconnect calls it eagerly, and readLoop defers it as a safety net.
 func (s *Session) cleanup() {
+	s.cleanupOnce.Do(s.doCleanup)
+}
+
+func (s *Session) doCleanup() {
 	if s.name != "" {
 		// Release all locks
 		s.broker.lockMgr.ReleaseAll(s.name)
@@ -82,4 +119,3 @@ func (s *Session) cleanup() {
 
 	s.conn.Close()
 }
-

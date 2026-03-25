@@ -25,7 +25,7 @@ var taskClaimCmd = &cobra.Command{
 			printErr("BROKER_NOT_RUNNING", err.Error())
 			return nil
 		}
-		defer c.Close()
+		defer disconnectAndClose(c)
 
 		req := protocol.Request{
 			Cmd:  protocol.CmdTaskClaim,
