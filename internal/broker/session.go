@@ -21,10 +21,15 @@ type Session struct {
 
 // newSession creates a new session
 func newSession(conn net.Conn, broker *Broker) *Session {
+	scan := bufio.NewScanner(conn)
+	// Increase buffer for large payloads (default bufio.Scanner is 64KB).
+	// Must match client's buffer size to handle round-trip of large messages.
+	const maxBuf = 1 << 20 // 1MB
+	scan.Buffer(make([]byte, maxBuf), maxBuf)
 	return &Session{
 		conn:   conn,
 		enc:    json.NewEncoder(conn),
-		scan:   bufio.NewScanner(conn),
+		scan:   scan,
 		broker: broker,
 	}
 }
