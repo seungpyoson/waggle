@@ -15,6 +15,9 @@ var (
 	ErrNotRecipient    = errors.New("not recipient")
 )
 
+// validPriorities defines the allowed message priority values.
+var validPriorities = map[string]bool{"critical": true, "normal": true, "bulk": true}
+
 // Message represents a message in the store
 type Message struct {
 	ID        int64  `json:"id"`
@@ -114,7 +117,6 @@ func (s *Store) Send(from, to, body, priority string, ttl *int) (*Message, error
 	if priority == "" {
 		priority = config.Defaults.DefaultMsgPriority
 	}
-	validPriorities := map[string]bool{"critical": true, "normal": true, "bulk": true}
 	if !validPriorities[priority] {
 		return nil, fmt.Errorf("invalid priority: must be critical, normal, or bulk")
 	}
@@ -270,11 +272,17 @@ func (s *Store) Inbox(name string) ([]*Message, error) {
 		return nil, fmt.Errorf("iterating messages: %w", err)
 	}
 
-	// Mark queued/pushed messages as seen
+	// Mark queued/pushed messages as seen (transactional)
 	if len(idsToMarkSeen) > 0 {
+		tx, err := s.db.Begin()
+		if err != nil {
+			return nil, fmt.Errorf("begin mark-seen tx: %w", err)
+		}
+		defer tx.Rollback()
+
 		now := time.Now().UTC().Format(time.RFC3339)
 		for _, id := range idsToMarkSeen {
-			_, err := s.db.Exec(
+			_, err := tx.Exec(
 				`UPDATE messages SET state = 'seen', seen_at = ? WHERE id = ?`,
 				now, id,
 			)
@@ -289,6 +297,10 @@ func (s *Store) Inbox(name string) ([]*Message, error) {
 					break
 				}
 			}
+		}
+
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("commit mark-seen tx: %w", err)
 		}
 	}
 

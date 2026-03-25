@@ -38,6 +38,31 @@ func startTestBroker(t *testing.T) (string, func()) {
 	}
 }
 
+func startTestBrokerWithTTL(t *testing.T, ttlCheckPeriod time.Duration) (string, func()) {
+	t.Helper()
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+
+	sockPath := fmt.Sprintf("/tmp/waggle-test-%d.sock", time.Now().UnixNano())
+	dbPath := fmt.Sprintf("%s/db", tmpDir)
+
+	b, err := New(Config{
+		SocketPath:     sockPath,
+		DBPath:         dbPath,
+		TTLCheckPeriod: ttlCheckPeriod,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	go b.Serve()
+	time.Sleep(100 * time.Millisecond)
+	return sockPath, func() {
+		b.Shutdown()
+		os.Remove(sockPath)
+	}
+}
+
 // Test 1: Full round trip — create, claim, complete
 func TestBroker_FullRoundTrip_CreateClaimComplete(t *testing.T) {
 	sockPath, cleanup := startTestBroker(t)
@@ -1824,7 +1849,8 @@ func TestBroker_SendWithTTL(t *testing.T) {
 
 // TestBroker_TTLCheckerRuns — broker starts TTL checker; expired msg absent
 func TestBroker_TTLCheckerRuns(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	// Use short TTL check period so the goroutine actually fires during the test
+	sockPath, cleanup := startTestBrokerWithTTL(t, 500*time.Millisecond)
 	defer cleanup()
 
 	c1, _ := client.Connect(sockPath)
@@ -1849,9 +1875,7 @@ func TestBroker_TTLCheckerRuns(t *testing.T) {
 	// Bob receives push
 	c2.Receive()
 
-	// Wait for TTL to expire and checker to run
-	// TTL checker runs every 30s by default, but we can't wait that long
-	// This test will fail until TTL checker is implemented
+	// Wait for TTL to expire (1s) and checker to fire (500ms period)
 	time.Sleep(2 * time.Second)
 
 	// Bob checks inbox
@@ -1862,8 +1886,6 @@ func TestBroker_TTLCheckerRuns(t *testing.T) {
 
 	var messages []map[string]interface{}
 	json.Unmarshal(resp.Data, &messages)
-	// This will fail until TTL checker is implemented
-	// For now, we expect the belt-and-suspenders filter to exclude it
 	if len(messages) != 0 {
 		t.Errorf("inbox len = %d, want 0 (expired)", len(messages))
 	}
@@ -1925,5 +1947,52 @@ func TestBroker_AwaitAckRaceEarlyAck(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("send timed out despite ack (race condition not fixed)")
+	}
+}
+
+// TestBroker_PresenceEventOnDisconnect — disconnect fires presence.offline event
+func TestBroker_PresenceEventOnDisconnect(t *testing.T) {
+	sockPath, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	// Observer subscribes to presence events
+	observer, _ := client.Connect(sockPath)
+	defer observer.Close()
+	observer.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "observer"})
+	resp, _ := observer.Send(protocol.Request{Cmd: protocol.CmdSubscribe, Topic: "presence.events"})
+	if !resp.OK {
+		t.Fatalf("subscribe failed: %s", resp.Error)
+	}
+
+	eventCh, _ := observer.ReadStream()
+
+	// Worker connects
+	worker, _ := client.Connect(sockPath)
+	worker.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "worker-1"})
+
+	// Drain the connect event
+	select {
+	case <-eventCh:
+	case <-time.After(1 * time.Second):
+		t.Fatal("timeout waiting for presence.online event")
+	}
+
+	// Worker disconnects
+	worker.Send(protocol.Request{Cmd: protocol.CmdDisconnect})
+	worker.Close()
+
+	// Observer should receive presence.offline event
+	select {
+	case evt := <-eventCh:
+		if evt.Event != "presence.offline" {
+			t.Errorf("event = %q, want presence.offline", evt.Event)
+		}
+		var data map[string]string
+		json.Unmarshal(evt.Data, &data)
+		if data["name"] != "worker-1" {
+			t.Errorf("name = %q, want worker-1", data["name"])
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("timeout waiting for presence.offline event")
 	}
 }
