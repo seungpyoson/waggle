@@ -13,7 +13,7 @@ var statusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Check broker status",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		c, err := connectToBroker()
+		c, err := connectToBroker("")
 		if err != nil {
 			printErr("BROKER_NOT_RUNNING", err.Error())
 			return nil

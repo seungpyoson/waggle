@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"github.com/seungpyoson/waggle/internal/protocol"
 	"github.com/spf13/cobra"
 )
 
@@ -19,28 +18,14 @@ var connectCmd = &cobra.Command{
 	Use:   "connect",
 	Short: "Connect to the broker",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		c, err := connectToBroker()
+		c, err := connectToBroker(connectName)
 		if err != nil {
 			printErr("BROKER_NOT_RUNNING", err.Error())
 			return nil
 		}
 		defer c.Close()
 
-		resp, err := c.Send(protocol.Request{
-			Cmd:  protocol.CmdConnect,
-			Name: connectName,
-		})
-		if err != nil {
-			printErr("INTERNAL_ERROR", err.Error())
-			return nil
-		}
-
-		if !resp.OK {
-			printErr(resp.Code, resp.Error)
-			return nil
-		}
-
-		printJSON(resp)
+		printJSON(map[string]any{"ok": true, "data": map[string]string{"name": connectName}})
 		return nil
 	},
 }

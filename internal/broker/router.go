@@ -10,8 +10,21 @@ import (
 	"github.com/seungpyoson/waggle/internal/tasks"
 )
 
-// route dispatches a request to the appropriate handler
+// Commands that work without a session handshake.
+// Everything else requires connect first.
+var noSessionRequired = map[string]bool{
+	protocol.CmdConnect: true,
+	protocol.CmdStatus:  true,
+	protocol.CmdStop:    true,
+}
+
+// route dispatches a request to the appropriate handler.
+// Session check is enforced here once — individual handlers do not check.
 func route(s *Session, req protocol.Request) protocol.Response {
+	if !noSessionRequired[req.Cmd] && s.name == "" {
+		return protocol.ErrResponse(protocol.ErrNotConnected, "not connected")
+	}
+
 	switch req.Cmd {
 	case protocol.CmdConnect:
 		return handleConnect(s, req)
@@ -85,9 +98,6 @@ func handleSubscribe(s *Session, req protocol.Request) protocol.Response {
 	if req.Topic == "" {
 		return protocol.ErrResponse(protocol.ErrInvalidRequest, "topic required")
 	}
-	if s.name == "" {
-		return protocol.ErrResponse(protocol.ErrNotConnected, "not connected")
-	}
 
 	ch := s.broker.hub.Subscribe(req.Topic, s.name)
 
@@ -108,9 +118,6 @@ func handleSubscribe(s *Session, req protocol.Request) protocol.Response {
 }
 
 func handleTaskCreate(s *Session, req protocol.Request) protocol.Response {
-	if s.name == "" {
-		return protocol.ErrResponse(protocol.ErrNotConnected, "not connected")
-	}
 
 	// Parse tags
 	var tags []string
@@ -152,9 +159,6 @@ func handleTaskCreate(s *Session, req protocol.Request) protocol.Response {
 }
 
 func handleTaskList(s *Session, req protocol.Request) protocol.Response {
-	if s.name == "" {
-		return protocol.ErrResponse(protocol.ErrNotConnected, "not connected")
-	}
 
 	taskList, err := s.broker.store.List(tasks.ListFilter{
 		State: req.State,
@@ -170,9 +174,6 @@ func handleTaskList(s *Session, req protocol.Request) protocol.Response {
 }
 
 func handleTaskClaim(s *Session, req protocol.Request) protocol.Response {
-	if s.name == "" {
-		return protocol.ErrResponse(protocol.ErrNotConnected, "not connected")
-	}
 
 	var tags []string
 	if req.Tags != "" {
@@ -198,9 +199,6 @@ func handleTaskClaim(s *Session, req protocol.Request) protocol.Response {
 }
 
 func handleTaskComplete(s *Session, req protocol.Request) protocol.Response {
-	if s.name == "" {
-		return protocol.ErrResponse(protocol.ErrNotConnected, "not connected")
-	}
 
 	taskID, err := strconv.ParseInt(req.TaskID, 10, 64)
 	if err != nil {
@@ -233,9 +231,6 @@ func handleTaskComplete(s *Session, req protocol.Request) protocol.Response {
 }
 
 func handleTaskFail(s *Session, req protocol.Request) protocol.Response {
-	if s.name == "" {
-		return protocol.ErrResponse(protocol.ErrNotConnected, "not connected")
-	}
 
 	taskID, err := strconv.ParseInt(req.TaskID, 10, 64)
 	if err != nil {
@@ -268,9 +263,6 @@ func handleTaskFail(s *Session, req protocol.Request) protocol.Response {
 }
 
 func handleTaskHeartbeat(s *Session, req protocol.Request) protocol.Response {
-	if s.name == "" {
-		return protocol.ErrResponse(protocol.ErrNotConnected, "not connected")
-	}
 
 	taskID, err := strconv.ParseInt(req.TaskID, 10, 64)
 	if err != nil {
@@ -292,9 +284,6 @@ func handleTaskHeartbeat(s *Session, req protocol.Request) protocol.Response {
 }
 
 func handleTaskCancel(s *Session, req protocol.Request) protocol.Response {
-	if s.name == "" {
-		return protocol.ErrResponse(protocol.ErrNotConnected, "not connected")
-	}
 
 	taskID, err := strconv.ParseInt(req.TaskID, 10, 64)
 	if err != nil {
@@ -317,9 +306,6 @@ func handleTaskCancel(s *Session, req protocol.Request) protocol.Response {
 }
 
 func handleTaskGet(s *Session, req protocol.Request) protocol.Response {
-	if s.name == "" {
-		return protocol.ErrResponse(protocol.ErrNotConnected, "not connected")
-	}
 
 	taskID, err := strconv.ParseInt(req.TaskID, 10, 64)
 	if err != nil {
@@ -336,9 +322,6 @@ func handleTaskGet(s *Session, req protocol.Request) protocol.Response {
 }
 
 func handleLock(s *Session, req protocol.Request) protocol.Response {
-	if s.name == "" {
-		return protocol.ErrResponse(protocol.ErrNotConnected, "not connected")
-	}
 	if req.Resource == "" {
 		return protocol.ErrResponse(protocol.ErrInvalidRequest, "resource required")
 	}
@@ -352,9 +335,6 @@ func handleLock(s *Session, req protocol.Request) protocol.Response {
 }
 
 func handleUnlock(s *Session, req protocol.Request) protocol.Response {
-	if s.name == "" {
-		return protocol.ErrResponse(protocol.ErrNotConnected, "not connected")
-	}
 	if req.Resource == "" {
 		return protocol.ErrResponse(protocol.ErrInvalidRequest, "resource required")
 	}
@@ -364,9 +344,6 @@ func handleUnlock(s *Session, req protocol.Request) protocol.Response {
 }
 
 func handleLocks(s *Session) protocol.Response {
-	if s.name == "" {
-		return protocol.ErrResponse(protocol.ErrNotConnected, "not connected")
-	}
 
 	locks := s.broker.lockMgr.List()
 	data, _ := json.Marshal(locks)

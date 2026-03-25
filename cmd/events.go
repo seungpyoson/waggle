@@ -29,7 +29,7 @@ var subscribeCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		topic := args[0]
 
-		c, err := connectToBroker()
+		c, err := connectToBroker("")
 		if err != nil {
 			printErr("BROKER_NOT_RUNNING", err.Error())
 			return nil
@@ -94,7 +94,7 @@ var publishCmd = &cobra.Command{
 		topic := args[0]
 		message := args[1]
 
-		c, err := connectToBroker()
+		c, err := connectToBroker("")
 		if err != nil {
 			printErr("BROKER_NOT_RUNNING", err.Error())
 			return nil
