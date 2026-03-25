@@ -1849,6 +1849,29 @@ func TestBroker_SpawnRegisterDuplicate(t *testing.T) {
 	}
 }
 
+// TestBroker_SpawnStatusAfterStop — spawned list is empty after shutdown
+func TestBroker_SpawnStatusAfterStop(t *testing.T) {
+	_, b, _ := startTestBroker(t)
+
+	// Add agent directly
+	b.spawnMgr.Add("worker-1", "claude", 99999)
+
+	// Verify it's there
+	agents := b.spawnMgr.List()
+	if len(agents) != 1 {
+		t.Fatalf("before stop: spawned len = %d, want 1", len(agents))
+	}
+
+	// Shutdown broker (don't defer cleanup since we're shutting down manually)
+	b.Shutdown()
+
+	// Verify spawned list is empty
+	agents = b.spawnMgr.List()
+	if len(agents) != 0 {
+		t.Errorf("after stop: spawned len = %d, want 0", len(agents))
+	}
+}
+
 // TestBroker_PresenceConnectDisconnect — connect → present; disconnect → absent
 func TestBroker_PresenceConnectDisconnect(t *testing.T) {
 	sockPath, _, cleanup := startTestBroker(t)

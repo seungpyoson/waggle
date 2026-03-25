@@ -663,7 +663,7 @@ func handleSpawnRegister(s *Session, req protocol.Request) protocol.Response {
 		Type string `json:"type"`
 	}
 	if err := json.Unmarshal(req.Data, &spawnData); err != nil {
-		return protocol.ErrResponse(protocol.ErrInvalidRequest, "invalid spawn data")
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, fmt.Sprintf("invalid spawn data: %v", err))
 	}
 	// Allow PID=0 as a fallback when PID detection fails (macOS limitation)
 	if spawnData.PID < 0 {

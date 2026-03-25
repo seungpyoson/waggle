@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/seungpyoson/waggle/internal/config"
 )
 
 type Terminal int
@@ -73,7 +75,7 @@ func OpenTab(t Terminal, name string, cmd string, env map[string]string) (int, e
 			return 0, fmt.Errorf("failed to open Terminal.app tab: %w", err)
 		}
 		// Poll for the spawned process PID using WAGGLE_AGENT_NAME env marker
-		pid, err := findSpawnedPID(name, 3*time.Second)
+		pid, err := findSpawnedPID(name, config.Defaults.SpawnPIDTimeout)
 		if err != nil {
 			// Tab opened but couldn't find PID — return 0 as fallback
 			return 0, nil
@@ -88,7 +90,7 @@ func OpenTab(t Terminal, name string, cmd string, env map[string]string) (int, e
 			return 0, fmt.Errorf("failed to open iTerm2 tab: %w", err)
 		}
 		// Poll for the spawned process PID using WAGGLE_AGENT_NAME env marker
-		pid, err := findSpawnedPID(name, 3*time.Second)
+		pid, err := findSpawnedPID(name, config.Defaults.SpawnPIDTimeout)
 		if err != nil {
 			// Tab opened but couldn't find PID — return 0 as fallback
 			return 0, nil
@@ -153,7 +155,7 @@ func findSpawnedPID(name string, timeout time.Duration) (int, error) {
 				}
 			}
 		}
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(config.Defaults.SpawnPIDPollInterval)
 	}
 
 	return 0, fmt.Errorf("could not find spawned process for %s within %v", name, timeout)

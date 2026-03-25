@@ -48,14 +48,22 @@ var spawnCmd = &cobra.Command{
 			return nil
 		}
 
-		// 3. Detect terminal
+		// 3. Connect to broker FIRST — fail if broker not running
+		c, err := connectToBroker("")
+		if err != nil {
+			printErr("BROKER_NOT_RUNNING", fmt.Sprintf("cannot spawn: broker not running (%v)", err))
+			return nil
+		}
+		defer disconnectAndClose(c)
+
+		// 4. Detect terminal
 		term := spawn.Detect()
 		if term == spawn.Unknown {
 			printErr("TERMINAL_ERROR", "cannot detect terminal emulator")
 			return nil
 		}
 
-		// 4. Build env
+		// 5. Build env
 		env := map[string]string{
 			"WAGGLE_AGENT_NAME": spawnName,
 		}
@@ -65,7 +73,7 @@ var spawnCmd = &cobra.Command{
 			env["WAGGLE_PROJECT_ID"] = projectID
 		}
 
-		// 5. Build command
+		// 6. Build command
 		agentCmd := agent.Cmd
 		if len(agent.Args) > 0 {
 			for _, arg := range agent.Args {
@@ -73,41 +81,39 @@ var spawnCmd = &cobra.Command{
 			}
 		}
 
-		// 6. Open tab
+		// 7. Open tab
 		pid, err := spawn.OpenTab(term, spawnName, agentCmd, env)
 		if err != nil {
 			printErr("SPAWN_ERROR", err.Error())
 			return nil
 		}
 
-		// 7. Determine actual agent type for output
+		// 8. Determine actual agent type for output
 		agentType := spawnType
 		if agentType == "" {
 			agentType = agentCfg.Default
 		}
 
-		// 8. Register spawn with broker
-		c, err := connectToBroker("")
+		// 9. Register with broker — fail hard on error
+		spawnData, _ := json.Marshal(map[string]any{
+			"pid":  pid,
+			"type": agentType,
+		})
+		resp, err := c.Send(protocol.Request{
+			Cmd:  protocol.CmdSpawnRegister,
+			Name: spawnName,
+			Data: spawnData,
+		})
 		if err != nil {
-			// Non-fatal — tab is already open, just warn
-			fmt.Fprintf(os.Stderr, "warning: could not register spawn with broker: %v\n", err)
-		} else {
-			spawnData, _ := json.Marshal(map[string]any{
-				"pid":  pid,
-				"type": agentType,
-			})
-			resp, err := c.Send(protocol.Request{
-				Cmd:  protocol.CmdSpawnRegister,
-				Name: spawnName,
-				Data: spawnData,
-			})
-			if err != nil || !resp.OK {
-				fmt.Fprintf(os.Stderr, "warning: could not register spawn with broker\n")
-			}
-			disconnectAndClose(c)
+			printErr("SPAWN_ERROR", fmt.Sprintf("tab opened but registration failed: %v", err))
+			return nil
+		}
+		if !resp.OK {
+			printErr(resp.Code, fmt.Sprintf("tab opened but registration failed: %s", resp.Error))
+			return nil
 		}
 
-		// 9. Print success
+		// 10. Print success (only if everything worked)
 		printJSON(map[string]any{
 			"ok":      true,
 			"message": fmt.Sprintf("spawned %s (%s) in new tab — PID %d", spawnName, agentType, pid),

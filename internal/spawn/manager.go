@@ -7,6 +7,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/seungpyoson/waggle/internal/config"
 )
 
 type Agent struct {
@@ -93,68 +95,57 @@ func (m *Manager) StopAll() error {
 	for _, agent := range m.agents {
 		pids = append(pids, agent.PID)
 	}
+	// Clear agents map while holding lock to prevent races
+	m.agents = make(map[string]*Agent)
 	m.mu.Unlock()
 
-	// Kill all agents
 	for _, pid := range pids {
-		// Skip PID=0 (PID unknown, can't kill)
 		if pid <= 0 {
 			continue
 		}
 
-		// Try to find the process
 		process, err := os.FindProcess(pid)
 		if err != nil {
-			// Process doesn't exist, skip
 			continue
 		}
 
 		// Send SIGTERM
 		if err := process.Signal(syscall.SIGTERM); err != nil {
-			// Process might already be dead, ignore error
-			continue
+			continue // already dead
 		}
 
-		// Wait up to 5 seconds for process to exit
-		deadline := time.Now().Add(5 * time.Second)
+		// Poll with kill(pid, 0) to check if process exited
 		terminated := false
+		deadline := time.Now().Add(config.Defaults.SpawnStopTimeout)
 		for time.Now().Before(deadline) {
-			// Try to reap the process
-			var ws syscall.WaitStatus
-			wpid, err := syscall.Wait4(pid, &ws, syscall.WNOHANG, nil)
-			if wpid == pid || err != nil {
-				// Process has been reaped or doesn't exist
+			if !isPIDAlive(pid) {
 				terminated = true
 				break
 			}
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(config.Defaults.SpawnStopPollInterval)
 		}
 
-		// If still alive after SIGTERM, send SIGKILL
+		// Escalate to SIGKILL if still alive
 		if !terminated {
 			process.Signal(syscall.SIGKILL)
-			// Wait for SIGKILL to take effect and try to reap
+			// Brief wait for SIGKILL to take effect
 			for i := 0; i < 10; i++ {
-				var ws syscall.WaitStatus
-				wpid, err := syscall.Wait4(pid, &ws, syscall.WNOHANG, nil)
-				if wpid == pid || err != nil {
+				if !isPIDAlive(pid) {
 					break
 				}
-				time.Sleep(50 * time.Millisecond)
+				time.Sleep(config.Defaults.SpawnKillPollInterval)
 			}
 		}
 	}
-
-	// Clear the agents map
-	m.mu.Lock()
-	m.agents = make(map[string]*Agent)
-	m.mu.Unlock()
 
 	return nil
 }
 
 // isPIDAlive checks if a PID is still running
 func isPIDAlive(pid int) bool {
+	if pid <= 0 {
+		return false // PID unknown or invalid
+	}
 	// Use syscall.Kill with signal 0 to check if process exists
 	// This works correctly on both macOS and Linux
 	err := syscall.Kill(pid, syscall.Signal(0))

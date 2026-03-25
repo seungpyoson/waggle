@@ -153,8 +153,9 @@ func TestManager_StopAll(t *testing.T) {
 		t.Fatalf("StopAll() error = %v, want nil", err)
 	}
 
-	// Wait a bit for processes to exit
-	time.Sleep(200 * time.Millisecond)
+	// Reap the processes (since they're our children, they become zombies until we Wait)
+	cmd1.Wait()
+	cmd2.Wait()
 
 	// Verify both processes are dead
 	// Try to signal them — should fail
@@ -209,6 +210,19 @@ func TestManager_ListEmpty(t *testing.T) {
 	}
 	if len(agents) != 0 {
 		t.Errorf("List() len = %d, want 0", len(agents))
+	}
+}
+
+// TestManager_IsPIDAliveZero — PID 0 is not alive
+func TestManager_IsPIDAliveZero(t *testing.T) {
+	m := NewManager()
+	m.Add("test", "claude", 0)
+	agents := m.List()
+	if len(agents) != 1 {
+		t.Fatalf("List() len = %d, want 1", len(agents))
+	}
+	if agents[0].Alive {
+		t.Error("PID 0 should not be reported as alive")
 	}
 }
 

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/seungpyoson/waggle/internal/config"
 )
 
 type AgentConfig struct {
@@ -20,10 +22,15 @@ type AgentDef struct {
 // LoadAgentConfig loads agent configuration from the given config directory.
 // If the config file doesn't exist, creates a default config.
 func LoadAgentConfig(configDir string) (*AgentConfig, error) {
-	configPath := filepath.Join(configDir, "agents.json")
+	configPath := filepath.Join(configDir, config.Defaults.AgentConfigFile)
 
 	// Check if file exists
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		// Ensure directory exists
+		if err := os.MkdirAll(configDir, 0755); err != nil {
+			return nil, fmt.Errorf("creating config directory: %w", err)
+		}
+
 		// Create default config
 		defaultCfg := &AgentConfig{
 			Default: "claude",
