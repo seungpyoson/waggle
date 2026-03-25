@@ -23,27 +23,21 @@ var startCmd = &cobra.Command{
 	Use:   "start",
 	Short: "Start the broker daemon",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Detect project root and compute paths
-		cwd, err := os.Getwd()
-		if err != nil {
-			return fmt.Errorf("getting current directory: %w", err)
-		}
-
-		root, err := config.FindProjectRoot(cwd)
+		projectID, err := config.ResolveProjectID()
 		if err != nil {
 			return err
 		}
 
-		paths = config.NewPaths(root)
+		paths = config.NewPaths(projectID)
 
-		if paths.Socket == "" {
-			return fmt.Errorf("cannot determine socket path: HOME not set")
+		if paths.DataDir == "" {
+			return fmt.Errorf("cannot determine data paths: HOME not set")
 		}
 
 		if foreground {
 			// Run broker inline (called by daemon fork)
 			socketDir := filepath.Dir(paths.Socket)
-			if err := broker.EnsureDirs(paths.WaggleDir, socketDir); err != nil {
+			if err := broker.EnsureDirs(paths.DataDir, socketDir); err != nil {
 				return fmt.Errorf("creating directories: %w", err)
 			}
 
@@ -89,7 +83,7 @@ var startCmd = &cobra.Command{
 		// Start daemon
 		socketDir := filepath.Dir(paths.Socket)
 		daemonArgs := []string{os.Args[0], "start", "--foreground"}
-		if err := broker.StartDaemon(paths.WaggleDir, socketDir, paths.Log, daemonArgs); err != nil {
+		if err := broker.StartDaemon(paths.DataDir, socketDir, paths.Log, projectID, daemonArgs); err != nil {
 			return fmt.Errorf("starting daemon: %w", err)
 		}
 

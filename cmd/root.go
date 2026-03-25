@@ -26,22 +26,15 @@ var (
 				return nil
 			}
 
-			// Detect project root and compute paths
-			cwd, err := os.Getwd()
-			if err != nil {
-				return fmt.Errorf("getting current directory: %w", err)
-			}
-
-			root, err := config.FindProjectRoot(cwd)
+			projectID, err := config.ResolveProjectID()
 			if err != nil {
 				return err
 			}
 
-			paths = config.NewPaths(root)
+			paths = config.NewPaths(projectID)
 
-			// Check if socket path is empty (no HOME)
-			if paths.Socket == "" {
-				return fmt.Errorf("cannot determine socket path: HOME not set")
+			if paths.DataDir == "" {
+				return fmt.Errorf("cannot determine data paths: HOME not set")
 			}
 
 			// Auto-start broker if not running
@@ -53,13 +46,13 @@ var (
 
 				// Ensure directories exist
 				socketDir := filepath.Dir(paths.Socket)
-				if err := broker.EnsureDirs(paths.WaggleDir, socketDir); err != nil {
+				if err := broker.EnsureDirs(paths.DataDir, socketDir); err != nil {
 					return fmt.Errorf("creating directories: %w", err)
 				}
 
 				// Start daemon
 				args := []string{os.Args[0], "start", "--foreground"}
-				if err := broker.StartDaemon(paths.WaggleDir, socketDir, paths.Log, args); err != nil {
+				if err := broker.StartDaemon(paths.DataDir, socketDir, paths.Log, projectID, args); err != nil {
 					return fmt.Errorf("starting broker daemon: %w", err)
 				}
 
