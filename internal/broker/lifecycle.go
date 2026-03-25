@@ -132,6 +132,19 @@ func EnsureDirs(dirs ...string) error {
 	return nil
 }
 
+// appendEnvOverride removes any existing entry for key from env, then appends key=value.
+// This ensures the injected value always wins, even if the key was already set.
+func appendEnvOverride(env []string, key, value string) []string {
+	prefix := key + "="
+	filtered := make([]string, 0, len(env))
+	for _, e := range env {
+		if !strings.HasPrefix(e, prefix) {
+			filtered = append(filtered, e)
+		}
+	}
+	return append(filtered, prefix+value)
+}
+
 // StartDaemon forks the broker as a background process.
 // It redirects stdout/stderr to logFile and returns immediately.
 func StartDaemon(dataDir, socketDir, logFile, projectID string, args []string) error {
@@ -157,7 +170,7 @@ func StartDaemon(dataDir, socketDir, logFile, projectID string, args []string) e
 	procAttr := &os.ProcAttr{
 		Files: []*os.File{nil, log, log}, // stdin=nil, stdout=log, stderr=log
 		Dir:   "",
-		Env:   append(os.Environ(), "WAGGLE_PROJECT_ID="+projectID),
+		Env:   appendEnvOverride(os.Environ(), "WAGGLE_PROJECT_ID", projectID),
 	}
 
 	process, err := os.StartProcess(exe, args, procAttr)
