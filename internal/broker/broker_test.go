@@ -1723,6 +1723,155 @@ func TestBroker_PresenceShowsConnected(t *testing.T) {
 	}
 }
 
+// ========== Task 38: Spawn Integration Tests ==========
+
+// TestBroker_SpawnStatus — create broker, add agent to spawn manager, verify status includes spawned agents
+func TestBroker_SpawnStatus(t *testing.T) {
+	sockPath, b, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c, _ := client.Connect(sockPath)
+	defer c.Close()
+	c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "cli"})
+
+	// Add an agent to spawn manager
+	err := b.spawnMgr.Add("worker-1", "claude", 12345)
+	if err != nil {
+		t.Fatalf("spawnMgr.Add() error = %v, want nil", err)
+	}
+
+	// Get status
+	resp, _ := c.Send(protocol.Request{Cmd: protocol.CmdStatus})
+	if !resp.OK {
+		t.Fatalf("status failed: %s", resp.Error)
+	}
+
+	var status map[string]interface{}
+	json.Unmarshal(resp.Data, &status)
+
+	// Verify spawned key exists
+	spawned, ok := status["spawned"]
+	if !ok {
+		t.Fatal("status should include 'spawned' key")
+	}
+
+	// Verify spawned is a list
+	spawnedList, ok := spawned.([]interface{})
+	if !ok {
+		t.Fatalf("spawned should be a list, got %T", spawned)
+	}
+
+	// Verify we have 1 spawned agent
+	if len(spawnedList) != 1 {
+		t.Errorf("spawned list len = %d, want 1", len(spawnedList))
+	}
+}
+
+// TestBroker_SpawnRegister — register spawn via protocol command
+func TestBroker_SpawnRegister(t *testing.T) {
+	sockPath, _, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c, _ := client.Connect(sockPath)
+	defer c.Close()
+	c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "cli"})
+
+	// Register a spawn
+	spawnData, _ := json.Marshal(map[string]any{
+		"pid":  12345,
+		"type": "claude",
+	})
+	resp, _ := c.Send(protocol.Request{
+		Cmd:  protocol.CmdSpawnRegister,
+		Name: "worker-1",
+		Data: spawnData,
+	})
+	if !resp.OK {
+		t.Fatalf("spawn.register failed: %s", resp.Error)
+	}
+
+	// Verify status includes spawn
+	resp, _ = c.Send(protocol.Request{Cmd: protocol.CmdStatus})
+	if !resp.OK {
+		t.Fatalf("status failed: %s", resp.Error)
+	}
+
+	var status map[string]interface{}
+	json.Unmarshal(resp.Data, &status)
+
+	spawned, ok := status["spawned"]
+	if !ok {
+		t.Fatal("status should include 'spawned' key")
+	}
+
+	spawnedList, ok := spawned.([]interface{})
+	if !ok {
+		t.Fatalf("spawned should be a list, got %T", spawned)
+	}
+
+	if len(spawnedList) != 1 {
+		t.Errorf("spawned list len = %d, want 1", len(spawnedList))
+	}
+}
+
+// TestBroker_SpawnRegisterDuplicate — register same name twice returns error
+func TestBroker_SpawnRegisterDuplicate(t *testing.T) {
+	sockPath, _, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c, _ := client.Connect(sockPath)
+	defer c.Close()
+	c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "cli"})
+
+	spawnData, _ := json.Marshal(map[string]any{
+		"pid":  12345,
+		"type": "claude",
+	})
+
+	// First register
+	resp, _ := c.Send(protocol.Request{
+		Cmd:  protocol.CmdSpawnRegister,
+		Name: "worker-1",
+		Data: spawnData,
+	})
+	if !resp.OK {
+		t.Fatalf("first spawn.register failed: %s", resp.Error)
+	}
+
+	// Second register same name
+	resp, _ = c.Send(protocol.Request{
+		Cmd:  protocol.CmdSpawnRegister,
+		Name: "worker-1",
+		Data: spawnData,
+	})
+	if resp.OK {
+		t.Error("duplicate spawn.register should fail")
+	}
+}
+
+// TestBroker_SpawnStatusAfterStop — spawned list is empty after shutdown
+func TestBroker_SpawnStatusAfterStop(t *testing.T) {
+	_, b, _ := startTestBroker(t)
+
+	// Add agent directly
+	b.spawnMgr.Add("worker-1", "claude", 99999)
+
+	// Verify it's there
+	agents := b.spawnMgr.List()
+	if len(agents) != 1 {
+		t.Fatalf("before stop: spawned len = %d, want 1", len(agents))
+	}
+
+	// Shutdown broker (don't defer cleanup since we're shutting down manually)
+	b.Shutdown()
+
+	// Verify spawned list is empty
+	agents = b.spawnMgr.List()
+	if len(agents) != 0 {
+		t.Errorf("after stop: spawned len = %d, want 0", len(agents))
+	}
+}
+
 // TestBroker_PresenceConnectDisconnect — connect → present; disconnect → absent
 func TestBroker_PresenceConnectDisconnect(t *testing.T) {
 	sockPath, _, cleanup := startTestBroker(t)

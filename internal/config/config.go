@@ -81,6 +81,14 @@ var Defaults = struct {
 	MaxTTL                 int
 	DefaultMsgPriority     string
 	ValidMsgPriorities     []string
+
+	// Spawn-related defaults
+	SpawnPIDTimeout       time.Duration
+	SpawnPIDPollInterval  time.Duration
+	SpawnStopTimeout      time.Duration
+	SpawnStopPollInterval time.Duration
+	SpawnKillPollInterval time.Duration
+	AgentConfigFile       string
 }{
 	DirName:    ".waggle",
 	DBFile:     "state.db",
@@ -109,6 +117,13 @@ var Defaults = struct {
 	MaxTTL:                 86400,
 	DefaultMsgPriority:     "normal",
 	ValidMsgPriorities:     []string{"critical", "normal", "bulk"},
+
+	SpawnPIDTimeout:       3 * time.Second,
+	SpawnPIDPollInterval:  200 * time.Millisecond,
+	SpawnStopTimeout:      5 * time.Second,
+	SpawnStopPollInterval: 100 * time.Millisecond,
+	SpawnKillPollInterval: 50 * time.Millisecond,
+	AgentConfigFile:       "agents.json",
 }
 
 type Paths struct {

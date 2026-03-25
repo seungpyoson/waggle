@@ -12,6 +12,7 @@ type Request struct {
 	Topic           string          `json:"topic,omitempty"`
 	Message         string          `json:"message,omitempty"`
 	Payload         json.RawMessage `json:"payload,omitempty"`
+	Data            json.RawMessage `json:"data,omitempty"`
 	Type            string          `json:"type,omitempty"`
 	Tags            string          `json:"tags,omitempty"`
 	DependsOn       string          `json:"depends_on,omitempty"`
