@@ -141,3 +141,11 @@ func connectToBroker(name string) (*client.Client, error) {
 	return c, nil
 }
 
+// disconnectAndClose sends a clean disconnect command then closes the connection.
+// This tells the broker to keep claimed tasks (not requeue them).
+// Use this instead of raw c.Close() for all CLI commands.
+func disconnectAndClose(c *client.Client) {
+	c.Send(protocol.Request{Cmd: protocol.CmdDisconnect})
+	c.Close()
+}
+
