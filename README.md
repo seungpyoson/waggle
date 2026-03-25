@@ -1,464 +1,283 @@
 # Waggle
 
-Agent session coordination broker for AI coding agents.
+**The messaging protocol for AI coding agents.**
 
-Waggle lets independent AI coding agent sessions (Claude Code, Gemini CLI, Codex, scripts) coordinate work on the same project through shell commands. Any process that can run bash can participate.
+Waggle is a lightweight coordination layer that lets independent AI agent sessions — Claude Code, Gemini CLI, Codex, Augment Code, or plain bash scripts — talk to each other. Post tasks, claim work, lock files, stream events. Any process that can run a shell command speaks Waggle.
 
-## What it does
-
-- **Task distribution** — Post tasks, workers claim and complete them with dependency tracking
-- **Coordination** — Advisory file locks prevent agents from stepping on each other
-- **Event streaming** — Subscribe to real-time events (task completions, status changes)
-
-## How it works
-
-One broker per project, auto-started on first command. Agents communicate through a Unix domain socket using NDJSON protocol.
-
-```bash
-# Queue work
-waggle task create '{"desc": "fix lint errors in src/auth.py"}' --type code-edit
-
-# Worker claims next task
-waggle task claim --type code-edit
-
-# Check what's happening
-waggle task list
-waggle status
+```
+            You (human)
+                │
+        waggle task create
+                │
+    ┌───────────┼───────────┐
+    ▼           ▼           ▼
+ Agent 1     Agent 2     Agent 3
+  (Claude)   (Gemini)    (Codex)
+    │           │           │
+    └───────────┼───────────┘
+                │
+          waggle broker
+       (auto-started, per-project)
 ```
 
-## Installation
+No SDK. No integration. No MCP. Just `waggle <command>`.
 
-### From source
+---
+
+## Install
 
 ```bash
 go install github.com/seungpyoson/waggle@latest
 ```
 
-### Build locally
+Or build from source:
 
 ```bash
 git clone https://github.com/seungpyoson/waggle.git
-cd waggle
-go build -o waggle .
+cd waggle && go build -o waggle .
 ```
 
-The binary is self-contained with no external dependencies.
+Single binary. No dependencies. Works on macOS and Linux.
 
-## Quick Start
+---
 
-### 1. Create a task
+## 30-Second Demo
 
 ```bash
 cd your-project
-waggle task create '{"desc": "implement login feature"}' --type feature
-```
 
-Output:
-```json
-{
-  "ok": true,
-  "data": {
-    "ID": 1,
-    "State": "pending",
-    "Type": "feature",
-    "Payload": "{\"desc\": \"implement login feature\"}"
-  }
-}
-```
+# Post some work
+waggle task create '{"desc": "fix auth bug"}' --type fix --priority 10
+waggle task create '{"desc": "write tests"}' --type test --depends-on 1
 
-### 2. Claim and complete in a script
-
-**Important:** Claim and complete must happen in the same process to maintain the session.
-
-```bash
-#!/bin/bash
-# worker.sh
-
-# Claim a task
-TASK=$(waggle task claim --type feature)
+# Agent claims highest-priority eligible task
+TASK=$(waggle task claim --type fix)
 ID=$(echo $TASK | jq -r '.data.ID')
 TOKEN=$(echo $TASK | jq -r '.data.ClaimToken')
 
-echo "Working on task $ID..."
+# Agent finishes
+waggle task complete $ID '{"commit": "abc123"}' --token $TOKEN
 
-# Do the work
-# ...
-
-# Complete the task
-waggle task complete $ID '{"status": "done"}' --token $TOKEN
-```
-
-Output from claim:
-```json
-{
-  "ok": true,
-  "data": {
-    "ID": 1,
-    "ClaimToken": "abc123...",
-    "Payload": "{\"desc\": \"implement login feature\"}"
-  }
-}
-```
-
-### 3. Monitor progress
-
-```bash
-# List all tasks
+# Task 2 auto-unblocks (dependency resolved)
 waggle task list
-
-# Subscribe to task events (runs until interrupted)
-waggle events subscribe task.events
 ```
+
+The broker starts automatically on your first command. No setup needed.
+
+---
+
+## Why Waggle?
+
+You open three terminals. Claude Code in one, Gemini CLI in another, a test runner script in the third. They're all editing the same repo, but they can't see each other.
+
+Waggle gives them a shared work queue:
+
+- **Tasks** — one agent posts work, another claims and completes it
+- **Dependencies** — task B waits until task A finishes
+- **Locks** — "I'm editing auth.py, don't touch it"
+- **Events** — real-time notifications when things happen
+- **Priority** — urgent work gets claimed first
+
+Agents don't need to know about each other. They just talk to the broker.
+
+---
+
+## How It Works
+
+**One broker per project.** Waggle detects your project from the git repo and starts a broker automatically. All agents in the same repo share the same broker — even across different clones and worktrees.
+
+**Stateful connections.** Each command connects, does its thing, and disconnects cleanly. Claimed tasks survive disconnects (your agent can claim in one command and complete in another). If an agent crashes mid-task, the broker detects the broken connection and re-queues the work.
+
+**Everything is JSON.** All output is machine-readable NDJSON. Agents parse it with `jq` or any JSON library.
+
+---
+
+## Task Lifecycle
+
+```
+pending (blocked) ──▶ pending (eligible) ──▶ claimed ──▶ completed
+                                                │
+                                                ├──▶ failed
+                                                └──▶ canceled
+```
+
+- **Blocked** — waiting for dependencies to complete
+- **Eligible** — ready to be claimed
+- **Claimed** — an agent owns it (with a lease + claim token)
+- **Completed / Failed / Canceled** — terminal states
+
+If a claimed task's lease expires (agent went silent), the broker re-queues it automatically.
+
+---
 
 ## CLI Reference
 
-### Daemon Management
+### Tasks
 
 ```bash
-# Start broker (usually auto-started)
-waggle start
+# Create
+waggle task create '{"desc": "..."}' --type fix --priority 10 --depends-on 1,2
 
-# Stop broker
-waggle stop
+# Claim (returns claim token)
+waggle task claim --type fix --tags urgent
 
-# Check broker status
-waggle status
-```
+# Complete / Fail
+waggle task complete <id> '{"result": "..."}' --token <token>
+waggle task fail <id> "reason" --token <token>
 
-### Task Commands
-
-#### Create a task
-
-```bash
-waggle task create <payload> [flags]
-```
-
-Flags:
-- `--type <type>` — Task type (e.g., `code-edit`, `test`, `review`)
-- `--tags <t1,t2>` — Comma-separated tags for filtering
-- `--depends-on <id1,id2>` — Task IDs that must complete first
-- `--lease <seconds>` — Lease duration (default: 300)
-- `--max-retries <n>` — Max retry attempts (default: 3)
-- `--priority <n>` — Higher = claimed first (default: 0)
-- `--idempotency-key <key>` — Prevent duplicate creates
-
-Example:
-```bash
-waggle task create '{"file": "auth.py", "issue": "type error"}' \
-  --type code-edit \
-  --tags bug,urgent \
-  --priority 10
-```
-
-#### List tasks
-
-```bash
-waggle task list [flags]
-```
-
-Flags:
-- `--state <state>` — Filter by state (`pending`, `claimed`, `completed`, `failed`)
-- `--type <type>` — Filter by task type
-- `--owner <name>` — Filter by current owner
-
-#### Claim a task
-
-```bash
-waggle task claim [flags]
-```
-
-Flags:
-- `--type <type>` — Only claim tasks of this type
-- `--tags <t1,t2>` — Only claim tasks with these tags
-
-Returns the task with a `claim_token` needed for completion.
-
-#### Complete a task
-
-```bash
-waggle task complete <id> <result> --token <claim_token>
-```
-
-Example:
-```bash
-waggle task complete 1 '{"status": "success"}' --token abc123...
-```
-
-#### Fail a task
-
-```bash
-waggle task fail <id> <reason> --token <claim_token>
-```
-
-#### Heartbeat (renew lease)
-
-```bash
-waggle task heartbeat <id> --token <claim_token>
-```
-
-#### Cancel a task
-
-```bash
+# Monitor
+waggle task list --state pending
+waggle task get <id>
+waggle task heartbeat <id> --token <token>
 waggle task cancel <id>
 ```
 
-#### Get task details
+### Locks
 
 ```bash
-waggle task get <id>
-```
-
-### Event Commands
-
-#### Subscribe to events
-
-```bash
-waggle events subscribe <topic>
-```
-
-Example:
-```bash
-waggle events subscribe task.events
-```
-
-Streams events as NDJSON:
-```json
-{"topic": "task.events", "event": "task.created", "id": 1, "ts": "2026-03-24T10:00:00Z"}
-{"topic": "task.events", "event": "task.claimed", "id": 1, "by": "worker-1", "ts": "2026-03-24T10:00:05Z"}
-{"topic": "task.events", "event": "task.completed", "id": 1, "result": {...}, "ts": "2026-03-24T10:05:00Z"}
-```
-
-#### Publish an event
-
-```bash
-waggle events publish <topic> <message>
-```
-
-Example:
-```bash
-waggle events publish agent.status '{"agent": "worker-1", "status": "idle"}'
-```
-
-### Lock Commands
-
-Advisory locks for coordination:
-
-```bash
-# Acquire a lock
-waggle lock <resource>
-
-# Release a lock
-waggle unlock <resource>
-
-# List all locks
-waggle locks
-```
-
-Example:
-```bash
-waggle lock file:src/auth.py
-# ... do work ...
+waggle lock file:src/auth.py       # Advisory — signals intent
 waggle unlock file:src/auth.py
+waggle locks                        # List all active locks
 ```
 
-Locks are automatically released when the session disconnects.
+### Events
 
-## Configuration
-
-### Environment Variables
-
-- `WAGGLE_ROOT` — Override project root detection (useful for testing)
-
-### Project Configuration
-
-Waggle stores state in `.waggle/` at your project root:
-
-```
-your-project/
-├── .waggle/
-│   ├── state.db        # SQLite task database
-│   ├── config.json     # Per-project settings (optional)
-│   ├── broker.pid      # Daemon process ID
-│   ├── broker.log      # Structured logs
-│   └── start.lock      # Prevents auto-start races
+```bash
+waggle events subscribe task.events  # Stream events (blocks until Ctrl+C)
+waggle events publish my.topic '{"data": "..."}'
 ```
 
-Socket location: `~/.waggle/sockets/<hash>/broker.sock` (hash based on project path)
+### Broker
 
-### Auto-start Behavior
-
-The broker auto-starts on the first `waggle` command and auto-stops after 30 minutes of inactivity (no connections and no pending tasks).
-
-## Architecture
-
-### System Overview
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                    Waggle Broker                        │
-│  ┌──────────────┐              ┌──────────────┐        │
-│  │   Events     │              │    Tasks     │        │
-│  │  (pub/sub)   │              │  (SQLite)    │        │
-│  │              │              │              │        │
-│  │ • Subscribe  │              │ • Create     │        │
-│  │ • Publish    │              │ • Claim      │        │
-│  │ • Fan-out    │              │ • Complete   │        │
-│  └──────────────┘              └──────────────┘        │
-│         │                              │                │
-│         └──────────┬───────────────────┘                │
-│                    │                                    │
-│              Unix Socket                                │
-└────────────────────┼────────────────────────────────────┘
-                     │
-        ┌────────────┼────────────┐
-        │            │            │
-   ┌────▼───┐   ┌───▼────┐   ┌──▼─────┐
-   │ Agent  │   │ Agent  │   │ Human  │
-   │   1    │   │   2    │   │  CLI   │
-   └────────┘   └────────┘   └────────┘
+```bash
+waggle start                  # Usually auto-starts
+waggle stop
+waggle status                 # Sessions, tasks, locks
 ```
 
-### Task Lifecycle
+---
 
-```
-pending (blocked) → pending (eligible) → claimed → completed
-                                           │
-                                           ├──→ failed
-                                           └──→ canceled
-```
+## Agent Patterns
 
-- **pending (blocked)**: Has incomplete dependencies
-- **pending (eligible)**: Ready to be claimed
-- **claimed**: Worker owns it (with lease)
-- **completed**: Successfully finished
-- **failed**: Explicitly failed or max retries exceeded
-- **canceled**: Canceled by controller
-
-### Design Principles
-
-See [design spec](docs/superpowers/specs/2026-03-24-waggle-design.md) for full details:
-
-- **Zero hardcodes** — All config in one place
-- **Single source of truth** — Each piece of state has one owner
-- **Broker is dumb, agents are smart** — Broker routes messages, agents own semantics
-- **Fail loud** — Errors surface immediately with context
-- **Stable CLI, evolvable internals** — CLI is the public API
-
-## Integration Examples
-
-### Claude Code Agent
+### Simple Worker
 
 ```bash
 #!/bin/bash
-# worker.sh - Simple worker agent
-
 while true; do
-  # Claim next task
   TASK=$(waggle task claim --type code-edit)
-
   if [ $? -eq 0 ]; then
     ID=$(echo $TASK | jq -r '.data.ID')
     TOKEN=$(echo $TASK | jq -r '.data.ClaimToken')
-    DESC=$(echo $TASK | jq -r '.data.Payload | fromjson | .desc')
 
-    echo "Working on task $ID: $DESC"
+    # Do the work...
 
-    # Do the work (call Claude, run tests, etc.)
-    # ...
-
-    # Complete the task
     waggle task complete $ID '{"status": "done"}' --token $TOKEN
   else
-    sleep 5
+    sleep 5  # No tasks available
   fi
 done
 ```
 
-### Controller Pattern
+### Controller (Task Graph)
 
 ```bash
 #!/bin/bash
-# controller.sh - Decompose work into tasks
+# Create a dependency chain
+T1=$(waggle task create '{"desc": "write tests"}' --type test | jq -r '.data.ID')
+T2=$(waggle task create '{"desc": "implement"}' --type code --depends-on $T1 | jq -r '.data.ID')
+T3=$(waggle task create '{"desc": "review"}' --type review --depends-on $T2 | jq -r '.data.ID')
 
-# Create dependent tasks
-TASK1=$(waggle task create '{"desc": "write tests"}' --type test)
-ID1=$(echo $TASK1 | jq -r '.data.ID')
-
-TASK2=$(waggle task create '{"desc": "implement feature"}' --type code-edit --depends-on $ID1)
-ID2=$(echo $TASK2 | jq -r '.data.ID')
-
-TASK3=$(waggle task create '{"desc": "update docs"}' --type docs --depends-on $ID2)
-
-# Monitor progress
-waggle events subscribe task.events | while read EVENT; do
-  echo "Event: $EVENT"
-done
+# Monitor
+waggle events subscribe task.events
 ```
 
-### Lock Coordination
+### Cross-Agent Coordination
 
 ```bash
-#!/bin/bash
-# Safe file editing with locks
-
-FILE="src/auth.py"
-
-if waggle lock "file:$FILE"; then
-  echo "Lock acquired, editing $FILE"
-
-  # Edit the file
-  # ...
-
-  waggle unlock "file:$FILE"
-  echo "Lock released"
+# Lock a file before editing
+if waggle lock "file:src/main.go"; then
+  # Safe to edit
+  waggle unlock "file:src/main.go"
 else
-  echo "File locked by another agent, skipping"
+  echo "Locked by another agent, picking different task"
 fi
 ```
 
-## Contributing
+---
 
-### Build and Test
+## Multi-Clone / Worktree Support
+
+Waggle identifies your project by the git repo's root commit — not the filesystem path. This means:
+
+- Two clones of the same repo share one broker
+- Git worktrees share one broker with the main checkout
+- `WAGGLE_PROJECT_ID=myproject` forces a specific identity (for cross-repo coordination or sandboxes)
+
+No setup needed. It just works.
+
+---
+
+## Architecture
+
+```
+waggle (single binary)
+├── CLI client          — parses commands, talks to broker
+└── Broker daemon       — manages state, auto-started per project
+
+Broker internals:
+├── Events module       — in-memory pub/sub, fire-and-forget
+├── Tasks module        — SQLite-backed queue with claim/lease/deps
+└── Locks module        — in-memory advisory locks, connection-tied
+```
+
+**Design principles:**
+- **Zero config** — auto-detects project, auto-starts broker
+- **Broker is dumb, agents are smart** — broker routes messages, agents decide what work means
+- **Roles are fluid** — any session can create tasks, claim tasks, or both
+- **Fail loud** — errors are JSON with codes, never silent
+
+Full spec: [`docs/superpowers/specs/2026-03-24-waggle-design.md`](docs/superpowers/specs/2026-03-24-waggle-design.md)
+
+---
+
+## Configuration
+
+| Method | Purpose |
+|--------|---------|
+| `WAGGLE_PROJECT_ID` | Force a specific project identity (cross-repo, sandboxes) |
+| `WAGGLE_ROOT` | Override project root detection (non-git projects) |
+
+Waggle stores state at `~/.waggle/`:
+```
+~/.waggle/
+├── data/<hash>/        # Per-project: DB, PID, logs
+└── sockets/<hash>/     # Per-project: Unix domain socket
+```
+
+---
+
+## Development
 
 ```bash
-# Build
 go build -o waggle .
-
-# Run all tests
-go test ./... -v
-
-# Run E2E tests
-go test -v -run TestE2E -count=1
-
-# Run specific package tests
-go test ./internal/tasks/ -v
+go test ./... -race -v
+go vet ./...
 ```
 
-### Project Structure
-
+Project structure:
 ```
-waggle/
-├── cmd/                 # CLI commands (Cobra)
-├── internal/
-│   ├── broker/         # Socket listener, session management
-│   ├── client/         # Shared client for CLI
-│   ├── config/         # Path resolution, defaults
-│   ├── events/         # In-memory pub/sub
-│   ├── locks/          # Advisory lock manager
-│   ├── protocol/       # Wire format types
-│   └── tasks/          # SQLite task store
-├── docs/               # Design specs and plans
-└── main.go            # Entry point
+internal/
+├── config/     — Project identity, path resolution, defaults
+├── protocol/   — Wire format (NDJSON types)
+├── events/     — In-memory pub/sub hub
+├── tasks/      — SQLite task store + dependencies + leases
+├── locks/      — Advisory lock manager
+├── broker/     — Socket listener, sessions, command routing
+└── client/     — Shared client for CLI
+cmd/            — Cobra CLI commands
 ```
 
-### Commit Convention
-
-Use conventional commits:
-- `feat:` — New features
-- `fix:` — Bug fixes
-- `test:` — Test changes
-- `docs:` — Documentation
-- `chore:` — Maintenance
+---
 
 ## License
 
