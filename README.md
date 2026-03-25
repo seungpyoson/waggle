@@ -26,15 +26,29 @@ No SDK. No integration. No MCP. Just `waggle <command>`.
 
 ## Install
 
+### Pre-built binaries (recommended)
+
+Download from [GitHub Releases](https://github.com/seungpyoson/waggle/releases) — no Go required.
+
+### From source
+
 ```bash
 go install github.com/seungpyoson/waggle@latest
 ```
 
-Or build from source:
+> **PATH check:** If `waggle` isn't found after install, add Go's bin to your PATH:
+> ```bash
+> export PATH="$PATH:$(go env GOPATH)/bin"
+> ```
+> Add this line to your `~/.zshrc` or `~/.bashrc` to make it permanent.
+
+### Build locally
 
 ```bash
 git clone https://github.com/seungpyoson/waggle.git
 cd waggle && go build -o waggle .
+# Optionally copy to a directory in your PATH:
+cp waggle /usr/local/bin/   # or ~/bin/
 ```
 
 Single binary. No dependencies. Works on macOS and Linux.
