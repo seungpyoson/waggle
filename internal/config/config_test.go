@@ -10,6 +10,23 @@ import (
 	"time"
 )
 
+// setDefaultField sets a Defaults struct field by name and registers a cleanup
+// to restore the original value. This centralizes the save/set/restore pattern
+// and makes it safe against panics mid-test. Tests that use this MUST NOT call
+// t.Parallel() — Defaults is shared global state.
+func setDefaultField(t *testing.T, fieldName string, val any) {
+	t.Helper()
+	v := reflect.ValueOf(&Defaults).Elem()
+	fv := v.FieldByName(fieldName)
+	if !fv.IsValid() {
+		t.Fatalf("no field %q in Defaults", fieldName)
+	}
+	orig := reflect.New(fv.Type()).Elem()
+	orig.Set(fv)
+	t.Cleanup(func() { fv.Set(orig) })
+	fv.Set(reflect.ValueOf(val))
+}
+
 // C8, C5 partial: no .git anywhere → error mentions WAGGLE_ROOT
 func TestFindProjectRoot_NoGitDir(t *testing.T) {
 	tmp := t.TempDir()
@@ -303,71 +320,15 @@ func TestValidateDefaults_PassesWithDefaults(t *testing.T) {
 	}
 }
 
-func TestValidateDefaults_RejectsZeroDurations(t *testing.T) {
-	orig := Defaults.BusyTimeout
-	Defaults.BusyTimeout = 0
-	defer func() { Defaults.BusyTimeout = orig }()
-
-	if err := ValidateDefaults(); err == nil {
-		t.Fatal("ValidateDefaults() should reject zero BusyTimeout")
-	}
-}
-
 func TestValidateDefaults_RejectsNegativeDurations(t *testing.T) {
-	orig := Defaults.LeaseCheckPeriod
-	Defaults.LeaseCheckPeriod = -1 * time.Second
-	defer func() { Defaults.LeaseCheckPeriod = orig }()
-
+	setDefaultField(t, "LeaseCheckPeriod", -1*time.Second)
 	if err := ValidateDefaults(); err == nil {
 		t.Fatal("ValidateDefaults() should reject negative LeaseCheckPeriod")
 	}
 }
 
-func TestValidateDefaults_RejectsZeroMaxRetries(t *testing.T) {
-	orig := Defaults.MaxRetries
-	Defaults.MaxRetries = 0
-	defer func() { Defaults.MaxRetries = orig }()
-
-	if err := ValidateDefaults(); err == nil {
-		t.Fatal("ValidateDefaults() should reject zero MaxRetries")
-	}
-}
-
-func TestValidateDefaults_RejectsZeroMaxFieldLength(t *testing.T) {
-	orig := Defaults.MaxFieldLength
-	Defaults.MaxFieldLength = 0
-	defer func() { Defaults.MaxFieldLength = orig }()
-
-	if err := ValidateDefaults(); err == nil {
-		t.Fatal("ValidateDefaults() should reject zero MaxFieldLength")
-	}
-}
-
-func TestValidateDefaults_RejectsZeroMaxLogSize(t *testing.T) {
-	orig := Defaults.MaxLogSize
-	Defaults.MaxLogSize = 0
-	defer func() { Defaults.MaxLogSize = orig }()
-
-	if err := ValidateDefaults(); err == nil {
-		t.Fatal("ValidateDefaults() should reject zero MaxLogSize")
-	}
-}
-
-func TestValidateDefaults_RejectsZeroMaxMessageSize(t *testing.T) {
-	orig := Defaults.MaxMessageSize
-	Defaults.MaxMessageSize = 0
-	defer func() { Defaults.MaxMessageSize = orig }()
-
-	if err := ValidateDefaults(); err == nil {
-		t.Fatal("ValidateDefaults() should reject zero MaxMessageSize")
-	}
-}
-
 func TestValidateDefaults_RejectsSubSecondLeaseDuration(t *testing.T) {
-	orig := Defaults.LeaseDuration
-	Defaults.LeaseDuration = 500 * time.Millisecond
-	defer func() { Defaults.LeaseDuration = orig }()
-
+	setDefaultField(t, "LeaseDuration", 500*time.Millisecond)
 	err := ValidateDefaults()
 	if err == nil {
 		t.Fatal("ValidateDefaults() should reject sub-second LeaseDuration")
@@ -377,9 +338,10 @@ func TestValidateDefaults_RejectsSubSecondLeaseDuration(t *testing.T) {
 	}
 }
 
-// TestValidateDefaults_RejectsZeroOnEveryNumericField proves that reflection-based
-// validation catches every numeric field. For each int/int64/Duration field, it
-// zeros the value and verifies ValidateDefaults returns an error mentioning that field.
+// TestValidateDefaults_RejectsZeroOnEveryNumericField uses reflection to zero
+// each int/int64/Duration field and verify ValidateDefaults catches it.
+// This is the comprehensive test — individual per-field tests are unnecessary
+// because this auto-discovers all fields. MUST NOT use t.Parallel().
 func TestValidateDefaults_RejectsZeroOnEveryNumericField(t *testing.T) {
 	v := reflect.ValueOf(&Defaults).Elem()
 	typ := v.Type()
@@ -390,9 +352,10 @@ func TestValidateDefaults_RejectsZeroOnEveryNumericField(t *testing.T) {
 			continue
 		}
 		t.Run(field.Name, func(t *testing.T) {
+			// NOT parallel — mutates shared Defaults
 			orig := fv.Int()
+			t.Cleanup(func() { fv.SetInt(orig) })
 			fv.SetInt(0)
-			defer fv.SetInt(orig)
 
 			err := ValidateDefaults()
 			if err == nil {
@@ -406,12 +369,7 @@ func TestValidateDefaults_RejectsZeroOnEveryNumericField(t *testing.T) {
 }
 
 func TestValidateDefaults_DeterministicErrorOrder(t *testing.T) {
-	orig := Defaults.ShutdownTimeout
-	Defaults.ShutdownTimeout = 0
-	defer func() { Defaults.ShutdownTimeout = orig }()
-
-	// Run 10 times — if map iteration were used, different runs could
-	// report different fields. With slices, ShutdownTimeout is always first.
+	setDefaultField(t, "ShutdownTimeout", time.Duration(0))
 	for i := 0; i < 10; i++ {
 		err := ValidateDefaults()
 		if err == nil {
