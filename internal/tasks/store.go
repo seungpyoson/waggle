@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -659,6 +660,63 @@ func (s *Store) CountByState() (map[string]int, error) {
 	}
 
 	return counts, rows.Err()
+}
+
+// UpdateParams holds parameters for updating a task
+type UpdateParams struct {
+	Priority *int
+	Tags     []string
+}
+
+// Update updates a task's priority and/or tags
+func (s *Store) Update(id int64, params UpdateParams) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	// Build dynamic update query
+	updates := []string{}
+	args := []interface{}{}
+
+	if params.Priority != nil {
+		updates = append(updates, "priority = ?")
+		args = append(args, *params.Priority)
+	}
+
+	if params.Tags != nil {
+		tagsJSON := "[]"
+		if len(params.Tags) > 0 {
+			b, err := json.Marshal(params.Tags)
+			if err != nil {
+				return err
+			}
+			tagsJSON = string(b)
+		}
+		updates = append(updates, "tags = ?")
+		args = append(args, tagsJSON)
+	}
+
+	if len(updates) == 0 {
+		return fmt.Errorf("no fields to update")
+	}
+
+	updates = append(updates, "updated_at = ?")
+	args = append(args, now)
+	args = append(args, id)
+
+	query := "UPDATE tasks SET " + strings.Join(updates, ", ") + " WHERE id = ?"
+	res, err := s.db.Exec(query, args...)
+	if err != nil {
+		return err
+	}
+
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return fmt.Errorf("task not found")
+	}
+
+	return nil
 }
 
 // RequeueExpiredLeases finds expired leases and re-queues them or marks them as failed

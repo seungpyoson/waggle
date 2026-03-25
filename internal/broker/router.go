@@ -50,6 +50,8 @@ func route(s *Session, req protocol.Request) protocol.Response {
 		return handleTaskCancel(s, req)
 	case protocol.CmdTaskGet:
 		return handleTaskGet(s, req)
+	case protocol.CmdTaskUpdate:
+		return handleTaskUpdate(s, req)
 	case protocol.CmdLock:
 		return handleLock(s, req)
 	case protocol.CmdUnlock:
@@ -311,6 +313,48 @@ func handleTaskGet(s *Session, req protocol.Request) protocol.Response {
 		return protocol.ErrResponse(protocol.ErrInvalidRequest, "invalid task_id")
 	}
 
+	task, err := s.broker.store.Get(taskID)
+	if err != nil {
+		return protocol.ErrResponse(protocol.ErrTaskNotFound, err.Error())
+	}
+
+	data, _ := json.Marshal(task)
+	return protocol.OKResponse(data)
+}
+
+func handleTaskUpdate(s *Session, req protocol.Request) protocol.Response {
+	taskID, err := strconv.ParseInt(req.TaskID, 10, 64)
+	if err != nil {
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, "invalid task_id")
+	}
+
+	var params tasks.UpdateParams
+
+	// Parse priority if provided (non-zero means it was set)
+	if req.Priority != 0 {
+		params.Priority = &req.Priority
+	}
+
+	// Parse tags if provided
+	if req.Tags != "" {
+		params.Tags = strings.Split(req.Tags, ",")
+		// Trim whitespace from each tag
+		for i := range params.Tags {
+			params.Tags[i] = strings.TrimSpace(params.Tags[i])
+		}
+	}
+
+	// At least one field must be specified
+	if params.Priority == nil && params.Tags == nil {
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, "at least one field must be specified")
+	}
+
+	err = s.broker.store.Update(taskID, params)
+	if err != nil {
+		return protocol.ErrResponse(protocol.ErrTaskNotFound, err.Error())
+	}
+
+	// Return updated task
 	task, err := s.broker.store.Get(taskID)
 	if err != nil {
 		return protocol.ErrResponse(protocol.ErrTaskNotFound, err.Error())
