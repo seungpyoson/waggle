@@ -76,6 +76,8 @@ func route(s *Session, req protocol.Request) protocol.Response {
 		return handleAck(s, req)
 	case protocol.CmdPresence:
 		return handlePresence(s)
+	case protocol.CmdSpawnRegister:
+		return handleSpawnRegister(s, req)
 	default:
 		return protocol.ErrResponse(protocol.ErrInvalidRequest, "unknown command")
 	}
@@ -453,6 +455,7 @@ func handleStatus(s *Session) protocol.Response {
 		"subscribers": s.broker.hub.SubscriberCount(),
 		"locks":       s.broker.lockMgr.Count(),
 		"tasks":       taskCounts,
+		"spawned":     s.broker.spawnMgr.List(),
 	}
 
 	data, _ := json.Marshal(status)
@@ -647,5 +650,29 @@ func publishPresenceEvent(b *Broker, event, name string) {
 		TS:    time.Now().UTC().Format(time.RFC3339),
 	}
 	b.hub.Publish("presence.events", mustMarshal(evt))
+}
+
+func handleSpawnRegister(s *Session, req protocol.Request) protocol.Response {
+	if req.Name == "" {
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, "name required")
+	}
+
+	// Parse PID and type from Data
+	var spawnData struct {
+		PID  int    `json:"pid"`
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(req.Data, &spawnData); err != nil {
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, "invalid spawn data")
+	}
+	if spawnData.PID <= 0 {
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, "valid pid required")
+	}
+
+	if err := s.broker.spawnMgr.Add(req.Name, spawnData.Type, spawnData.PID); err != nil {
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, err.Error())
+	}
+
+	return protocol.OKResponse(nil)
 }
 
