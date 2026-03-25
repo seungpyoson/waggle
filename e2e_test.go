@@ -207,3 +207,180 @@ func TestE2E_TaskRoundTrip(t *testing.T) {
 	}
 }
 
+
+// TestE2E_DirectMessaging — full flow: alice and bob exchange messages
+func TestE2E_DirectMessaging(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping e2e in short mode")
+	}
+
+	// Build binary
+	tmpBin := filepath.Join(t.TempDir(), "waggle")
+	build := exec.Command("go", "build", "-o", tmpBin, ".")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build: %s\n%s", err, out)
+	}
+
+	// Create project directory
+	project := t.TempDir()
+
+	// Create temp HOME in /tmp to avoid socket path length issues
+	tmpHome, err := os.MkdirTemp("/tmp", "waggle-test-*")
+	if err != nil {
+		t.Fatalf("create temp home: %v", err)
+	}
+	t.Cleanup(func() {
+		os.RemoveAll(tmpHome)
+	})
+
+	// Start broker in background
+	startCmd := exec.Command(tmpBin, "start", "--foreground")
+	startCmd.Dir = project
+	startCmd.Env = append(os.Environ(), "HOME="+tmpHome, "WAGGLE_PROJECT_ID=e2e-test-messaging")
+	if err := startCmd.Start(); err != nil {
+		t.Fatalf("start broker: %v", err)
+	}
+
+	// Cleanup: stop broker
+	t.Cleanup(func() {
+		if startCmd.Process != nil {
+			startCmd.Process.Kill()
+			startCmd.Wait()
+		}
+	})
+
+	// Poll socket readiness
+	socketDir := filepath.Join(tmpHome, ".waggle", "sockets")
+	var socketPath string
+
+	// Wait for socket directory to be created
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		entries, err := os.ReadDir(socketDir)
+		if err == nil && len(entries) > 0 {
+			socketPath = filepath.Join(socketDir, entries[0].Name(), "broker.sock")
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	if socketPath == "" {
+		t.Fatalf("socket directory not created after 5s")
+	}
+
+	// Now poll for socket readiness
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		conn, err := net.Dial("unix", socketPath)
+		if err == nil {
+			conn.Close()
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// Connect as alice
+	alice, err := client.Connect(socketPath)
+	if err != nil {
+		t.Fatalf("alice connect: %v", err)
+	}
+	defer alice.Close()
+
+	resp, _ := alice.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	if !resp.OK {
+		t.Fatalf("alice connect failed: %s", resp.Error)
+	}
+
+	// Connect as bob
+	bob, err := client.Connect(socketPath)
+	if err != nil {
+		t.Fatalf("bob connect: %v", err)
+	}
+	defer bob.Close()
+
+	resp, _ = bob.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+	if !resp.OK {
+		t.Fatalf("bob connect failed: %s", resp.Error)
+	}
+
+	// Bob sends to alice
+	resp, _ = bob.Send(protocol.Request{
+		Cmd:     protocol.CmdSend,
+		Name:    "alice",
+		Message: "hello",
+	})
+	if !resp.OK {
+		t.Fatalf("bob send failed: %s", resp.Error)
+	}
+
+	// Alice receives the pushed message (since alice is online)
+	pushResp, err := alice.Receive()
+	if err != nil {
+		t.Fatalf("alice failed to receive push: %v", err)
+	}
+	if !pushResp.OK {
+		t.Fatalf("alice push response not OK: %s", pushResp.Error)
+	}
+
+	// Alice checks inbox
+	resp, _ = alice.Send(protocol.Request{Cmd: protocol.CmdInbox})
+	if !resp.OK {
+		t.Fatalf("alice inbox failed: %s", resp.Error)
+	}
+
+	var aliceMessages []struct {
+		From string `json:"from"`
+		Body string `json:"body"`
+	}
+	json.Unmarshal(resp.Data, &aliceMessages)
+	if len(aliceMessages) != 1 {
+		t.Fatalf("alice inbox len = %d, want 1", len(aliceMessages))
+	}
+	if aliceMessages[0].From != "bob" {
+		t.Errorf("message from = %q, want bob", aliceMessages[0].From)
+	}
+	if aliceMessages[0].Body != "hello" {
+		t.Errorf("message body = %q, want hello", aliceMessages[0].Body)
+	}
+
+	// Alice sends to bob
+	resp, _ = alice.Send(protocol.Request{
+		Cmd:     protocol.CmdSend,
+		Name:    "bob",
+		Message: "got it",
+	})
+	if !resp.OK {
+		t.Fatalf("alice send failed: %s", resp.Error)
+	}
+
+	// Bob receives the pushed message (since bob is online)
+	pushResp, err = bob.Receive()
+	if err != nil {
+		t.Fatalf("bob failed to receive push: %v", err)
+	}
+	if !pushResp.OK {
+		t.Fatalf("bob push response not OK: %s", pushResp.Error)
+	}
+
+	// Bob checks inbox
+	resp, _ = bob.Send(protocol.Request{Cmd: protocol.CmdInbox})
+	if !resp.OK {
+		t.Fatalf("bob inbox failed: %s", resp.Error)
+	}
+
+	var bobMessages []struct {
+		From string `json:"from"`
+		Body string `json:"body"`
+	}
+	json.Unmarshal(resp.Data, &bobMessages)
+	if len(bobMessages) != 1 {
+		t.Fatalf("bob inbox len = %d, want 1", len(bobMessages))
+	}
+	if bobMessages[0].From != "alice" {
+		t.Errorf("message from = %q, want alice", bobMessages[0].From)
+	}
+	if bobMessages[0].Body != "got it" {
+		t.Errorf("message body = %q, want 'got it'", bobMessages[0].Body)
+	}
+}
+

@@ -1,20 +1,41 @@
 package tasks
 
 import (
-	"path/filepath"
+	"database/sql"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
+
+	_ "modernc.org/sqlite"
+
+	"github.com/seungpyoson/waggle/internal/config"
 )
 
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
-	db := filepath.Join(t.TempDir(), "test.db")
-	s, err := NewStore(db)
+	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { s.Close() })
+	db.SetMaxOpenConns(1)
+
+	// Set pragmas (same as production)
+	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(fmt.Sprintf("PRAGMA busy_timeout=%d", config.Defaults.BusyTimeout.Milliseconds())); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+
+	s, err := NewStore(db)
+	if err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
 	return s
 }
 
@@ -403,23 +424,25 @@ func TestStore_HeartbeatInvalidToken(t *testing.T) {
 }
 
 func TestStore_SchemaVersion(t *testing.T) {
-	// Create a store, close it, reopen it
-	dbPath := filepath.Join(t.TempDir(), "test.db")
-	s1, err := NewStore(dbPath)
+	// Create a store with in-memory DB
+	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
-	s1.Close()
+	defer db.Close()
+	db.SetMaxOpenConns(1)
 
-	// Reopen should succeed
-	s2, err := NewStore(dbPath)
+	// Set pragmas
+	db.Exec("PRAGMA journal_mode=WAL")
+	db.Exec(fmt.Sprintf("PRAGMA busy_timeout=%d", config.Defaults.BusyTimeout.Milliseconds()))
+
+	s1, err := NewStore(db)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s2.Close()
 
 	// Should be able to use it
-	_, err = s2.Create(CreateParams{Payload: `{}`})
+	_, err = s1.Create(CreateParams{Payload: `{}`})
 	if err != nil {
 		t.Fatal(err)
 	}

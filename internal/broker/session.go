@@ -22,6 +22,7 @@ type Session struct {
 	broker          *Broker
 	cleanDisconnect bool // Set to true when disconnect command is received
 	cleanupOnce     sync.Once
+	writeMu         sync.Mutex // protects enc writes
 }
 
 // newSession creates a new session
@@ -47,12 +48,17 @@ func (s *Session) readLoop() {
 		var req protocol.Request
 		if err := json.Unmarshal(s.scan.Bytes(), &req); err != nil {
 			resp := protocol.ErrResponse(protocol.ErrInvalidRequest, "invalid JSON")
+			s.writeMu.Lock()
 			s.enc.Encode(resp)
+			s.writeMu.Unlock()
 			continue
 		}
 
 		resp := route(s, req)
-		if err := s.enc.Encode(resp); err != nil {
+		s.writeMu.Lock()
+		err := s.enc.Encode(resp)
+		s.writeMu.Unlock()
+		if err != nil {
 			// Suppress errors after disconnect — client may have already closed
 			if !s.cleanDisconnect {
 				log.Printf("session %s: error encoding response: %v", s.name, err)
@@ -112,8 +118,12 @@ func (s *Session) doCleanup() {
 		s.broker.hub.UnsubscribeAll(s.name)
 
 		// Remove from broker session map
+		// CLASS 4 FIX (E2): Only delete if we still own this name in the sessions map
+		// Prevents old session cleanup from deleting new session's entry after name collision
 		s.broker.mu.Lock()
-		delete(s.broker.sessions, s.name)
+		if s.broker.sessions[s.name] == s {
+			delete(s.broker.sessions, s.name)
+		}
 		s.broker.mu.Unlock()
 	}
 

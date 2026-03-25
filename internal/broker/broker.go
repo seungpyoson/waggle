@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"database/sql"
 	"fmt"
 	"log"
 	"net"
@@ -8,9 +9,12 @@ import (
 	"sync"
 	"time"
 
+	_ "modernc.org/sqlite"
+
 	"github.com/seungpyoson/waggle/internal/config"
 	"github.com/seungpyoson/waggle/internal/events"
 	"github.com/seungpyoson/waggle/internal/locks"
+	"github.com/seungpyoson/waggle/internal/messages"
 	"github.com/seungpyoson/waggle/internal/tasks"
 )
 
@@ -27,6 +31,7 @@ type Broker struct {
 	config   Config
 	hub      *events.Hub
 	store    *tasks.Store
+	msgStore *messages.Store
 	lockMgr  *locks.Manager
 	listener net.Listener
 	sessions map[string]*Session
@@ -60,10 +65,35 @@ func New(cfg Config) (*Broker, error) {
 		}
 	}
 
-	// Open task store
-	store, err := tasks.NewStore(cfg.DBPath)
+	// Open database
+	db, err := sql.Open("sqlite", cfg.DBPath)
 	if err != nil {
+		return nil, fmt.Errorf("opening database: %w", err)
+	}
+	db.SetMaxOpenConns(1) // SQLite serializes writers
+
+	// Set pragmas
+	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("setting WAL mode: %w", err)
+	}
+	if _, err := db.Exec(fmt.Sprintf("PRAGMA busy_timeout=%d", config.Defaults.BusyTimeout.Milliseconds())); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("setting busy_timeout: %w", err)
+	}
+
+	// Open task store (shares DB connection)
+	store, err := tasks.NewStore(db)
+	if err != nil {
+		db.Close()
 		return nil, fmt.Errorf("opening task store: %w", err)
+	}
+
+	// Open message store (shares DB connection)
+	msgStore, err := messages.NewStore(db)
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf("opening message store: %w", err)
 	}
 
 	// Clean up stale socket
@@ -90,6 +120,7 @@ func New(cfg Config) (*Broker, error) {
 		config:   cfg,
 		hub:      events.NewHub(),
 		store:    store,
+		msgStore: msgStore,
 		lockMgr:  locks.NewManager(),
 		listener: listener,
 		sessions: make(map[string]*Session),
