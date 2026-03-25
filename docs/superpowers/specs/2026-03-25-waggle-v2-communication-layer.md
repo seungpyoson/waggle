@@ -133,19 +133,41 @@ The hook/skill maintains the waggle connection and sends heartbeats for any clai
 **e) Auto-claim on assignment:**
 If the orchestrator creates a task with `--assign deployer`, the deployer's session auto-claims it when the message arrives.
 
-**Cross-platform strategy — one protocol, not one client per platform:**
+**Cross-platform strategy — one protocol, native integration per platform:**
 
-The broker speaks one protocol (NDJSON over Unix socket). Every platform that can run shell commands already speaks it. Per-platform work is only for zero-knowledge participation — making waggle invisible.
+The broker speaks one protocol (NDJSON over Unix socket). Every platform that can run shell commands already speaks it. But each major platform has its own extension system that enables deeper, zero-knowledge integration — not just docs.
 
-| Platform | Integration | Effort | How |
-|----------|------------|--------|-----|
-| Claude Code | SessionStart hook + `/waggle` skill | Medium | Superpowers pattern — auto-connect, message injection, auto-heartbeat |
-| Gemini CLI | `GEMINI.md` instructions | Small | Document waggle commands in Gemini's config file |
-| Codex | `AGENTS.md` instructions | Small | Document waggle commands in Codex's config file |
-| Augment Code | Workspace notes | Small | Add waggle workflow to Augment workspace |
-| Any bash script | Nothing | Zero | Already works — just call `waggle` commands |
+**Research findings (2026-03-25):**
 
-**Do NOT build separate clients.** Build Claude Code integration properly (Phase 2), then write a one-page integration guide per platform. The guides are just "put these waggle commands in your agent's config." The protocol is identical everywhere.
+| Platform | Extension system | Session config | Headless mode |
+|----------|-----------------|----------------|---------------|
+| Claude Code | Hooks (`~/.claude/hooks/`) + skills (superpowers) | `CLAUDE.md` | `claude "prompt"` |
+| Codex | Skills (`~/.codex/skills/`, 30+ exist) + automations (`~/.codex/automations/`) | `AGENTS.md` (hierarchical) | `--quiet --approval-mode full-auto` |
+| Gemini CLI | Custom commands + MCP servers (`settings.json`) | `GEMINI.md` | `--output-format json` |
+| Augment Code | Workspace notes + delegated agents | Workspace config | Via agent delegation |
+
+**Integration plan per platform:**
+
+| Platform | Integration type | Effort | What to build |
+|----------|-----------------|--------|---------------|
+| **Claude Code** | SessionStart hook + `/waggle` skill | Medium | Hook auto-connects on session start, skill provides `/waggle send/claim/done` commands, incoming messages injected as system notifications, auto-heartbeat in background |
+| **Codex** | Codex skill (`~/.codex/skills/waggle/`) | Medium | Skill directory with waggle workflow. Codex has a full skills system — waggle becomes a native Codex skill, not just AGENTS.md instructions. Auto-claim, auto-complete patterns. |
+| **Gemini CLI** | MCP server OR custom command | Medium | Waggle as an MCP server that Gemini connects to natively. `@waggle claim`, `@waggle send deployer "done"`. MCP is the deepest integration — waggle tools appear as native Gemini tools. Alternative: custom command if MCP is too heavy. |
+| **Augment Code** | Agent template + workspace notes | Small | Standard workspace note template with waggle workflow. Augment's orchestrator pattern delegates to agents that use waggle via shell. |
+| **Any bash script** | Nothing | Zero | Already works — `waggle <command>` |
+
+**Key insight:** This is NOT "Claude Code gets code, everyone else gets docs." Each platform has a real extension system. Codex has skills. Gemini has MCP. Build native integrations that make waggle invisible on each platform.
+
+**Shared across all integrations (build once):**
+- Auto-connect on session start (detect project, connect to broker)
+- Auto-heartbeat for claimed tasks (background, agent never sees it)
+- Message delivery into conversation (platform-specific rendering)
+- Auto-claim when task is assigned to this agent's name
+
+**Platform-specific:**
+- How messages appear in the conversation (hook injection vs MCP notification vs skill output)
+- How the agent invokes waggle (skill command vs MCP tool vs shell command)
+- How headless/spawn mode works (each platform has different non-interactive flags)
 
 ### 3. Spawn — Visible Terminal Sessions
 
@@ -180,23 +202,38 @@ waggle stop                                           # kills all agents + broke
 ## Implementation Order
 
 ```
-Phase 1: Direct messaging + inbox + presence
+Phase 1: Direct messaging + inbox + presence (broker-side)
   - Schema: messages + presence tables (migration v2→v3)
   - Protocol: send, inbox, ack, presence commands
   - Router: new handlers
   - CLI: waggle send, waggle inbox, waggle presence
   - Tests: delivery lifecycle, mid-turn queuing, TTL expiry
 
-Phase 2: Claude Code integration
-  - SessionStart hook: auto-connect, check inbox/tasks
-  - Skill: /waggle command set
-  - Message injection: incoming messages as system notifications
-  - Auto-heartbeat: background keepalive for claimed tasks
-  - Auto-claim: --assign flag on task create
+Phase 2: Platform integrations (can be parallelized across platforms)
+  2a. Claude Code — hook + skill
+    - SessionStart hook: auto-connect, check inbox/tasks
+    - Skill: /waggle command set
+    - Message injection: incoming messages as system notifications
+    - Auto-heartbeat: background keepalive for claimed tasks
+    - Auto-claim: --assign flag on task create
 
-Phase 3: Spawn
+  2b. Codex — native skill
+    - ~/.codex/skills/waggle/ directory
+    - Waggle workflow as Codex skill (claim, complete, send patterns)
+    - AGENTS.md integration for auto-awareness
+
+  2c. Gemini CLI — MCP server
+    - Waggle as MCP server (waggle tools appear as native Gemini tools)
+    - settings.json configuration
+    - @waggle tool namespace
+
+  2d. Augment Code — agent template
+    - Standard workspace note template
+    - Orchestrator delegation pattern with waggle commands
+
+Phase 3: Spawn (depends on Phase 2 — agents need integration to auto-connect)
   - Terminal detection (Terminal.app, iTerm2, Linux)
-  - Tab launch with env injection
+  - Tab launch with env injection + platform-specific agent command
   - PID tracking in broker
   - Status + stop integration
   - Agent config (~/.waggle/agents.json)
