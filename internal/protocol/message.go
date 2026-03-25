@@ -27,6 +27,11 @@ type Request struct {
 	Last            string          `json:"last,omitempty"`
 	State           string          `json:"state,omitempty"`
 	Owner           string          `json:"owner,omitempty"`
+	MessageID       int64           `json:"message_id,omitempty"`
+	MsgPriority     string          `json:"msg_priority,omitempty"`
+	TTL             int             `json:"ttl,omitempty"`
+	AwaitAck        bool            `json:"await_ack,omitempty"`
+	Timeout         int             `json:"timeout,omitempty"`
 }
 
 // Response represents a broker → client response

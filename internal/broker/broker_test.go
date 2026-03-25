@@ -16,7 +16,7 @@ import (
 	"github.com/seungpyoson/waggle/internal/protocol"
 )
 
-func startTestBroker(t *testing.T) (string, func()) {
+func startTestBroker(t *testing.T) (string, *Broker, func()) {
 	t.Helper()
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
@@ -32,7 +32,32 @@ func startTestBroker(t *testing.T) (string, func()) {
 
 	go b.Serve()
 	time.Sleep(100 * time.Millisecond)
-	return sockPath, func() {
+	return sockPath, b, func() {
+		b.Shutdown()
+		os.Remove(sockPath)
+	}
+}
+
+func startTestBrokerWithTTL(t *testing.T, ttlCheckPeriod time.Duration) (string, *Broker, func()) {
+	t.Helper()
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+
+	sockPath := fmt.Sprintf("/tmp/waggle-test-%d.sock", time.Now().UnixNano())
+	dbPath := fmt.Sprintf("%s/db", tmpDir)
+
+	b, err := New(Config{
+		SocketPath:     sockPath,
+		DBPath:         dbPath,
+		TTLCheckPeriod: ttlCheckPeriod,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	go b.Serve()
+	time.Sleep(100 * time.Millisecond)
+	return sockPath, b, func() {
 		b.Shutdown()
 		os.Remove(sockPath)
 	}
@@ -40,7 +65,7 @@ func startTestBroker(t *testing.T) (string, func()) {
 
 // Test 1: Full round trip — create, claim, complete
 func TestBroker_FullRoundTrip_CreateClaimComplete(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c, err := client.Connect(sockPath)
@@ -103,7 +128,7 @@ func TestBroker_FullRoundTrip_CreateClaimComplete(t *testing.T) {
 
 // Test 2: Disconnect cleans up locks
 func TestBroker_DisconnectCleansUpLocks(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c, _ := client.Connect(sockPath)
@@ -131,7 +156,7 @@ func TestBroker_DisconnectCleansUpLocks(t *testing.T) {
 
 // Test 3: Disconnect re-queues claimed tasks
 func TestBroker_DisconnectRequeuesClaimedTasks(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c, _ := client.Connect(sockPath)
@@ -164,7 +189,7 @@ func TestBroker_DisconnectRequeuesClaimedTasks(t *testing.T) {
 
 // Test 3b: Clean disconnect does NOT requeue claimed tasks
 func TestBroker_CleanDisconnectDoesNotRequeue(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c, _ := client.Connect(sockPath)
@@ -198,7 +223,7 @@ func TestBroker_CleanDisconnectDoesNotRequeue(t *testing.T) {
 
 // Test 3c: Events subscribe returns raw event JSON (not wrapped in Response)
 func TestBroker_EventsSubscribeFormat(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c, _ := client.Connect(sockPath)
@@ -245,7 +270,7 @@ func TestBroker_EventsSubscribeFormat(t *testing.T) {
 
 // Test 3d: Status includes task counts by state
 func TestBroker_StatusIncludesTaskCounts(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c, _ := client.Connect(sockPath)
@@ -291,7 +316,7 @@ func TestBroker_StatusIncludesTaskCounts(t *testing.T) {
 
 // Test 4: Disconnect unsubscribes from events
 func TestBroker_DisconnectUnsubscribesEvents(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c, _ := client.Connect(sockPath)
@@ -325,7 +350,7 @@ func TestBroker_DisconnectUnsubscribesEvents(t *testing.T) {
 
 // Test 5: Task events auto-published on state transitions
 func TestBroker_PublishesTaskEventsOnStateTransitions(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c, _ := client.Connect(sockPath)
@@ -365,7 +390,7 @@ func TestBroker_PublishesTaskEventsOnStateTransitions(t *testing.T) {
 
 // Test 6: Invalid request returns error
 func TestBroker_InvalidJSONReturnsError(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c, _ := client.Connect(sockPath)
@@ -390,7 +415,7 @@ func TestBroker_InvalidJSONReturnsError(t *testing.T) {
 
 // Test: Worker A disconnects, Worker B's claimed task should NOT be re-queued
 func TestBroker_DisconnectOnlyRequeuesOwnTasks(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	// Worker A connects and claims task 1
@@ -426,7 +451,7 @@ func TestBroker_DisconnectOnlyRequeuesOwnTasks(t *testing.T) {
 
 // Test 6: Input validation rejects invalid values
 func TestBroker_InputValidation(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c, _ := client.Connect(sockPath)
@@ -475,7 +500,7 @@ func TestBroker_InputValidation(t *testing.T) {
 // not a hardcoded constant. This test sends a payload larger than Go's
 // default bufio.Scanner limit (64KB) but within config.MaxMessageSize.
 func TestBroker_LargePayloadRoundTrip(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c, _ := client.Connect(sockPath)
@@ -508,7 +533,7 @@ func TestBroker_ScannerBufferMatchesConfig(t *testing.T) {
 // === Class B: Double cleanup — cleanup must be idempotent ===
 
 func TestBroker_CleanDisconnectCleansUpOnce(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c, _ := client.Connect(sockPath)
@@ -586,7 +611,7 @@ func TestIsConnectionClosed_UnrelatedError(t *testing.T) {
 
 // TestBroker_SendMessage — client1 sends to client2, client2 inbox returns it
 func TestBroker_SendMessage(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c1, _ := client.Connect(sockPath)
@@ -637,7 +662,7 @@ func TestBroker_SendMessage(t *testing.T) {
 
 // TestBroker_SendPushDelivery — client2 connected, receives push immediately on send
 func TestBroker_SendPushDelivery(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c1, _ := client.Connect(sockPath)
@@ -715,7 +740,7 @@ func TestBroker_SendPushDelivery(t *testing.T) {
 		t.Fatalf("second push response not OK: %s", pushResp2.Error)
 	}
 
-	// Verify via inbox that messages have state 'pushed'
+	// Verify via inbox that messages have state 'seen' (Task 48: inbox marks messages as seen)
 	resp, _ = c2.Send(protocol.Request{Cmd: protocol.CmdInbox})
 	if !resp.OK {
 		t.Fatalf("inbox failed: %s", resp.Error)
@@ -726,17 +751,17 @@ func TestBroker_SendPushDelivery(t *testing.T) {
 	if len(messages) != 2 {
 		t.Fatalf("inbox len = %d, want 2", len(messages))
 	}
-	// Verify both messages have state 'pushed'
+	// Verify both messages have state 'seen' (Task 48: inbox call transitions pushed→seen)
 	for i, msg := range messages {
-		if msg["state"] != "pushed" {
-			t.Errorf("message[%d] state = %q, want 'pushed'", i, msg["state"])
+		if msg["state"] != "seen" {
+			t.Errorf("message[%d] state = %q, want 'seen'", i, msg["state"])
 		}
 	}
 }
 
 // TestBroker_SendOfflineDelivery — send to offline name, name connects later, inbox has message
 func TestBroker_SendOfflineDelivery(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c1, _ := client.Connect(sockPath)
@@ -772,15 +797,15 @@ func TestBroker_SendOfflineDelivery(t *testing.T) {
 	if messages[0]["body"] != "hello offline" {
 		t.Errorf("message body = %q, want 'hello offline'", messages[0]["body"])
 	}
-	// State should be 'queued' (not pushed)
-	if messages[0]["state"] != "queued" {
-		t.Errorf("message state = %q, want 'queued'", messages[0]["state"])
+	// State should be 'seen' (Task 48: inbox call marks queued→seen)
+	if messages[0]["state"] != "seen" {
+		t.Errorf("message state = %q, want 'seen'", messages[0]["state"])
 	}
 }
 
 // TestBroker_SendRequiresName — send with empty name returns INVALID_REQUEST
 func TestBroker_SendRequiresName(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c, _ := client.Connect(sockPath)
@@ -802,7 +827,7 @@ func TestBroker_SendRequiresName(t *testing.T) {
 
 // TestBroker_SendRequiresMessage — send with empty message returns INVALID_REQUEST
 func TestBroker_SendRequiresMessage(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c, _ := client.Connect(sockPath)
@@ -824,7 +849,7 @@ func TestBroker_SendRequiresMessage(t *testing.T) {
 
 // TestBroker_SendRequiresSession — send without connect returns NOT_CONNECTED
 func TestBroker_SendRequiresSession(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c, _ := client.Connect(sockPath)
@@ -907,7 +932,7 @@ func TestBroker_MessagesSurviveRestart(t *testing.T) {
 
 // TestBroker_InboxPersistsAcrossReconnect — send, recipient disconnects, reconnects, inbox still has message
 func TestBroker_InboxPersistsAcrossReconnect(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c1, _ := client.Connect(sockPath)
@@ -951,7 +976,7 @@ func TestBroker_InboxPersistsAcrossReconnect(t *testing.T) {
 
 // TestBroker_MultipleSendersOrdering — A sends to C, B sends to C, C's inbox has both in order
 func TestBroker_MultipleSendersOrdering(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c1, _ := client.Connect(sockPath)
@@ -1023,7 +1048,7 @@ func TestBroker_MultipleSendersOrdering(t *testing.T) {
 
 // TestBroker_SendToSelf — send to own name, verify no protocol corruption, verify message appears in inbox
 func TestBroker_SendToSelf(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c, _ := client.Connect(sockPath)
@@ -1061,15 +1086,15 @@ func TestBroker_SendToSelf(t *testing.T) {
 	if messages[0]["body"] != "note to self" {
 		t.Errorf("message body = %q, want 'note to self'", messages[0]["body"])
 	}
-	// State should be 'queued' (not pushed, since we skip push to self)
-	if messages[0]["state"] != "queued" {
-		t.Errorf("message state = %q, want 'queued'", messages[0]["state"])
+	// State should be 'seen' (Task 48: inbox call marks queued→seen)
+	if messages[0]["state"] != "seen" {
+		t.Errorf("message state = %q, want 'seen'", messages[0]["state"])
 	}
 }
 
 // TestBroker_SessionNameCollision — connect same name twice, disconnect first, verify second still works for push
 func TestBroker_SessionNameCollision(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	// Alice connects on first connection
@@ -1116,7 +1141,7 @@ func TestBroker_SessionNameCollision(t *testing.T) {
 
 // TestBroker_ConcurrentSendToSameRecipient — 10 goroutines all sending to same connected recipient under -race
 func TestBroker_ConcurrentSendToSameRecipient(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	// Bob connects and will receive all messages
@@ -1177,7 +1202,7 @@ func TestBroker_ConcurrentSendToSameRecipient(t *testing.T) {
 
 // TestBroker_SubscribeAndPushRace — session is subscribed to events AND receives push message concurrently under -race
 func TestBroker_SubscribeAndPushRace(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	// Alice subscribes to task.events
@@ -1230,7 +1255,7 @@ func TestBroker_SubscribeAndPushRace(t *testing.T) {
 
 // TestBroker_SendRecipientNameTooLong — validate recipient name length
 func TestBroker_SendRecipientNameTooLong(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c, _ := client.Connect(sockPath)
@@ -1254,7 +1279,7 @@ func TestBroker_SendRecipientNameTooLong(t *testing.T) {
 
 // TestBroker_SendMessageBodyTooLarge — validate message body size
 func TestBroker_SendMessageBodyTooLarge(t *testing.T) {
-	sockPath, cleanup := startTestBroker(t)
+	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c, _ := client.Connect(sockPath)
@@ -1269,3 +1294,752 @@ func TestBroker_SendMessageBodyTooLarge(t *testing.T) {
 	t.Skip("Cannot test message body size validation via client due to scanner buffer limits")
 }
 
+// ========== Task 48 Phase A: Failing Broker Integration Tests ==========
+
+// TestBroker_Ack — send, ack, verify state transition end-to-end
+func TestBroker_Ack(t *testing.T) {
+	sockPath, _, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c1, _ := client.Connect(sockPath)
+	defer c1.Close()
+	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+
+	c2, _ := client.Connect(sockPath)
+	defer c2.Close()
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+
+	// Alice sends to Bob
+	resp, _ := c1.Send(protocol.Request{
+		Cmd:     protocol.CmdSend,
+		Name:    "bob",
+		Message: "hello",
+	})
+	if !resp.OK {
+		t.Fatalf("send failed: %s", resp.Error)
+	}
+
+	// Extract message ID
+	var msgData struct {
+		ID int64 `json:"id"`
+	}
+	json.Unmarshal(resp.Data, &msgData)
+
+	// Bob receives push
+	c2.Receive()
+
+	// Bob acks the message
+	resp, _ = c2.Send(protocol.Request{
+		Cmd:       protocol.CmdAck,
+		MessageID: msgData.ID,
+	})
+	if !resp.OK {
+		t.Fatalf("ack failed: %s", resp.Error)
+	}
+
+	// Verify message no longer in inbox
+	resp, _ = c2.Send(protocol.Request{Cmd: protocol.CmdInbox})
+	if !resp.OK {
+		t.Fatalf("inbox failed: %s", resp.Error)
+	}
+
+	var messages []map[string]interface{}
+	json.Unmarshal(resp.Data, &messages)
+	for _, msg := range messages {
+		if int64(msg["id"].(float64)) == msgData.ID {
+			t.Error("acked message should not be in inbox")
+		}
+	}
+}
+
+// TestBroker_AckNonexistent — ack id=99999 → MESSAGE_NOT_FOUND response
+func TestBroker_AckNonexistent(t *testing.T) {
+	sockPath, _, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c, _ := client.Connect(sockPath)
+	defer c.Close()
+	c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+
+	resp, _ := c.Send(protocol.Request{
+		Cmd:       protocol.CmdAck,
+		MessageID: 99999,
+	})
+	if resp.OK {
+		t.Fatal("ack nonexistent should fail")
+	}
+	if resp.Code != protocol.ErrMessageNotFound {
+		t.Errorf("error code = %q, want %q", resp.Code, protocol.ErrMessageNotFound)
+	}
+}
+
+// TestBroker_AckForbidden — alice acks bob's message → FORBIDDEN response
+func TestBroker_AckForbidden(t *testing.T) {
+	sockPath, _, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c1, _ := client.Connect(sockPath)
+	defer c1.Close()
+	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+
+	c2, _ := client.Connect(sockPath)
+	defer c2.Close()
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+
+	// Alice sends to Bob
+	resp, _ := c1.Send(protocol.Request{
+		Cmd:     protocol.CmdSend,
+		Name:    "bob",
+		Message: "hello",
+	})
+	if !resp.OK {
+		t.Fatalf("send failed: %s", resp.Error)
+	}
+
+	var msgData struct {
+		ID int64 `json:"id"`
+	}
+	json.Unmarshal(resp.Data, &msgData)
+
+	// Alice tries to ack Bob's message
+	resp, _ = c1.Send(protocol.Request{
+		Cmd:       protocol.CmdAck,
+		MessageID: msgData.ID,
+	})
+	if resp.OK {
+		t.Fatal("alice should not be able to ack bob's message")
+	}
+	if resp.Code != protocol.ErrForbidden {
+		t.Errorf("error code = %q, want %q", resp.Code, protocol.ErrForbidden)
+	}
+}
+
+// TestBroker_FullAckLifecycle — queued → pushed → seen (inbox) → acked (ack cmd)
+func TestBroker_FullAckLifecycle(t *testing.T) {
+	sockPath, b, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c1, _ := client.Connect(sockPath)
+	defer c1.Close()
+	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+
+	c2, _ := client.Connect(sockPath)
+	defer c2.Close()
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+
+	// Alice sends to Bob (state: queued → pushed)
+	resp, _ := c1.Send(protocol.Request{
+		Cmd:     protocol.CmdSend,
+		Name:    "bob",
+		Message: "lifecycle test",
+	})
+	if !resp.OK {
+		t.Fatalf("send failed: %s", resp.Error)
+	}
+
+	var msgData struct {
+		ID int64 `json:"id"`
+	}
+	json.Unmarshal(resp.Data, &msgData)
+
+	// After send, state could be "queued" or "pushed" (push happens synchronously for connected recipients)
+	state, err := b.msgStore.GetState(msgData.ID)
+	if err != nil {
+		t.Fatalf("GetState: %v", err)
+	}
+	if state != "queued" && state != "pushed" {
+		t.Errorf("after send: state = %q, want queued or pushed", state)
+	}
+
+	// Bob receives push
+	c2.Receive()
+
+	// Bob checks inbox (state: pushed → seen)
+	resp, _ = c2.Send(protocol.Request{Cmd: protocol.CmdInbox})
+	if !resp.OK {
+		t.Fatalf("inbox failed: %s", resp.Error)
+	}
+
+	// After inbox (marks seen)
+	state, err = b.msgStore.GetState(msgData.ID)
+	if err != nil {
+		t.Fatalf("GetState: %v", err)
+	}
+	if state != "seen" {
+		t.Errorf("after inbox: state = %q, want seen", state)
+	}
+
+	// Bob acks (state: seen → acked)
+	resp, _ = c2.Send(protocol.Request{
+		Cmd:       protocol.CmdAck,
+		MessageID: msgData.ID,
+	})
+	if !resp.OK {
+		t.Fatalf("ack failed: %s", resp.Error)
+	}
+
+	// After ack
+	state, err = b.msgStore.GetState(msgData.ID)
+	if err != nil {
+		t.Fatalf("GetState: %v", err)
+	}
+	if state != "acked" {
+		t.Errorf("after ack: state = %q, want acked", state)
+	}
+
+	// Verify message no longer in inbox
+	resp, _ = c2.Send(protocol.Request{Cmd: protocol.CmdInbox})
+	if !resp.OK {
+		t.Fatalf("inbox failed: %s", resp.Error)
+	}
+
+	var messages []map[string]interface{}
+	json.Unmarshal(resp.Data, &messages)
+	if len(messages) != 0 {
+		t.Errorf("inbox len = %d, want 0 (acked message excluded)", len(messages))
+	}
+}
+
+// TestBroker_AwaitAck — sender blocks, receiver acks, sender unblocks
+func TestBroker_AwaitAck(t *testing.T) {
+	sockPath, _, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c1, _ := client.Connect(sockPath)
+	defer c1.Close()
+	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+
+	c2, _ := client.Connect(sockPath)
+	defer c2.Close()
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+
+	// Alice sends with await-ack (blocks)
+	sendDone := make(chan bool)
+	var sendResp *protocol.Response
+	go func() {
+		sendResp, _ = c1.Send(protocol.Request{
+			Cmd:      protocol.CmdSend,
+			Name:     "bob",
+			Message:  "await test",
+			AwaitAck: true,
+			Timeout:  10,
+		})
+		sendDone <- true
+	}()
+
+	// Bob receives push
+	pushResp, _ := c2.Receive()
+	var pushData struct {
+		ID int64 `json:"id"`
+	}
+	json.Unmarshal(pushResp.Data, &pushData)
+
+	// Bob acks
+	c2.Send(protocol.Request{
+		Cmd:       protocol.CmdAck,
+		MessageID: pushData.ID,
+	})
+
+	// Alice's send should unblock
+	select {
+	case <-sendDone:
+		if !sendResp.OK {
+			t.Errorf("send should succeed after ack: %s", sendResp.Error)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("send did not unblock after ack")
+	}
+}
+
+// TestBroker_AwaitAckTimeout — sender blocks with timeout=1, no ack, TIMEOUT error
+func TestBroker_AwaitAckTimeout(t *testing.T) {
+	sockPath, _, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c1, _ := client.Connect(sockPath)
+	defer c1.Close()
+	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+
+	c2, _ := client.Connect(sockPath)
+	defer c2.Close()
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+
+	// Alice sends with await-ack and short timeout
+	resp, _ := c1.Send(protocol.Request{
+		Cmd:      protocol.CmdSend,
+		Name:     "bob",
+		Message:  "timeout test",
+		AwaitAck: true,
+		Timeout:  1,
+	})
+
+	// Should timeout
+	if resp.OK {
+		t.Fatal("send should timeout")
+	}
+	if resp.Code != protocol.ErrTimeout {
+		t.Errorf("error code = %q, want %q", resp.Code, protocol.ErrTimeout)
+	}
+}
+
+// TestBroker_AwaitAckNoLeak — after timeout, broker.ackWaiters is empty
+func TestBroker_AwaitAckNoLeak(t *testing.T) {
+	sockPath, b, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c1, _ := client.Connect(sockPath)
+	defer c1.Close()
+	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+
+	c2, _ := client.Connect(sockPath)
+	defer c2.Close()
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+
+	// Alice sends with await-ack and short timeout
+	c1.Send(protocol.Request{
+		Cmd:      protocol.CmdSend,
+		Name:     "bob",
+		Message:  "leak test",
+		AwaitAck: true,
+		Timeout:  1,
+	})
+
+	// Wait for timeout
+	time.Sleep(2 * time.Second)
+
+	// Directly verify ackWaiters map is empty (no leak)
+	b.ackWaitersMu.Lock()
+	waiterCount := len(b.ackWaiters)
+	b.ackWaitersMu.Unlock()
+	if waiterCount != 0 {
+		t.Errorf("ackWaiters count = %d, want 0 (leak detected)", waiterCount)
+	}
+
+	// Also verify by trying to ack the message and ensuring it doesn't crash
+	pushResp, _ := c2.Receive()
+	var pushData struct {
+		ID int64 `json:"id"`
+	}
+	json.Unmarshal(pushResp.Data, &pushData)
+
+	// Ack should succeed but not crash (waiter already removed)
+	resp, _ := c2.Send(protocol.Request{
+		Cmd:       protocol.CmdAck,
+		MessageID: pushData.ID,
+	})
+	if !resp.OK {
+		t.Errorf("ack should succeed: %s", resp.Error)
+	}
+}
+
+// TestBroker_AwaitAckBrokerShutdown — broker shuts down while awaiting; sender gets error
+func TestBroker_AwaitAckBrokerShutdown(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+
+	// Use /tmp for socket to avoid path length issues
+	sockPath := fmt.Sprintf("/tmp/waggle-test-%d.sock", time.Now().UnixNano())
+	dbPath := fmt.Sprintf("%s/db", tmpDir)
+
+	b, err := New(Config{SocketPath: sockPath, DBPath: dbPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	go b.Serve()
+	time.Sleep(100 * time.Millisecond)
+
+	c1, _ := client.Connect(sockPath)
+	defer c1.Close()
+	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+
+	c2, _ := client.Connect(sockPath)
+	defer c2.Close()
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+
+	// Alice sends with await-ack (long timeout)
+	sendDone := make(chan *protocol.Response)
+	go func() {
+		resp, _ := c1.Send(protocol.Request{
+			Cmd:      protocol.CmdSend,
+			Name:     "bob",
+			Message:  "shutdown test",
+			AwaitAck: true,
+			Timeout:  30,
+		})
+		sendDone <- resp
+	}()
+
+	// Wait a bit, then shutdown broker
+	time.Sleep(500 * time.Millisecond)
+	b.Shutdown()
+
+	// Alice's send should return with error
+	select {
+	case resp := <-sendDone:
+		if resp.OK {
+			t.Error("send should fail on broker shutdown")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("send did not return after broker shutdown")
+	}
+}
+
+// TestBroker_PresenceShowsConnected — two clients connect; presence lists both
+func TestBroker_PresenceShowsConnected(t *testing.T) {
+	sockPath, _, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c1, _ := client.Connect(sockPath)
+	defer c1.Close()
+	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+
+	c2, _ := client.Connect(sockPath)
+	defer c2.Close()
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+
+	// Check presence
+	resp, _ := c1.Send(protocol.Request{Cmd: protocol.CmdPresence})
+	if !resp.OK {
+		t.Fatalf("presence failed: %s", resp.Error)
+	}
+
+	var agents []map[string]string
+	json.Unmarshal(resp.Data, &agents)
+	if len(agents) != 2 {
+		t.Fatalf("presence len = %d, want 2", len(agents))
+	}
+
+	// Verify both names present
+	names := make(map[string]bool)
+	for _, agent := range agents {
+		names[agent["name"]] = true
+		if agent["state"] != "online" {
+			t.Errorf("agent %s state = %q, want online", agent["name"], agent["state"])
+		}
+	}
+	if !names["alice"] || !names["bob"] {
+		t.Error("presence should include alice and bob")
+	}
+}
+
+// TestBroker_PresenceConnectDisconnect — connect → present; disconnect → absent
+func TestBroker_PresenceConnectDisconnect(t *testing.T) {
+	sockPath, _, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c1, _ := client.Connect(sockPath)
+	defer c1.Close()
+	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+
+	c2, _ := client.Connect(sockPath)
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+
+	// Check presence — both present
+	resp, _ := c1.Send(protocol.Request{Cmd: protocol.CmdPresence})
+	var agents []map[string]string
+	json.Unmarshal(resp.Data, &agents)
+	if len(agents) != 2 {
+		t.Fatalf("presence len = %d, want 2", len(agents))
+	}
+
+	// Bob disconnects
+	c2.Close()
+	time.Sleep(100 * time.Millisecond)
+
+	// Check presence — only alice
+	resp, _ = c1.Send(protocol.Request{Cmd: protocol.CmdPresence})
+	json.Unmarshal(resp.Data, &agents)
+	if len(agents) != 1 {
+		t.Fatalf("presence len = %d, want 1 after disconnect", len(agents))
+	}
+	if agents[0]["name"] != "alice" {
+		t.Errorf("presence name = %q, want alice", agents[0]["name"])
+	}
+}
+
+// TestBroker_PresenceEvents — connect fires presence.events
+func TestBroker_PresenceEvents(t *testing.T) {
+	sockPath, _, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c1, _ := client.Connect(sockPath)
+	defer c1.Close()
+	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+
+	// Subscribe to presence.events
+	resp, _ := c1.Send(protocol.Request{Cmd: protocol.CmdSubscribe, Topic: "presence.events"})
+	if !resp.OK {
+		t.Fatalf("subscribe failed: %s", resp.Error)
+	}
+
+	eventCh, _ := c1.ReadStream()
+
+	// Bob connects
+	c2, _ := client.Connect(sockPath)
+	defer c2.Close()
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+
+	// Alice should receive presence.online event
+	select {
+	case evt := <-eventCh:
+		if evt.Topic != "presence.events" {
+			t.Errorf("event topic = %q, want presence.events", evt.Topic)
+		}
+		if evt.Event != "presence.online" {
+			t.Errorf("event = %q, want presence.online", evt.Event)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("timeout waiting for presence.online event")
+	}
+}
+
+// TestBroker_SendWithPriority — send msg_priority=critical; inbox shows priority=critical
+func TestBroker_SendWithPriority(t *testing.T) {
+	sockPath, _, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c1, _ := client.Connect(sockPath)
+	defer c1.Close()
+	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+
+	c2, _ := client.Connect(sockPath)
+	defer c2.Close()
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+
+	// Alice sends with priority
+	resp, _ := c1.Send(protocol.Request{
+		Cmd:         protocol.CmdSend,
+		Name:        "bob",
+		Message:     "urgent",
+		MsgPriority: "critical",
+	})
+	if !resp.OK {
+		t.Fatalf("send failed: %s", resp.Error)
+	}
+
+	// Bob receives push
+	c2.Receive()
+
+	// Bob checks inbox
+	resp, _ = c2.Send(protocol.Request{Cmd: protocol.CmdInbox})
+	if !resp.OK {
+		t.Fatalf("inbox failed: %s", resp.Error)
+	}
+
+	var messages []map[string]interface{}
+	json.Unmarshal(resp.Data, &messages)
+	if len(messages) != 1 {
+		t.Fatalf("inbox len = %d, want 1", len(messages))
+	}
+	if messages[0]["priority"] != "critical" {
+		t.Errorf("priority = %q, want critical", messages[0]["priority"])
+	}
+}
+
+// TestBroker_SendWithTTL — send ttl=1; wait; inbox empty
+func TestBroker_SendWithTTL(t *testing.T) {
+	sockPath, _, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c1, _ := client.Connect(sockPath)
+	defer c1.Close()
+	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+
+	c2, _ := client.Connect(sockPath)
+	defer c2.Close()
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+
+	// Alice sends with TTL
+	resp, _ := c1.Send(protocol.Request{
+		Cmd:     protocol.CmdSend,
+		Name:    "bob",
+		Message: "expires soon",
+		TTL:     1,
+	})
+	if !resp.OK {
+		t.Fatalf("send failed: %s", resp.Error)
+	}
+
+	// Bob receives push
+	c2.Receive()
+
+	// Wait for TTL to expire
+	time.Sleep(2 * time.Second)
+
+	// Bob checks inbox — should be empty (belt-and-suspenders filter)
+	resp, _ = c2.Send(protocol.Request{Cmd: protocol.CmdInbox})
+	if !resp.OK {
+		t.Fatalf("inbox failed: %s", resp.Error)
+	}
+
+	var messages []map[string]interface{}
+	json.Unmarshal(resp.Data, &messages)
+	if len(messages) != 0 {
+		t.Errorf("inbox len = %d, want 0 (expired)", len(messages))
+	}
+}
+
+// TestBroker_TTLCheckerRuns — broker starts TTL checker; expired msg absent
+func TestBroker_TTLCheckerRuns(t *testing.T) {
+	// Use short TTL check period so the goroutine actually fires during the test
+	sockPath, b, cleanup := startTestBrokerWithTTL(t, 500*time.Millisecond)
+	defer cleanup()
+
+	c1, _ := client.Connect(sockPath)
+	defer c1.Close()
+	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+
+	c2, _ := client.Connect(sockPath)
+	defer c2.Close()
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+
+	// Alice sends with TTL
+	resp, _ := c1.Send(protocol.Request{
+		Cmd:     protocol.CmdSend,
+		Name:    "bob",
+		Message: "expires",
+		TTL:     1,
+	})
+	if !resp.OK {
+		t.Fatalf("send failed: %s", resp.Error)
+	}
+
+	var msgData struct {
+		ID int64 `json:"id"`
+	}
+	json.Unmarshal(resp.Data, &msgData)
+
+	// Bob receives push
+	c2.Receive()
+
+	// Wait for TTL to expire (1s) and checker to fire (500ms period)
+	time.Sleep(2 * time.Second)
+
+	// Verify TTL checker actually marked the message as expired in DB
+	state, err := b.msgStore.GetState(msgData.ID)
+	if err != nil {
+		t.Fatalf("GetState: %v", err)
+	}
+	if state != "expired" {
+		t.Errorf("TTL checker: state = %q, want expired", state)
+	}
+
+	// Bob checks inbox
+	resp, _ = c2.Send(protocol.Request{Cmd: protocol.CmdInbox})
+	if !resp.OK {
+		t.Fatalf("inbox failed: %s", resp.Error)
+	}
+
+	var messages []map[string]interface{}
+	json.Unmarshal(resp.Data, &messages)
+	if len(messages) != 0 {
+		t.Errorf("inbox len = %d, want 0 (expired)", len(messages))
+	}
+}
+
+// TestBroker_AwaitAckRaceEarlyAck — ack arrives before select is entered
+// This test verifies the fix for the race condition where:
+// 1. Message is persisted
+// 2. Message is pushed to recipient
+// 3. Recipient acks immediately (before waiter is registered)
+// 4. Waiter is registered
+// 5. Sender enters select and would timeout
+//
+// The fix registers the waiter BEFORE the push, ensuring any ack finds the waiter.
+func TestBroker_AwaitAckRaceEarlyAck(t *testing.T) {
+	sockPath, _, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c1, _ := client.Connect(sockPath)
+	defer c1.Close()
+	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+
+	c2, _ := client.Connect(sockPath)
+	defer c2.Close()
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+
+	// Alice sends with await-ack
+	sendDone := make(chan *protocol.Response)
+	go func() {
+		resp, _ := c1.Send(protocol.Request{
+			Cmd:      protocol.CmdSend,
+			Name:     "bob",
+			Message:  "race test",
+			AwaitAck: true,
+			Timeout:  5,
+		})
+		sendDone <- resp
+	}()
+
+	// Bob receives push and acks immediately
+	// This creates the race: ack might arrive before sender enters select
+	pushResp, _ := c2.Receive()
+	var pushData struct {
+		ID int64 `json:"id"`
+	}
+	json.Unmarshal(pushResp.Data, &pushData)
+
+	// Ack immediately (no delay)
+	c2.Send(protocol.Request{
+		Cmd:       protocol.CmdAck,
+		MessageID: pushData.ID,
+	})
+
+	// Alice's send should unblock (not timeout)
+	select {
+	case resp := <-sendDone:
+		if !resp.OK {
+			t.Errorf("send should succeed after ack: %s (code=%s)", resp.Error, resp.Code)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("send timed out despite ack (race condition not fixed)")
+	}
+}
+
+// TestBroker_PresenceEventOnDisconnect — disconnect fires presence.offline event
+func TestBroker_PresenceEventOnDisconnect(t *testing.T) {
+	sockPath, _, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	// Observer subscribes to presence events
+	observer, _ := client.Connect(sockPath)
+	defer observer.Close()
+	observer.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "observer"})
+	resp, _ := observer.Send(protocol.Request{Cmd: protocol.CmdSubscribe, Topic: "presence.events"})
+	if !resp.OK {
+		t.Fatalf("subscribe failed: %s", resp.Error)
+	}
+
+	eventCh, _ := observer.ReadStream()
+
+	// Worker connects
+	worker, _ := client.Connect(sockPath)
+	worker.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "worker-1"})
+
+	// Drain the connect event
+	select {
+	case <-eventCh:
+	case <-time.After(1 * time.Second):
+		t.Fatal("timeout waiting for presence.online event")
+	}
+
+	// Worker disconnects
+	worker.Send(protocol.Request{Cmd: protocol.CmdDisconnect})
+	worker.Close()
+
+	// Observer should receive presence.offline event
+	select {
+	case evt := <-eventCh:
+		if evt.Event != "presence.offline" {
+			t.Errorf("event = %q, want presence.offline", evt.Event)
+		}
+		var data map[string]string
+		json.Unmarshal(evt.Data, &data)
+		if data["name"] != "worker-1" {
+			t.Errorf("name = %q, want worker-1", data["name"])
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("timeout waiting for presence.offline event")
+	}
+}

@@ -120,12 +120,24 @@ func (s *Session) doCleanup() {
 		// Remove from broker session map
 		// CLASS 4 FIX (E2): Only delete if we still own this name in the sessions map
 		// Prevents old session cleanup from deleting new session's entry after name collision
+		var shouldPublish bool
 		s.broker.mu.Lock()
 		if s.broker.sessions[s.name] == s {
 			delete(s.broker.sessions, s.name)
+			shouldPublish = true
 		}
 		s.broker.mu.Unlock()
+
+		// Publish presence event OUTSIDE the lock to avoid deadlock
+		// If any event subscriber tries to read broker.sessions, publishing inside
+		// the lock would cause: cleanup holds broker.mu (write) → hub.Publish →
+		// subscriber reads broker.sessions → needs broker.mu (read) → deadlock
+		if shouldPublish {
+			publishPresenceEvent(s.broker, "presence.offline", s.name)
+		}
 	}
 
 	s.conn.Close()
 }
+
+

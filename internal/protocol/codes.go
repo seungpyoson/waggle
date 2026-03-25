@@ -23,8 +23,10 @@ const (
 	CmdStatus = "status"
 	CmdStop   = "stop"
 
-	CmdSend  = "send"
-	CmdInbox = "inbox"
+	CmdSend     = "send"
+	CmdInbox    = "inbox"
+	CmdAck      = "ack"
+	CmdPresence = "presence"
 )
 
 // Error code constants — the `code` field values in Response
@@ -39,5 +41,8 @@ const (
 	ErrInvalidRequest           = "INVALID_REQUEST"
 	ErrDuplicateIdempotencyKey  = "DUPLICATE_IDEMPOTENCY_KEY"
 	ErrInternalError            = "INTERNAL_ERROR"
+	ErrMessageNotFound          = "MESSAGE_NOT_FOUND"
+	ErrForbidden                = "FORBIDDEN"
+	ErrTimeout                  = "TIMEOUT"
 )
 

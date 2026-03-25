@@ -23,21 +23,24 @@ type Config struct {
 	SocketPath       string
 	DBPath           string
 	LeaseCheckPeriod time.Duration
+	TTLCheckPeriod   time.Duration
 	IdleTimeout      time.Duration
 }
 
 // Broker is the main broker orchestrator
 type Broker struct {
-	config   Config
-	hub      *events.Hub
-	store    *tasks.Store
-	msgStore *messages.Store
-	lockMgr  *locks.Manager
-	listener net.Listener
-	sessions map[string]*Session
-	mu       sync.RWMutex
-	stopCh   chan struct{}
-	wg       sync.WaitGroup
+	config       Config
+	hub          *events.Hub
+	store        *tasks.Store
+	msgStore     *messages.Store
+	lockMgr      *locks.Manager
+	listener     net.Listener
+	sessions     map[string]*Session
+	mu           sync.RWMutex
+	stopCh       chan struct{}
+	wg           sync.WaitGroup
+	ackWaiters   map[int64]chan struct{}
+	ackWaitersMu sync.Mutex
 }
 
 // New creates a new broker instance
@@ -55,6 +58,7 @@ func New(cfg Config) (*Broker, error) {
 	}
 	for _, f := range []durField{
 		{"LeaseCheckPeriod", &cfg.LeaseCheckPeriod, config.Defaults.LeaseCheckPeriod},
+		{"TTLCheckPeriod", &cfg.TTLCheckPeriod, config.Defaults.TTLCheckPeriod},
 		{"IdleTimeout", &cfg.IdleTimeout, config.Defaults.IdleTimeout},
 	} {
 		if *f.val == 0 {
@@ -117,14 +121,15 @@ func New(cfg Config) (*Broker, error) {
 	}
 
 	b := &Broker{
-		config:   cfg,
-		hub:      events.NewHub(),
-		store:    store,
-		msgStore: msgStore,
-		lockMgr:  locks.NewManager(),
-		listener: listener,
-		sessions: make(map[string]*Session),
-		stopCh:   make(chan struct{}),
+		config:     cfg,
+		hub:        events.NewHub(),
+		store:      store,
+		msgStore:   msgStore,
+		lockMgr:    locks.NewManager(),
+		listener:   listener,
+		sessions:   make(map[string]*Session),
+		stopCh:     make(chan struct{}),
+		ackWaiters: make(map[int64]chan struct{}),
 	}
 
 	return b, nil
@@ -145,6 +150,13 @@ func (b *Broker) Serve() error {
 	go func() {
 		defer b.wg.Done()
 		tasks.StartLeaseChecker(b.store, b.config.LeaseCheckPeriod, b.stopCh)
+	}()
+
+	// Start TTL checker
+	b.wg.Add(1)
+	go func() {
+		defer b.wg.Done()
+		messages.StartTTLChecker(b.msgStore, b.config.TTLCheckPeriod, b.stopCh)
 	}()
 
 	// Start idle timeout monitor

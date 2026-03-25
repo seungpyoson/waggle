@@ -384,3 +384,185 @@ func TestE2E_DirectMessaging(t *testing.T) {
 	}
 }
 
+// TestE2E_AckLifecycle — full flow with broker binary
+func TestE2E_AckLifecycle(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping e2e in short mode")
+	}
+
+	// Build binary
+	tmpBin := filepath.Join(t.TempDir(), "waggle")
+	build := exec.Command("go", "build", "-o", tmpBin, ".")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build: %s\n%s", err, out)
+	}
+
+	// Create project directory
+	project := t.TempDir()
+
+	// Create temp HOME in /tmp to avoid socket path length issues
+	tmpHome, err := os.MkdirTemp("/tmp", "waggle-test-*")
+	if err != nil {
+		t.Fatalf("create temp home: %v", err)
+	}
+	t.Cleanup(func() {
+		os.RemoveAll(tmpHome)
+	})
+
+	// Start broker in background
+	startCmd := exec.Command(tmpBin, "start", "--foreground")
+	startCmd.Dir = project
+	startCmd.Env = append(os.Environ(), "HOME="+tmpHome, "WAGGLE_PROJECT_ID=e2e-test-ack")
+	if err := startCmd.Start(); err != nil {
+		t.Fatalf("start broker: %v", err)
+	}
+
+	// Cleanup: stop broker
+	t.Cleanup(func() {
+		if startCmd.Process != nil {
+			startCmd.Process.Kill()
+			startCmd.Wait()
+		}
+	})
+
+	// Poll socket readiness
+	socketDir := filepath.Join(tmpHome, ".waggle", "sockets")
+	var socketPath string
+
+	// Wait for socket directory to be created
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		entries, err := os.ReadDir(socketDir)
+		if err == nil && len(entries) > 0 {
+			socketPath = filepath.Join(socketDir, entries[0].Name(), "broker.sock")
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	if socketPath == "" {
+		t.Fatalf("socket directory not created after 5s")
+	}
+
+	// Now poll for socket readiness
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		conn, err := net.Dial("unix", socketPath)
+		if err == nil {
+			conn.Close()
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// Connect as alice
+	alice, err := client.Connect(socketPath)
+	if err != nil {
+		t.Fatalf("alice connect: %v", err)
+	}
+	defer alice.Close()
+
+	resp, _ := alice.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	if !resp.OK {
+		t.Fatalf("alice connect failed: %s", resp.Error)
+	}
+
+	// Connect as bob
+	bob, err := client.Connect(socketPath)
+	if err != nil {
+		t.Fatalf("bob connect: %v", err)
+	}
+	defer bob.Close()
+
+	resp, _ = bob.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+	if !resp.OK {
+		t.Fatalf("bob connect failed: %s", resp.Error)
+	}
+
+	// Alice sends to bob with --await-ack (runs in background goroutine)
+	sendDone := make(chan *protocol.Response)
+	go func() {
+		resp, _ := alice.Send(protocol.Request{
+			Cmd:      protocol.CmdSend,
+			Name:     "bob",
+			Message:  "start",
+			AwaitAck: true,
+			Timeout:  30,
+		})
+		sendDone <- resp
+	}()
+
+	// Bob receives push
+	pushResp, err := bob.Receive()
+	if err != nil {
+		t.Fatalf("bob failed to receive push: %v", err)
+	}
+	if !pushResp.OK {
+		t.Fatalf("bob push response not OK: %s", pushResp.Error)
+	}
+
+	var pushData struct {
+		ID int64 `json:"id"`
+	}
+	json.Unmarshal(pushResp.Data, &pushData)
+
+	// Bob checks inbox (message appears; state = seen)
+	resp, _ = bob.Send(protocol.Request{Cmd: protocol.CmdInbox})
+	if !resp.OK {
+		t.Fatalf("bob inbox failed: %s", resp.Error)
+	}
+
+	var messages []struct {
+		ID    int64  `json:"id"`
+		From  string `json:"from"`
+		Body  string `json:"body"`
+		State string `json:"state"`
+	}
+	json.Unmarshal(resp.Data, &messages)
+	if len(messages) != 1 {
+		t.Fatalf("inbox len = %d, want 1", len(messages))
+	}
+	if messages[0].Body != "start" {
+		t.Errorf("message body = %q, want 'start'", messages[0].Body)
+	}
+
+	// Bob acks the message
+	resp, _ = bob.Send(protocol.Request{
+		Cmd:       protocol.CmdAck,
+		MessageID: pushData.ID,
+	})
+	if !resp.OK {
+		t.Fatalf("bob ack failed: %s", resp.Error)
+	}
+
+	// Alice's send should return OK
+	select {
+	case sendResp := <-sendDone:
+		if !sendResp.OK {
+			t.Errorf("alice send should succeed after ack: %s", sendResp.Error)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("alice send did not unblock after ack")
+	}
+
+	// Presence shows alice and bob
+	resp, _ = alice.Send(protocol.Request{Cmd: protocol.CmdPresence})
+	if !resp.OK {
+		t.Fatalf("presence failed: %s", resp.Error)
+	}
+
+	var agents []map[string]string
+	json.Unmarshal(resp.Data, &agents)
+	if len(agents) != 2 {
+		t.Fatalf("presence len = %d, want 2", len(agents))
+	}
+
+	names := make(map[string]bool)
+	for _, agent := range agents {
+		names[agent["name"]] = true
+	}
+	if !names["alice"] || !names["bob"] {
+		t.Error("presence should include alice and bob")
+	}
+}
+
