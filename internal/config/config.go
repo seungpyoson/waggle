@@ -5,64 +5,46 @@ import (
 	"hash/fnv"
 	"os"
 	"path/filepath"
+	"reflect"
 	"time"
 )
 
-// ValidateDefaults checks that all duration and numeric config fields have
-// valid (positive) values. Returns an error describing the first invalid field.
+// ValidateDefaults uses reflection to check every numeric field in the Defaults
+// struct. Adding a new field to the struct automatically validates it — no manual
+// list to maintain. Iteration order is deterministic (struct field order).
 // Called from store.NewStore() and broker.New() before using config values.
-// ValidateDefaults checks that all numeric and duration config fields have
-// valid (positive) values. Returns an error describing the first invalid field.
-// Uses ordered slices for deterministic error reporting.
 func ValidateDefaults() error {
-	type durCheck struct {
-		name string
-		val  time.Duration
-	}
-	durations := []durCheck{
-		{"ShutdownTimeout", Defaults.ShutdownTimeout},
-		{"PollInterval", Defaults.PollInterval},
-		{"LeaseDuration", Defaults.LeaseDuration},
-		{"IdleTimeout", Defaults.IdleTimeout},
-		{"BusyTimeout", Defaults.BusyTimeout},
-		{"LeaseCheckPeriod", Defaults.LeaseCheckPeriod},
-		{"IdleCheckInterval", Defaults.IdleCheckInterval},
-		{"StartupPollInterval", Defaults.StartupPollInterval},
-		{"StartupTimeout", Defaults.StartupTimeout},
-	}
-	for _, c := range durations {
-		if c.val <= 0 {
-			return fmt.Errorf("config.Defaults.%s must be positive, got %v", c.name, c.val)
+	v := reflect.ValueOf(Defaults)
+	t := v.Type()
+	for i := 0; i < v.NumField(); i++ {
+		field := t.Field(i)
+		fv := v.Field(i)
+		switch fv.Kind() {
+		case reflect.Int64:
+			// time.Duration is int64 underneath
+			if field.Type == reflect.TypeOf(time.Duration(0)) {
+				d := time.Duration(fv.Int())
+				if d <= 0 {
+					return fmt.Errorf("config.Defaults.%s must be positive, got %v", field.Name, d)
+				}
+			} else {
+				if fv.Int() <= 0 {
+					return fmt.Errorf("config.Defaults.%s must be positive, got %d", field.Name, fv.Int())
+				}
+			}
+		case reflect.Int:
+			if fv.Int() <= 0 {
+				return fmt.Errorf("config.Defaults.%s must be positive, got %d", field.Name, fv.Int())
+			}
+		default:
+			// String fields, bools, etc. — no positive-value constraint
 		}
 	}
 
-	type intCheck struct {
-		name string
-		val  int
-	}
-	ints := []intCheck{
-		{"MaxRetries", Defaults.MaxRetries},
-		{"MaxPriority", Defaults.MaxPriority},
-		{"MaxFieldLength", Defaults.MaxFieldLength},
-	}
-	for _, c := range ints {
-		if c.val <= 0 {
-			return fmt.Errorf("config.Defaults.%s must be positive, got %d", c.name, c.val)
-		}
-	}
-
-	type int64Check struct {
-		name string
-		val  int64
-	}
-	sizes := []int64Check{
-		{"MaxLogSize", Defaults.MaxLogSize},
-		{"MaxMessageSize", Defaults.MaxMessageSize},
-	}
-	for _, c := range sizes {
-		if c.val <= 0 {
-			return fmt.Errorf("config.Defaults.%s must be positive, got %d", c.name, c.val)
-		}
+	// Boundary constraint: LeaseDuration is cast to int(Seconds()) for SQL
+	// schema DEFAULT. Sub-second values truncate to 0, producing invalid SQL.
+	if Defaults.LeaseDuration < time.Second {
+		return fmt.Errorf("config.Defaults.LeaseDuration must be >= 1s (used as integer seconds in SQL), got %v", Defaults.LeaseDuration)
 	}
 
 	return nil

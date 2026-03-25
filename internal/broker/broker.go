@@ -41,12 +41,23 @@ func New(cfg Config) (*Broker, error) {
 		return nil, fmt.Errorf("invalid config: %w", err)
 	}
 
-	// Set defaults
-	if cfg.LeaseCheckPeriod == 0 {
-		cfg.LeaseCheckPeriod = config.Defaults.LeaseCheckPeriod
+	// Apply defaults and validate all duration fields.
+	// Pattern: default-then-validate pairs so no field can slip through.
+	type durField struct {
+		name string
+		val  *time.Duration
+		def  time.Duration
 	}
-	if cfg.IdleTimeout == 0 {
-		cfg.IdleTimeout = config.Defaults.IdleTimeout
+	for _, f := range []durField{
+		{"LeaseCheckPeriod", &cfg.LeaseCheckPeriod, config.Defaults.LeaseCheckPeriod},
+		{"IdleTimeout", &cfg.IdleTimeout, config.Defaults.IdleTimeout},
+	} {
+		if *f.val == 0 {
+			*f.val = f.def
+		}
+		if *f.val <= 0 {
+			return nil, fmt.Errorf("broker.Config.%s must be positive, got %v", f.name, *f.val)
+		}
 	}
 
 	// Open task store

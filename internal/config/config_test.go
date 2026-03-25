@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 )
@@ -359,6 +360,48 @@ func TestValidateDefaults_RejectsZeroMaxMessageSize(t *testing.T) {
 
 	if err := ValidateDefaults(); err == nil {
 		t.Fatal("ValidateDefaults() should reject zero MaxMessageSize")
+	}
+}
+
+func TestValidateDefaults_RejectsSubSecondLeaseDuration(t *testing.T) {
+	orig := Defaults.LeaseDuration
+	Defaults.LeaseDuration = 500 * time.Millisecond
+	defer func() { Defaults.LeaseDuration = orig }()
+
+	err := ValidateDefaults()
+	if err == nil {
+		t.Fatal("ValidateDefaults() should reject sub-second LeaseDuration")
+	}
+	if got := err.Error(); !strings.Contains(got, "LeaseDuration") || !strings.Contains(got, ">= 1s") {
+		t.Fatalf("unexpected error: %s", got)
+	}
+}
+
+// TestValidateDefaults_RejectsZeroOnEveryNumericField proves that reflection-based
+// validation catches every numeric field. For each int/int64/Duration field, it
+// zeros the value and verifies ValidateDefaults returns an error mentioning that field.
+func TestValidateDefaults_RejectsZeroOnEveryNumericField(t *testing.T) {
+	v := reflect.ValueOf(&Defaults).Elem()
+	typ := v.Type()
+	for i := 0; i < v.NumField(); i++ {
+		field := typ.Field(i)
+		fv := v.Field(i)
+		if fv.Kind() != reflect.Int && fv.Kind() != reflect.Int64 {
+			continue
+		}
+		t.Run(field.Name, func(t *testing.T) {
+			orig := fv.Int()
+			fv.SetInt(0)
+			defer fv.SetInt(orig)
+
+			err := ValidateDefaults()
+			if err == nil {
+				t.Fatalf("ValidateDefaults() should reject zero %s", field.Name)
+			}
+			if !strings.Contains(err.Error(), field.Name) {
+				t.Fatalf("error should mention %s, got: %s", field.Name, err.Error())
+			}
+		})
 	}
 }
 
