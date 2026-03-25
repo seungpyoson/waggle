@@ -144,8 +144,19 @@ func connectToBroker(name string) (*client.Client, error) {
 // disconnectAndClose sends a clean disconnect command then closes the connection.
 // This tells the broker to keep claimed tasks (not requeue them).
 // Use this instead of raw c.Close() for all CLI commands.
+// Uses a short deadline so an unresponsive broker doesn't hang the CLI.
 func disconnectAndClose(c *client.Client) {
-	c.Send(protocol.Request{Cmd: protocol.CmdDisconnect})
+	if c == nil {
+		return
+	}
+	// Set a 2-second deadline for the disconnect handshake.
+	// If the broker is unresponsive, we close anyway — the broker will
+	// treat the socket drop as an unclean disconnect and requeue tasks.
+	// This is the correct fallback: better to requeue than hang.
+	if err := c.SetDeadline(2 * time.Second); err == nil {
+		c.Send(protocol.Request{Cmd: protocol.CmdDisconnect})
+	}
+	// If SetDeadline failed, connection is already broken — skip Send, just close.
 	c.Close()
 }
 

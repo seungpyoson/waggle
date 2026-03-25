@@ -34,7 +34,10 @@ var subscribeCmd = &cobra.Command{
 			printErr("BROKER_NOT_RUNNING", err.Error())
 			return nil
 		}
-		defer disconnectAndClose(c)
+		// Subscribe is long-lived: ReadStream goroutine owns the scanner.
+		// Cannot use disconnectAndClose (which calls Send) — would race with ReadStream.
+		// Raw Close() is correct: broker detects socket drop and cleans up.
+		defer c.Close()
 
 		// Send subscribe request
 		resp, err := c.Send(protocol.Request{
