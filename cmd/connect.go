@@ -23,7 +23,7 @@ var connectCmd = &cobra.Command{
 			printErr("BROKER_NOT_RUNNING", err.Error())
 			return nil
 		}
-		defer c.Close()
+		defer disconnectAndClose(c)
 
 		printJSON(map[string]any{"ok": true, "data": map[string]string{"name": connectName}})
 		return nil

@@ -18,7 +18,7 @@ var stopCmd = &cobra.Command{
 			printErr("BROKER_NOT_RUNNING", err.Error())
 			return nil
 		}
-		defer c.Close()
+		defer disconnectAndClose(c)
 
 		resp, err := c.Send(protocol.Request{Cmd: protocol.CmdStop})
 		if err != nil {
