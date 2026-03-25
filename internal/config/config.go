@@ -11,33 +11,60 @@ import (
 // ValidateDefaults checks that all duration and numeric config fields have
 // valid (positive) values. Returns an error describing the first invalid field.
 // Called from store.NewStore() and broker.New() before using config values.
+// ValidateDefaults checks that all numeric and duration config fields have
+// valid (positive) values. Returns an error describing the first invalid field.
+// Uses ordered slices for deterministic error reporting.
 func ValidateDefaults() error {
-	durations := map[string]time.Duration{
-		"ShutdownTimeout":     Defaults.ShutdownTimeout,
-		"PollInterval":        Defaults.PollInterval,
-		"LeaseDuration":       Defaults.LeaseDuration,
-		"IdleTimeout":         Defaults.IdleTimeout,
-		"BusyTimeout":         Defaults.BusyTimeout,
-		"LeaseCheckPeriod":    Defaults.LeaseCheckPeriod,
-		"IdleCheckInterval":   Defaults.IdleCheckInterval,
-		"StartupPollInterval": Defaults.StartupPollInterval,
-		"StartupTimeout":      Defaults.StartupTimeout,
+	type durCheck struct {
+		name string
+		val  time.Duration
 	}
-	for name, d := range durations {
-		if d <= 0 {
-			return fmt.Errorf("config.Defaults.%s must be positive, got %v", name, d)
+	durations := []durCheck{
+		{"ShutdownTimeout", Defaults.ShutdownTimeout},
+		{"PollInterval", Defaults.PollInterval},
+		{"LeaseDuration", Defaults.LeaseDuration},
+		{"IdleTimeout", Defaults.IdleTimeout},
+		{"BusyTimeout", Defaults.BusyTimeout},
+		{"LeaseCheckPeriod", Defaults.LeaseCheckPeriod},
+		{"IdleCheckInterval", Defaults.IdleCheckInterval},
+		{"StartupPollInterval", Defaults.StartupPollInterval},
+		{"StartupTimeout", Defaults.StartupTimeout},
+	}
+	for _, c := range durations {
+		if c.val <= 0 {
+			return fmt.Errorf("config.Defaults.%s must be positive, got %v", c.name, c.val)
 		}
 	}
-	ints := map[string]int{
-		"MaxRetries":    Defaults.MaxRetries,
-		"MaxPriority":   Defaults.MaxPriority,
-		"MaxFieldLength": Defaults.MaxFieldLength,
+
+	type intCheck struct {
+		name string
+		val  int
 	}
-	for name, v := range ints {
-		if v <= 0 {
-			return fmt.Errorf("config.Defaults.%s must be positive, got %d", name, v)
+	ints := []intCheck{
+		{"MaxRetries", Defaults.MaxRetries},
+		{"MaxPriority", Defaults.MaxPriority},
+		{"MaxFieldLength", Defaults.MaxFieldLength},
+	}
+	for _, c := range ints {
+		if c.val <= 0 {
+			return fmt.Errorf("config.Defaults.%s must be positive, got %d", c.name, c.val)
 		}
 	}
+
+	type int64Check struct {
+		name string
+		val  int64
+	}
+	sizes := []int64Check{
+		{"MaxLogSize", Defaults.MaxLogSize},
+		{"MaxMessageSize", Defaults.MaxMessageSize},
+	}
+	for _, c := range sizes {
+		if c.val <= 0 {
+			return fmt.Errorf("config.Defaults.%s must be positive, got %d", c.name, c.val)
+		}
+	}
+
 	return nil
 }
 

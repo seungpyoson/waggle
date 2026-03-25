@@ -97,6 +97,7 @@ func RemovePID(pidFile string) error {
 }
 
 // WaitForReady polls until the broker process is running or the timeout expires.
+// Sleep is capped to remaining time so the function never overshoots the deadline.
 func WaitForReady(pidFile string, timeout, interval time.Duration) error {
 	if timeout <= 0 {
 		return fmt.Errorf("WaitForReady: timeout must be positive, got %v", timeout)
@@ -105,17 +106,20 @@ func WaitForReady(pidFile string, timeout, interval time.Duration) error {
 		return fmt.Errorf("WaitForReady: interval must be positive, got %v", interval)
 	}
 	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
+	for {
 		if IsRunning(pidFile) {
 			return nil
 		}
-		time.Sleep(interval)
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return fmt.Errorf("broker failed to start within %v", timeout)
+		}
+		sleep := interval
+		if remaining < sleep {
+			sleep = remaining
+		}
+		time.Sleep(sleep)
 	}
-	// Final check: broker may have started during the last sleep
-	if IsRunning(pidFile) {
-		return nil
-	}
-	return fmt.Errorf("broker failed to start within %v", timeout)
 }
 
 // EnsureDirs creates the specified directories if they don't exist.

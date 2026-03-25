@@ -341,3 +341,41 @@ func TestValidateDefaults_RejectsZeroMaxFieldLength(t *testing.T) {
 		t.Fatal("ValidateDefaults() should reject zero MaxFieldLength")
 	}
 }
+
+func TestValidateDefaults_RejectsZeroMaxLogSize(t *testing.T) {
+	orig := Defaults.MaxLogSize
+	Defaults.MaxLogSize = 0
+	defer func() { Defaults.MaxLogSize = orig }()
+
+	if err := ValidateDefaults(); err == nil {
+		t.Fatal("ValidateDefaults() should reject zero MaxLogSize")
+	}
+}
+
+func TestValidateDefaults_RejectsZeroMaxMessageSize(t *testing.T) {
+	orig := Defaults.MaxMessageSize
+	Defaults.MaxMessageSize = 0
+	defer func() { Defaults.MaxMessageSize = orig }()
+
+	if err := ValidateDefaults(); err == nil {
+		t.Fatal("ValidateDefaults() should reject zero MaxMessageSize")
+	}
+}
+
+func TestValidateDefaults_DeterministicErrorOrder(t *testing.T) {
+	orig := Defaults.ShutdownTimeout
+	Defaults.ShutdownTimeout = 0
+	defer func() { Defaults.ShutdownTimeout = orig }()
+
+	// Run 10 times — if map iteration were used, different runs could
+	// report different fields. With slices, ShutdownTimeout is always first.
+	for i := 0; i < 10; i++ {
+		err := ValidateDefaults()
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if got := err.Error(); got != "config.Defaults.ShutdownTimeout must be positive, got 0s" {
+			t.Fatalf("run %d: unexpected error: %s", i, got)
+		}
+	}
+}
