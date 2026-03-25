@@ -102,47 +102,39 @@ var Defaults = struct {
 }
 
 type Paths struct {
-	Root      string
-	WaggleDir string
+	ProjectID string
+	DataDir   string
 	DB        string
-	Config    string
 	PID       string
 	Lock      string
 	Log       string
 	Socket    string
 }
 
-// NewPaths computes all derived paths from root. Socket will be empty if
-// os.UserHomeDir fails (e.g., no HOME set) — callers must check before use.
-func NewPaths(root string) Paths {
-	if !filepath.IsAbs(root) {
-		if abs, err := filepath.Abs(root); err == nil {
-			root = abs
-		}
+// NewPaths computes all derived paths from a project ID. All state paths live
+// under ~/.waggle/data/<hash>/ and ~/.waggle/sockets/<hash>/. If os.UserHomeDir
+// fails (no HOME set), all paths will be empty — callers must check before use.
+func NewPaths(projectID string) Paths {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return Paths{ProjectID: projectID}
 	}
-	root = filepath.Clean(root)
-	dir := filepath.Join(root, Defaults.DirName)
 
-	// Socket: ~/<DirName>/sockets/<hash>/broker.sock
-	// 12 hex chars (48 bits) of FNV-1a per spec — balances collision
-	// resistance with macOS 104-byte UDS path length limit.
 	f := fnv.New64a()
-	_, _ = f.Write([]byte(root))
+	_, _ = f.Write([]byte(projectID))
 	hash := fmt.Sprintf("%012x", f.Sum64()&0xffffffffffff)
-	var sock string
-	if home, err := os.UserHomeDir(); err == nil {
-		sock = filepath.Join(home, Defaults.DirName, "sockets", hash, "broker.sock")
-	}
+
+	dataDir := filepath.Join(home, Defaults.DirName, "data", hash)
+	socketDir := filepath.Join(home, Defaults.DirName, "sockets", hash)
 
 	return Paths{
-		Root:      root,
-		WaggleDir: dir,
-		DB:        filepath.Join(dir, Defaults.DBFile),
-		Config:    filepath.Join(dir, Defaults.ConfigFile),
-		PID:       filepath.Join(dir, Defaults.PIDFile),
-		Lock:      filepath.Join(dir, Defaults.LockFile),
-		Log:       filepath.Join(dir, Defaults.LogFile),
-		Socket:    sock,
+		ProjectID: projectID,
+		DataDir:   dataDir,
+		DB:        filepath.Join(dataDir, Defaults.DBFile),
+		PID:       filepath.Join(dataDir, Defaults.PIDFile),
+		Lock:      filepath.Join(dataDir, Defaults.LockFile),
+		Log:       filepath.Join(dataDir, Defaults.LogFile),
+		Socket:    filepath.Join(socketDir, "broker.sock"),
 	}
 }
 
