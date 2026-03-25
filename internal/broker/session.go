@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"net"
+	"strings"
 
 	"github.com/seungpyoson/waggle/internal/protocol"
 )
@@ -43,14 +44,36 @@ func (s *Session) readLoop() {
 
 		resp := route(s, req)
 		if err := s.enc.Encode(resp); err != nil {
-			log.Printf("session: error encoding response: %v", err)
+			// Suppress errors after disconnect — client may have already closed
+			if !s.cleanDisconnect {
+				log.Printf("session %s: error encoding response: %v", s.name, err)
+			}
+			return
+		}
+
+		// After clean disconnect, stop reading — client is closing
+		if s.cleanDisconnect {
 			return
 		}
 	}
 
 	if err := s.scan.Err(); err != nil {
-		log.Printf("session: scan error: %v", err)
+		// Suppress expected EOF/closed connection errors
+		if !s.cleanDisconnect && !isConnectionClosed(err) {
+			log.Printf("session %s: scan error: %v", s.name, err)
+		}
 	}
+}
+
+// isConnectionClosed checks if an error is due to a closed connection (expected on disconnect)
+func isConnectionClosed(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "use of closed network connection") ||
+		strings.Contains(msg, "connection reset by peer") ||
+		strings.Contains(msg, "broken pipe")
 }
 
 // cleanup releases resources on disconnect
