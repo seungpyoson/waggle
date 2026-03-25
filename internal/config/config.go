@@ -23,6 +23,8 @@ var Defaults = struct {
 	LeaseDuration   time.Duration
 	IdleTimeout     time.Duration
 	MaxRetries      int
+	MaxPriority     int
+	MaxFieldLength  int
 }{
 	DirName:    ".waggle",
 	DBFile:     "state.db",
@@ -38,6 +40,8 @@ var Defaults = struct {
 	LeaseDuration:   5 * time.Minute,
 	IdleTimeout:     5 * time.Minute,
 	MaxRetries:      3,
+	MaxPriority:     100,
+	MaxFieldLength:  256,
 }
 
 type Paths struct {

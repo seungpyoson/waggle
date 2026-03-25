@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/seungpyoson/waggle/internal/config"
 	"github.com/seungpyoson/waggle/internal/protocol"
 	"github.com/seungpyoson/waggle/internal/tasks"
 )
@@ -71,7 +72,7 @@ func handleConnect(s *Session, req protocol.Request) protocol.Response {
 	if req.Name == "" {
 		return protocol.ErrResponse(protocol.ErrInvalidRequest, "name required")
 	}
-	if len(req.Name) > 256 {
+	if len(req.Name) > config.Defaults.MaxFieldLength {
 		return protocol.ErrResponse(protocol.ErrInvalidRequest, "name too long (max 256 chars)")
 	}
 	if s.name != "" {
@@ -124,15 +125,15 @@ func handleSubscribe(s *Session, req protocol.Request) protocol.Response {
 func handleTaskCreate(s *Session, req protocol.Request) protocol.Response {
 
 	// Validate priority
-	if req.Priority < 0 || req.Priority > 100 {
+	if req.Priority < 0 || req.Priority > config.Defaults.MaxPriority {
 		return protocol.ErrResponse(protocol.ErrInvalidRequest, "priority must be between 0 and 100")
 	}
 
 	// Validate field lengths
-	if len(req.Type) > 256 {
+	if len(req.Type) > config.Defaults.MaxFieldLength {
 		return protocol.ErrResponse(protocol.ErrInvalidRequest, "type too long (max 256 chars)")
 	}
-	if len(req.IdempotencyKey) > 256 {
+	if len(req.IdempotencyKey) > config.Defaults.MaxFieldLength {
 		return protocol.ErrResponse(protocol.ErrInvalidRequest, "idempotency_key too long (max 256 chars)")
 	}
 
@@ -345,7 +346,7 @@ func handleTaskUpdate(s *Session, req protocol.Request) protocol.Response {
 	}
 
 	// Validate priority if provided
-	if req.Priority != 0 && (req.Priority < 0 || req.Priority > 100) {
+	if req.Priority != 0 && (req.Priority < 0 || req.Priority > config.Defaults.MaxPriority) {
 		return protocol.ErrResponse(protocol.ErrInvalidRequest, "priority must be between 0 and 100")
 	}
 
