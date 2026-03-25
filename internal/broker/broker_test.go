@@ -715,7 +715,7 @@ func TestBroker_SendPushDelivery(t *testing.T) {
 		t.Fatalf("second push response not OK: %s", pushResp2.Error)
 	}
 
-	// Verify via inbox that messages have state 'pushed'
+	// Verify via inbox that messages have state 'seen' (Task 48: inbox marks messages as seen)
 	resp, _ = c2.Send(protocol.Request{Cmd: protocol.CmdInbox})
 	if !resp.OK {
 		t.Fatalf("inbox failed: %s", resp.Error)
@@ -726,10 +726,10 @@ func TestBroker_SendPushDelivery(t *testing.T) {
 	if len(messages) != 2 {
 		t.Fatalf("inbox len = %d, want 2", len(messages))
 	}
-	// Verify both messages have state 'pushed'
+	// Verify both messages have state 'seen' (Task 48: inbox call transitions pushed→seen)
 	for i, msg := range messages {
-		if msg["state"] != "pushed" {
-			t.Errorf("message[%d] state = %q, want 'pushed'", i, msg["state"])
+		if msg["state"] != "seen" {
+			t.Errorf("message[%d] state = %q, want 'seen'", i, msg["state"])
 		}
 	}
 }
@@ -772,9 +772,9 @@ func TestBroker_SendOfflineDelivery(t *testing.T) {
 	if messages[0]["body"] != "hello offline" {
 		t.Errorf("message body = %q, want 'hello offline'", messages[0]["body"])
 	}
-	// State should be 'queued' (not pushed)
-	if messages[0]["state"] != "queued" {
-		t.Errorf("message state = %q, want 'queued'", messages[0]["state"])
+	// State should be 'seen' (Task 48: inbox call marks queued→seen)
+	if messages[0]["state"] != "seen" {
+		t.Errorf("message state = %q, want 'seen'", messages[0]["state"])
 	}
 }
 
@@ -1061,9 +1061,9 @@ func TestBroker_SendToSelf(t *testing.T) {
 	if messages[0]["body"] != "note to self" {
 		t.Errorf("message body = %q, want 'note to self'", messages[0]["body"])
 	}
-	// State should be 'queued' (not pushed, since we skip push to self)
-	if messages[0]["state"] != "queued" {
-		t.Errorf("message state = %q, want 'queued'", messages[0]["state"])
+	// State should be 'seen' (Task 48: inbox call marks queued→seen)
+	if messages[0]["state"] != "seen" {
+		t.Errorf("message state = %q, want 'seen'", messages[0]["state"])
 	}
 }
 
@@ -1267,5 +1267,605 @@ func TestBroker_SendMessageBodyTooLarge(t *testing.T) {
 	// For now, skip this test since the scanner buffer prevents us from testing this edge case
 	// The validation is in place in the code, but we can't trigger it via the client
 	t.Skip("Cannot test message body size validation via client due to scanner buffer limits")
+}
+
+// ========== Task 48 Phase A: Failing Broker Integration Tests ==========
+
+// TestBroker_Ack — send, ack, verify state transition end-to-end
+func TestBroker_Ack(t *testing.T) {
+	sockPath, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c1, _ := client.Connect(sockPath)
+	defer c1.Close()
+	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+
+	c2, _ := client.Connect(sockPath)
+	defer c2.Close()
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+
+	// Alice sends to Bob
+	resp, _ := c1.Send(protocol.Request{
+		Cmd:     protocol.CmdSend,
+		Name:    "bob",
+		Message: "hello",
+	})
+	if !resp.OK {
+		t.Fatalf("send failed: %s", resp.Error)
+	}
+
+	// Extract message ID
+	var msgData struct {
+		ID int64 `json:"id"`
+	}
+	json.Unmarshal(resp.Data, &msgData)
+
+	// Bob receives push
+	c2.Receive()
+
+	// Bob acks the message
+	resp, _ = c2.Send(protocol.Request{
+		Cmd:       protocol.CmdAck,
+		MessageID: msgData.ID,
+	})
+	if !resp.OK {
+		t.Fatalf("ack failed: %s", resp.Error)
+	}
+
+	// Verify message no longer in inbox
+	resp, _ = c2.Send(protocol.Request{Cmd: protocol.CmdInbox})
+	if !resp.OK {
+		t.Fatalf("inbox failed: %s", resp.Error)
+	}
+
+	var messages []map[string]interface{}
+	json.Unmarshal(resp.Data, &messages)
+	for _, msg := range messages {
+		if int64(msg["id"].(float64)) == msgData.ID {
+			t.Error("acked message should not be in inbox")
+		}
+	}
+}
+
+// TestBroker_AckNonexistent — ack id=99999 → MESSAGE_NOT_FOUND response
+func TestBroker_AckNonexistent(t *testing.T) {
+	sockPath, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c, _ := client.Connect(sockPath)
+	defer c.Close()
+	c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+
+	resp, _ := c.Send(protocol.Request{
+		Cmd:       protocol.CmdAck,
+		MessageID: 99999,
+	})
+	if resp.OK {
+		t.Fatal("ack nonexistent should fail")
+	}
+	if resp.Code != protocol.ErrMessageNotFound {
+		t.Errorf("error code = %q, want %q", resp.Code, protocol.ErrMessageNotFound)
+	}
+}
+
+// TestBroker_AckForbidden — alice acks bob's message → FORBIDDEN response
+func TestBroker_AckForbidden(t *testing.T) {
+	sockPath, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c1, _ := client.Connect(sockPath)
+	defer c1.Close()
+	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+
+	c2, _ := client.Connect(sockPath)
+	defer c2.Close()
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+
+	// Alice sends to Bob
+	resp, _ := c1.Send(protocol.Request{
+		Cmd:     protocol.CmdSend,
+		Name:    "bob",
+		Message: "hello",
+	})
+	if !resp.OK {
+		t.Fatalf("send failed: %s", resp.Error)
+	}
+
+	var msgData struct {
+		ID int64 `json:"id"`
+	}
+	json.Unmarshal(resp.Data, &msgData)
+
+	// Alice tries to ack Bob's message
+	resp, _ = c1.Send(protocol.Request{
+		Cmd:       protocol.CmdAck,
+		MessageID: msgData.ID,
+	})
+	if resp.OK {
+		t.Fatal("alice should not be able to ack bob's message")
+	}
+	if resp.Code != protocol.ErrForbidden {
+		t.Errorf("error code = %q, want %q", resp.Code, protocol.ErrForbidden)
+	}
+}
+
+// TestBroker_FullAckLifecycle — queued → pushed → seen (inbox) → acked (ack cmd)
+func TestBroker_FullAckLifecycle(t *testing.T) {
+	sockPath, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c1, _ := client.Connect(sockPath)
+	defer c1.Close()
+	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+
+	c2, _ := client.Connect(sockPath)
+	defer c2.Close()
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+
+	// Alice sends to Bob (state: queued → pushed)
+	resp, _ := c1.Send(protocol.Request{
+		Cmd:     protocol.CmdSend,
+		Name:    "bob",
+		Message: "lifecycle test",
+	})
+	if !resp.OK {
+		t.Fatalf("send failed: %s", resp.Error)
+	}
+
+	var msgData struct {
+		ID int64 `json:"id"`
+	}
+	json.Unmarshal(resp.Data, &msgData)
+
+	// Bob receives push
+	c2.Receive()
+
+	// Bob checks inbox (state: pushed → seen)
+	resp, _ = c2.Send(protocol.Request{Cmd: protocol.CmdInbox})
+	if !resp.OK {
+		t.Fatalf("inbox failed: %s", resp.Error)
+	}
+
+	// Bob acks (state: seen → acked)
+	resp, _ = c2.Send(protocol.Request{
+		Cmd:       protocol.CmdAck,
+		MessageID: msgData.ID,
+	})
+	if !resp.OK {
+		t.Fatalf("ack failed: %s", resp.Error)
+	}
+
+	// Verify message no longer in inbox
+	resp, _ = c2.Send(protocol.Request{Cmd: protocol.CmdInbox})
+	if !resp.OK {
+		t.Fatalf("inbox failed: %s", resp.Error)
+	}
+
+	var messages []map[string]interface{}
+	json.Unmarshal(resp.Data, &messages)
+	if len(messages) != 0 {
+		t.Errorf("inbox len = %d, want 0 (acked message excluded)", len(messages))
+	}
+}
+
+// TestBroker_AwaitAck — sender blocks, receiver acks, sender unblocks
+func TestBroker_AwaitAck(t *testing.T) {
+	sockPath, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c1, _ := client.Connect(sockPath)
+	defer c1.Close()
+	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+
+	c2, _ := client.Connect(sockPath)
+	defer c2.Close()
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+
+	// Alice sends with await-ack (blocks)
+	sendDone := make(chan bool)
+	var sendResp *protocol.Response
+	go func() {
+		sendResp, _ = c1.Send(protocol.Request{
+			Cmd:      protocol.CmdSend,
+			Name:     "bob",
+			Message:  "await test",
+			AwaitAck: true,
+			Timeout:  10,
+		})
+		sendDone <- true
+	}()
+
+	// Bob receives push
+	pushResp, _ := c2.Receive()
+	var pushData struct {
+		ID int64 `json:"id"`
+	}
+	json.Unmarshal(pushResp.Data, &pushData)
+
+	// Bob acks
+	c2.Send(protocol.Request{
+		Cmd:       protocol.CmdAck,
+		MessageID: pushData.ID,
+	})
+
+	// Alice's send should unblock
+	select {
+	case <-sendDone:
+		if !sendResp.OK {
+			t.Errorf("send should succeed after ack: %s", sendResp.Error)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("send did not unblock after ack")
+	}
+}
+
+// TestBroker_AwaitAckTimeout — sender blocks with timeout=1, no ack, TIMEOUT error
+func TestBroker_AwaitAckTimeout(t *testing.T) {
+	sockPath, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c1, _ := client.Connect(sockPath)
+	defer c1.Close()
+	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+
+	c2, _ := client.Connect(sockPath)
+	defer c2.Close()
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+
+	// Alice sends with await-ack and short timeout
+	resp, _ := c1.Send(protocol.Request{
+		Cmd:      protocol.CmdSend,
+		Name:     "bob",
+		Message:  "timeout test",
+		AwaitAck: true,
+		Timeout:  1,
+	})
+
+	// Should timeout
+	if resp.OK {
+		t.Fatal("send should timeout")
+	}
+	if resp.Code != protocol.ErrTimeout {
+		t.Errorf("error code = %q, want %q", resp.Code, protocol.ErrTimeout)
+	}
+}
+
+// TestBroker_AwaitAckNoLeak — after timeout, broker.ackWaiters is empty
+func TestBroker_AwaitAckNoLeak(t *testing.T) {
+	sockPath, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c1, _ := client.Connect(sockPath)
+	defer c1.Close()
+	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+
+	c2, _ := client.Connect(sockPath)
+	defer c2.Close()
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+
+	// Alice sends with await-ack and short timeout
+	c1.Send(protocol.Request{
+		Cmd:      protocol.CmdSend,
+		Name:     "bob",
+		Message:  "leak test",
+		AwaitAck: true,
+		Timeout:  1,
+	})
+
+	// Wait for timeout
+	time.Sleep(2 * time.Second)
+
+	// Verify ackWaiters is empty (no leak)
+	// We can't directly access broker.ackWaiters from here, but we can verify
+	// by trying to ack the message and ensuring it doesn't crash
+	pushResp, _ := c2.Receive()
+	var pushData struct {
+		ID int64 `json:"id"`
+	}
+	json.Unmarshal(pushResp.Data, &pushData)
+
+	// Ack should succeed but not crash (waiter already removed)
+	resp, _ := c2.Send(protocol.Request{
+		Cmd:       protocol.CmdAck,
+		MessageID: pushData.ID,
+	})
+	if !resp.OK {
+		t.Errorf("ack should succeed: %s", resp.Error)
+	}
+}
+
+// TestBroker_AwaitAckBrokerShutdown — broker shuts down while awaiting; sender gets error
+func TestBroker_AwaitAckBrokerShutdown(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+
+	// Use /tmp for socket to avoid path length issues
+	sockPath := fmt.Sprintf("/tmp/waggle-test-%d.sock", time.Now().UnixNano())
+	dbPath := fmt.Sprintf("%s/db", tmpDir)
+
+	b, err := New(Config{SocketPath: sockPath, DBPath: dbPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	go b.Serve()
+	time.Sleep(100 * time.Millisecond)
+
+	c1, _ := client.Connect(sockPath)
+	defer c1.Close()
+	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+
+	c2, _ := client.Connect(sockPath)
+	defer c2.Close()
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+
+	// Alice sends with await-ack (long timeout)
+	sendDone := make(chan *protocol.Response)
+	go func() {
+		resp, _ := c1.Send(protocol.Request{
+			Cmd:      protocol.CmdSend,
+			Name:     "bob",
+			Message:  "shutdown test",
+			AwaitAck: true,
+			Timeout:  30,
+		})
+		sendDone <- resp
+	}()
+
+	// Wait a bit, then shutdown broker
+	time.Sleep(500 * time.Millisecond)
+	b.Shutdown()
+
+	// Alice's send should return with error
+	select {
+	case resp := <-sendDone:
+		if resp.OK {
+			t.Error("send should fail on broker shutdown")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("send did not return after broker shutdown")
+	}
+}
+
+// TestBroker_PresenceShowsConnected — two clients connect; presence lists both
+func TestBroker_PresenceShowsConnected(t *testing.T) {
+	sockPath, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c1, _ := client.Connect(sockPath)
+	defer c1.Close()
+	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+
+	c2, _ := client.Connect(sockPath)
+	defer c2.Close()
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+
+	// Check presence
+	resp, _ := c1.Send(protocol.Request{Cmd: protocol.CmdPresence})
+	if !resp.OK {
+		t.Fatalf("presence failed: %s", resp.Error)
+	}
+
+	var agents []map[string]string
+	json.Unmarshal(resp.Data, &agents)
+	if len(agents) != 2 {
+		t.Fatalf("presence len = %d, want 2", len(agents))
+	}
+
+	// Verify both names present
+	names := make(map[string]bool)
+	for _, agent := range agents {
+		names[agent["name"]] = true
+		if agent["state"] != "online" {
+			t.Errorf("agent %s state = %q, want online", agent["name"], agent["state"])
+		}
+	}
+	if !names["alice"] || !names["bob"] {
+		t.Error("presence should include alice and bob")
+	}
+}
+
+// TestBroker_PresenceConnectDisconnect — connect → present; disconnect → absent
+func TestBroker_PresenceConnectDisconnect(t *testing.T) {
+	sockPath, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c1, _ := client.Connect(sockPath)
+	defer c1.Close()
+	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+
+	c2, _ := client.Connect(sockPath)
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+
+	// Check presence — both present
+	resp, _ := c1.Send(protocol.Request{Cmd: protocol.CmdPresence})
+	var agents []map[string]string
+	json.Unmarshal(resp.Data, &agents)
+	if len(agents) != 2 {
+		t.Fatalf("presence len = %d, want 2", len(agents))
+	}
+
+	// Bob disconnects
+	c2.Close()
+	time.Sleep(100 * time.Millisecond)
+
+	// Check presence — only alice
+	resp, _ = c1.Send(protocol.Request{Cmd: protocol.CmdPresence})
+	json.Unmarshal(resp.Data, &agents)
+	if len(agents) != 1 {
+		t.Fatalf("presence len = %d, want 1 after disconnect", len(agents))
+	}
+	if agents[0]["name"] != "alice" {
+		t.Errorf("presence name = %q, want alice", agents[0]["name"])
+	}
+}
+
+// TestBroker_PresenceEvents — connect fires presence.events
+func TestBroker_PresenceEvents(t *testing.T) {
+	sockPath, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c1, _ := client.Connect(sockPath)
+	defer c1.Close()
+	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+
+	// Subscribe to presence.events
+	resp, _ := c1.Send(protocol.Request{Cmd: protocol.CmdSubscribe, Topic: "presence.events"})
+	if !resp.OK {
+		t.Fatalf("subscribe failed: %s", resp.Error)
+	}
+
+	eventCh, _ := c1.ReadStream()
+
+	// Bob connects
+	c2, _ := client.Connect(sockPath)
+	defer c2.Close()
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+
+	// Alice should receive presence.online event
+	select {
+	case evt := <-eventCh:
+		if evt.Topic != "presence.events" {
+			t.Errorf("event topic = %q, want presence.events", evt.Topic)
+		}
+		if evt.Event != "presence.online" {
+			t.Errorf("event = %q, want presence.online", evt.Event)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("timeout waiting for presence.online event")
+	}
+}
+
+// TestBroker_SendWithPriority — send msg_priority=critical; inbox shows priority=critical
+func TestBroker_SendWithPriority(t *testing.T) {
+	sockPath, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c1, _ := client.Connect(sockPath)
+	defer c1.Close()
+	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+
+	c2, _ := client.Connect(sockPath)
+	defer c2.Close()
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+
+	// Alice sends with priority
+	resp, _ := c1.Send(protocol.Request{
+		Cmd:         protocol.CmdSend,
+		Name:        "bob",
+		Message:     "urgent",
+		MsgPriority: "critical",
+	})
+	if !resp.OK {
+		t.Fatalf("send failed: %s", resp.Error)
+	}
+
+	// Bob receives push
+	c2.Receive()
+
+	// Bob checks inbox
+	resp, _ = c2.Send(protocol.Request{Cmd: protocol.CmdInbox})
+	if !resp.OK {
+		t.Fatalf("inbox failed: %s", resp.Error)
+	}
+
+	var messages []map[string]interface{}
+	json.Unmarshal(resp.Data, &messages)
+	if len(messages) != 1 {
+		t.Fatalf("inbox len = %d, want 1", len(messages))
+	}
+	if messages[0]["priority"] != "critical" {
+		t.Errorf("priority = %q, want critical", messages[0]["priority"])
+	}
+}
+
+// TestBroker_SendWithTTL — send ttl=1; wait; inbox empty
+func TestBroker_SendWithTTL(t *testing.T) {
+	sockPath, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c1, _ := client.Connect(sockPath)
+	defer c1.Close()
+	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+
+	c2, _ := client.Connect(sockPath)
+	defer c2.Close()
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+
+	// Alice sends with TTL
+	resp, _ := c1.Send(protocol.Request{
+		Cmd:     protocol.CmdSend,
+		Name:    "bob",
+		Message: "expires soon",
+		TTL:     1,
+	})
+	if !resp.OK {
+		t.Fatalf("send failed: %s", resp.Error)
+	}
+
+	// Bob receives push
+	c2.Receive()
+
+	// Wait for TTL to expire
+	time.Sleep(2 * time.Second)
+
+	// Bob checks inbox — should be empty (belt-and-suspenders filter)
+	resp, _ = c2.Send(protocol.Request{Cmd: protocol.CmdInbox})
+	if !resp.OK {
+		t.Fatalf("inbox failed: %s", resp.Error)
+	}
+
+	var messages []map[string]interface{}
+	json.Unmarshal(resp.Data, &messages)
+	if len(messages) != 0 {
+		t.Errorf("inbox len = %d, want 0 (expired)", len(messages))
+	}
+}
+
+// TestBroker_TTLCheckerRuns — broker starts TTL checker; expired msg absent
+func TestBroker_TTLCheckerRuns(t *testing.T) {
+	sockPath, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c1, _ := client.Connect(sockPath)
+	defer c1.Close()
+	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+
+	c2, _ := client.Connect(sockPath)
+	defer c2.Close()
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+
+	// Alice sends with TTL
+	resp, _ := c1.Send(protocol.Request{
+		Cmd:     protocol.CmdSend,
+		Name:    "bob",
+		Message: "expires",
+		TTL:     1,
+	})
+	if !resp.OK {
+		t.Fatalf("send failed: %s", resp.Error)
+	}
+
+	// Bob receives push
+	c2.Receive()
+
+	// Wait for TTL to expire and checker to run
+	// TTL checker runs every 30s by default, but we can't wait that long
+	// This test will fail until TTL checker is implemented
+	time.Sleep(2 * time.Second)
+
+	// Bob checks inbox
+	resp, _ = c2.Send(protocol.Request{Cmd: protocol.CmdInbox})
+	if !resp.OK {
+		t.Fatalf("inbox failed: %s", resp.Error)
+	}
+
+	var messages []map[string]interface{}
+	json.Unmarshal(resp.Data, &messages)
+	// This will fail until TTL checker is implemented
+	// For now, we expect the belt-and-suspenders filter to exclude it
+	if len(messages) != 0 {
+		t.Errorf("inbox len = %d, want 0 (expired)", len(messages))
+	}
 }
 

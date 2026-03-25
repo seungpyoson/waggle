@@ -2,13 +2,16 @@ package broker
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/seungpyoson/waggle/internal/config"
+	"github.com/seungpyoson/waggle/internal/messages"
 	"github.com/seungpyoson/waggle/internal/protocol"
 	"github.com/seungpyoson/waggle/internal/tasks"
 )
@@ -69,6 +72,10 @@ func route(s *Session, req protocol.Request) protocol.Response {
 		return handleSend(s, req)
 	case protocol.CmdInbox:
 		return handleInbox(s, req)
+	case protocol.CmdAck:
+		return handleAck(s, req)
+	case protocol.CmdPresence:
+		return handlePresence(s)
 	default:
 		return protocol.ErrResponse(protocol.ErrInvalidRequest, "unknown command")
 	}
@@ -89,6 +96,9 @@ func handleConnect(s *Session, req protocol.Request) protocol.Response {
 	s.broker.mu.Lock()
 	s.broker.sessions[s.name] = s
 	s.broker.mu.Unlock()
+
+	// Publish presence.online event
+	publishPresenceEvent(s.broker, "presence.online", s.name)
 
 	return protocol.OKResponse(nil)
 }
@@ -492,7 +502,20 @@ func handleSend(s *Session, req protocol.Request) protocol.Response {
 		return protocol.ErrResponse(protocol.ErrInvalidRequest, fmt.Sprintf("message body too large (max %d bytes)", config.Defaults.MaxMessageSize))
 	}
 
-	msg, err := s.broker.msgStore.Send(s.name, req.Name, req.Message)
+	// Parse priority (default to normal if empty)
+	priority := req.MsgPriority
+	if priority == "" {
+		priority = config.Defaults.DefaultMsgPriority
+	}
+
+	// Parse TTL (nil when 0)
+	var ttl *int
+	if req.TTL > 0 {
+		ttl = &req.TTL
+	}
+
+	// Send message
+	msg, err := s.broker.msgStore.Send(s.name, req.Name, req.Message, priority, ttl)
 	if err != nil {
 		return protocol.ErrResponse(protocol.ErrInternalError, err.Error())
 	}
@@ -528,6 +551,34 @@ func handleSend(s *Session, req protocol.Request) protocol.Response {
 		}
 	}
 
+	// Handle --await-ack
+	if req.AwaitAck {
+		timeout := time.Duration(req.Timeout) * time.Second
+		if timeout <= 0 {
+			timeout = config.Defaults.AwaitAckDefaultTimeout
+		}
+
+		ch := make(chan struct{}, 1) // buffered: ack can arrive before select
+		s.broker.ackWaitersMu.Lock()
+		s.broker.ackWaiters[msg.ID] = ch
+		s.broker.ackWaitersMu.Unlock()
+
+		select {
+		case <-ch:
+			return protocol.OKResponse(mustMarshal(msg))
+		case <-time.After(timeout):
+			s.broker.ackWaitersMu.Lock()
+			delete(s.broker.ackWaiters, msg.ID) // no leak
+			s.broker.ackWaitersMu.Unlock()
+			return protocol.ErrResponse(protocol.ErrTimeout, "await-ack timed out")
+		case <-s.broker.stopCh:
+			s.broker.ackWaitersMu.Lock()
+			delete(s.broker.ackWaiters, msg.ID)
+			s.broker.ackWaitersMu.Unlock()
+			return protocol.ErrResponse(protocol.ErrInternalError, "broker shutting down")
+		}
+	}
+
 	return protocol.OKResponse(mustMarshal(msg))
 }
 
@@ -537,5 +588,59 @@ func handleInbox(s *Session, req protocol.Request) protocol.Response {
 		return protocol.ErrResponse(protocol.ErrInternalError, err.Error())
 	}
 	return protocol.OKResponse(mustMarshal(messages))
+}
+
+func handleAck(s *Session, req protocol.Request) protocol.Response {
+	if req.MessageID == 0 {
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, "message_id required")
+	}
+
+	err := s.broker.msgStore.Ack(req.MessageID, s.name)
+	if err != nil {
+		if errors.Is(err, messages.ErrMessageNotFound) {
+			return protocol.ErrResponse(protocol.ErrMessageNotFound, err.Error())
+		}
+		if errors.Is(err, messages.ErrNotRecipient) {
+			return protocol.ErrResponse(protocol.ErrForbidden, err.Error())
+		}
+		return protocol.ErrResponse(protocol.ErrInternalError, err.Error())
+	}
+
+	// Signal --await-ack sender if blocked
+	s.broker.ackWaitersMu.Lock()
+	if ch, ok := s.broker.ackWaiters[req.MessageID]; ok {
+		delete(s.broker.ackWaiters, req.MessageID)
+		s.broker.ackWaitersMu.Unlock()
+		close(ch) // buffered ch, never blocks
+	} else {
+		s.broker.ackWaitersMu.Unlock()
+	}
+
+	return protocol.OKResponse(nil)
+}
+
+func handlePresence(s *Session) protocol.Response {
+	s.broker.mu.RLock()
+	agents := make([]map[string]string, 0, len(s.broker.sessions))
+	for name := range s.broker.sessions {
+		agents = append(agents, map[string]string{"name": name, "state": "online"})
+	}
+	s.broker.mu.RUnlock()
+
+	// Sort by name for deterministic output
+	sort.Slice(agents, func(i, j int) bool { return agents[i]["name"] < agents[j]["name"] })
+
+	return protocol.OKResponse(mustMarshal(agents))
+}
+
+// publishPresenceEvent publishes a presence event to the presence.events topic
+func publishPresenceEvent(b *Broker, event, name string) {
+	evt := protocol.Event{
+		Topic: "presence.events",
+		Event: event,
+		Data:  mustMarshal(map[string]string{"name": name}),
+		TS:    time.Now().UTC().Format(time.RFC3339),
+	}
+	b.hub.Publish("presence.events", mustMarshal(evt))
 }
 

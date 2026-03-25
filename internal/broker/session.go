@@ -8,6 +8,7 @@ import (
 	"net"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/seungpyoson/waggle/internal/config"
 	"github.com/seungpyoson/waggle/internal/protocol"
@@ -123,9 +124,23 @@ func (s *Session) doCleanup() {
 		s.broker.mu.Lock()
 		if s.broker.sessions[s.name] == s {
 			delete(s.broker.sessions, s.name)
+			// Publish presence.offline event after removing from sessions
+			// publishPresenceEvent is defined in router.go
+			evt := protocol.Event{
+				Topic: "presence.events",
+				Event: "presence.offline",
+				Data:  mustMarshalSession(map[string]string{"name": s.name}),
+				TS:    time.Now().UTC().Format(time.RFC3339),
+			}
+			s.broker.hub.Publish("presence.events", mustMarshalSession(evt))
 		}
 		s.broker.mu.Unlock()
 	}
 
 	s.conn.Close()
+}
+
+func mustMarshalSession(v interface{}) []byte {
+	data, _ := json.Marshal(v)
+	return data
 }

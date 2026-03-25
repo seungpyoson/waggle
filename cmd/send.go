@@ -9,11 +9,19 @@ import (
 )
 
 var (
-	sendName string
+	sendName      string
+	sendPriority  string
+	sendTTL       int
+	sendAwaitAck  bool
+	sendTimeout   int
 )
 
 func init() {
 	sendCmd.Flags().StringVar(&sendName, "name", "", "Sender name (defaults to WAGGLE_AGENT_NAME)")
+	sendCmd.Flags().StringVar(&sendPriority, "priority", "", "Message priority: critical, normal, bulk")
+	sendCmd.Flags().IntVar(&sendTTL, "ttl", 0, "Message TTL in seconds (0 = no expiry)")
+	sendCmd.Flags().BoolVar(&sendAwaitAck, "await-ack", false, "Block until receiver acks the message")
+	sendCmd.Flags().IntVar(&sendTimeout, "timeout", 0, "Timeout in seconds for --await-ack (default: 30)")
 	rootCmd.AddCommand(sendCmd)
 }
 
@@ -42,9 +50,13 @@ var sendCmd = &cobra.Command{
 
 		// Send message
 		resp, err := c.Send(protocol.Request{
-			Cmd:     protocol.CmdSend,
-			Name:    recipient,
-			Message: message,
+			Cmd:         protocol.CmdSend,
+			Name:        recipient,
+			Message:     message,
+			MsgPriority: sendPriority,
+			TTL:         sendTTL,
+			AwaitAck:    sendAwaitAck,
+			Timeout:     sendTimeout,
 		})
 		if err != nil {
 			printErr("INTERNAL_ERROR", err.Error())

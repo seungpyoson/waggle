@@ -72,10 +72,14 @@ var Defaults = struct {
 	IdleCheckInterval   time.Duration
 	StartupPollInterval  time.Duration
 	StartupTimeout       time.Duration
-	DisconnectTimeout    time.Duration
-	MaxRetries           int
-	MaxPriority         int
-	MaxFieldLength      int
+	DisconnectTimeout      time.Duration
+	MaxRetries             int
+	MaxPriority            int
+	MaxFieldLength         int
+	TTLCheckPeriod         time.Duration
+	AwaitAckDefaultTimeout time.Duration
+	MaxTTL                 int
+	DefaultMsgPriority     string
 }{
 	DirName:    ".waggle",
 	DBFile:     "state.db",
@@ -95,10 +99,14 @@ var Defaults = struct {
 	IdleCheckInterval:   1 * time.Second,
 	StartupPollInterval:  100 * time.Millisecond,
 	StartupTimeout:       2 * time.Second,
-	DisconnectTimeout:    2 * time.Second,
-	MaxRetries:          3,
-	MaxPriority:         100,
-	MaxFieldLength:      256,
+	DisconnectTimeout:      2 * time.Second,
+	MaxRetries:             3,
+	MaxPriority:            100,
+	MaxFieldLength:         256,
+	TTLCheckPeriod:         30 * time.Second,
+	AwaitAckDefaultTimeout: 30 * time.Second,
+	MaxTTL:                 86400,
+	DefaultMsgPriority:     "normal",
 }
 
 type Paths struct {
