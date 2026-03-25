@@ -97,6 +97,11 @@ func (m *Manager) StopAll() error {
 
 	// Kill all agents
 	for _, pid := range pids {
+		// Skip PID=0 (PID unknown, can't kill)
+		if pid <= 0 {
+			continue
+		}
+
 		// Try to find the process
 		process, err := os.FindProcess(pid)
 		if err != nil {

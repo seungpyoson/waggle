@@ -5,7 +5,9 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
+	"time"
 )
 
 type Terminal int
@@ -70,9 +72,13 @@ func OpenTab(t Terminal, name string, cmd string, env map[string]string) (int, e
 		if err := execCmd.Run(); err != nil {
 			return 0, fmt.Errorf("failed to open Terminal.app tab: %w", err)
 		}
-		// Note: AppleScript doesn't return the child PID directly
-		// This is a known limitation mentioned in the brief
-		return 0, nil
+		// Poll for the spawned process PID using WAGGLE_AGENT_NAME env marker
+		pid, err := findSpawnedPID(name, 3*time.Second)
+		if err != nil {
+			// Tab opened but couldn't find PID — return 0 as fallback
+			return 0, nil
+		}
+		return pid, nil
 
 	case ITerm2:
 		// Use AppleScript to open a new tab in iTerm2
@@ -81,8 +87,13 @@ func OpenTab(t Terminal, name string, cmd string, env map[string]string) (int, e
 		if err := execCmd.Run(); err != nil {
 			return 0, fmt.Errorf("failed to open iTerm2 tab: %w", err)
 		}
-		// Note: AppleScript doesn't return the child PID directly
-		return 0, nil
+		// Poll for the spawned process PID using WAGGLE_AGENT_NAME env marker
+		pid, err := findSpawnedPID(name, 3*time.Second)
+		if err != nil {
+			// Tab opened but couldn't find PID — return 0 as fallback
+			return 0, nil
+		}
+		return pid, nil
 
 	case LinuxDefault:
 		// Try gnome-terminal first
@@ -120,5 +131,31 @@ func OpenTab(t Terminal, name string, cmd string, env map[string]string) (int, e
 	default:
 		return 0, fmt.Errorf("unsupported terminal type: %v", t)
 	}
+}
+
+// findSpawnedPID polls for a process with WAGGLE_AGENT_NAME=<name> in its environment.
+// Uses pgrep -f to find the process by searching the full command line.
+// Returns the PID if found within the timeout, or an error if not found.
+func findSpawnedPID(name string, timeout time.Duration) (int, error) {
+	deadline := time.Now().Add(timeout)
+	searchPattern := "WAGGLE_AGENT_NAME=" + name
+
+	for time.Now().Before(deadline) {
+		// pgrep -f searches the full command line including env vars
+		out, err := exec.Command("pgrep", "-f", searchPattern).Output()
+		if err == nil && len(out) > 0 {
+			// Parse first PID from output
+			lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+			if len(lines) > 0 {
+				pid, err := strconv.Atoi(strings.TrimSpace(lines[0]))
+				if err == nil && pid > 0 {
+					return pid, nil
+				}
+			}
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	return 0, fmt.Errorf("could not find spawned process for %s within %v", name, timeout)
 }
 
