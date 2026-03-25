@@ -76,6 +76,10 @@ func route(s *Session, req protocol.Request) protocol.Response {
 		return handleAck(s, req)
 	case protocol.CmdPresence:
 		return handlePresence(s)
+	case protocol.CmdSpawnRegister:
+		return handleSpawnRegister(s, req)
+	case protocol.CmdSpawnUpdatePID:
+		return handleSpawnUpdatePID(s, req)
 	default:
 		return protocol.ErrResponse(protocol.ErrInvalidRequest, "unknown command")
 	}
@@ -453,6 +457,7 @@ func handleStatus(s *Session) protocol.Response {
 		"subscribers": s.broker.hub.SubscriberCount(),
 		"locks":       s.broker.lockMgr.Count(),
 		"tasks":       taskCounts,
+		"spawned":     s.broker.spawnMgr.List(),
 	}
 
 	data, _ := json.Marshal(status)
@@ -647,5 +652,49 @@ func publishPresenceEvent(b *Broker, event, name string) {
 		TS:    time.Now().UTC().Format(time.RFC3339),
 	}
 	b.hub.Publish("presence.events", mustMarshal(evt))
+}
+
+func handleSpawnRegister(s *Session, req protocol.Request) protocol.Response {
+	if req.Name == "" {
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, "name required")
+	}
+
+	// Parse PID and type from Payload
+	var spawnData struct {
+		PID  int    `json:"pid"`
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(req.Payload, &spawnData); err != nil {
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, fmt.Sprintf("invalid spawn data: %v", err))
+	}
+	// Allow PID=0 as a fallback when PID detection fails (macOS limitation)
+	if spawnData.PID < 0 {
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, "valid pid required")
+	}
+
+	if err := s.broker.spawnMgr.Add(req.Name, spawnData.Type, spawnData.PID); err != nil {
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, err.Error())
+	}
+
+	return protocol.OKResponse(nil)
+}
+
+func handleSpawnUpdatePID(s *Session, req protocol.Request) protocol.Response {
+	if req.Name == "" {
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, "name required")
+	}
+
+	var data struct {
+		PID int `json:"pid"`
+	}
+	if err := json.Unmarshal(req.Payload, &data); err != nil {
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, fmt.Sprintf("invalid data: %v", err))
+	}
+
+	if err := s.broker.spawnMgr.UpdatePID(req.Name, data.PID); err != nil {
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, err.Error())
+	}
+
+	return protocol.OKResponse(nil)
 }
 
