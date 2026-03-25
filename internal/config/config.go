@@ -4,8 +4,11 @@ import (
 	"fmt"
 	"hash/fnv"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
+	"sort"
+	"strings"
 	"time"
 )
 
@@ -141,6 +144,39 @@ func NewPaths(root string) Paths {
 		Log:       filepath.Join(dir, Defaults.LogFile),
 		Socket:    sock,
 	}
+}
+
+// ResolveProjectID returns a stable identifier for the current project.
+// Priority: WAGGLE_PROJECT_ID env var → git root commit SHA → "path:" + WAGGLE_ROOT → error.
+func ResolveProjectID() (string, error) {
+	if id := os.Getenv("WAGGLE_PROJECT_ID"); id != "" {
+		return id, nil
+	}
+	if id, err := gitRootCommit(); err == nil {
+		return id, nil
+	}
+	if root := os.Getenv("WAGGLE_ROOT"); root != "" {
+		return "path:" + root, nil
+	}
+	return "", fmt.Errorf("cannot identify project: not in a git repo; set WAGGLE_PROJECT_ID or WAGGLE_ROOT")
+}
+
+// gitRootCommit returns the SHA of the earliest root commit (sorted lexicographically
+// to be deterministic when multiple root commits exist, e.g. merged unrelated histories).
+func gitRootCommit() (string, error) {
+	if _, err := exec.Command("git", "rev-parse", "--git-common-dir").Output(); err != nil {
+		return "", fmt.Errorf("not a git repo: %w", err)
+	}
+	out, err := exec.Command("git", "rev-list", "--max-parents=0", "HEAD").Output()
+	if err != nil {
+		return "", fmt.Errorf("git rev-list: %w", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(lines) == 0 || lines[0] == "" {
+		return "", fmt.Errorf("no root commits found")
+	}
+	sort.Strings(lines)
+	return lines[0], nil
 }
 
 // FindProjectRoot locates the project root by walking up from startDir looking
