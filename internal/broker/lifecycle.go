@@ -134,9 +134,9 @@ func EnsureDirs(dirs ...string) error {
 
 // StartDaemon forks the broker as a background process.
 // It redirects stdout/stderr to logFile and returns immediately.
-func StartDaemon(waggleDir, socketDir, logFile string, args []string) error {
+func StartDaemon(dataDir, socketDir, logFile, projectID string, args []string) error {
 	// Ensure directories exist
-	if err := EnsureDirs(waggleDir, socketDir); err != nil {
+	if err := EnsureDirs(dataDir, socketDir); err != nil {
 		return err
 	}
 
@@ -157,7 +157,7 @@ func StartDaemon(waggleDir, socketDir, logFile string, args []string) error {
 	procAttr := &os.ProcAttr{
 		Files: []*os.File{nil, log, log}, // stdin=nil, stdout=log, stderr=log
 		Dir:   "",
-		Env:   os.Environ(),
+		Env:   append(os.Environ(), "WAGGLE_PROJECT_ID="+projectID),
 	}
 
 	process, err := os.StartProcess(exe, args, procAttr)
