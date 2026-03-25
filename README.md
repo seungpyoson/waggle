@@ -1,26 +1,28 @@
 # Waggle
 
-**The messaging protocol for AI coding agents.**
+**The communication layer for AI coding agents.**
 
-Waggle is a lightweight coordination layer that lets independent AI agent sessions — Claude Code, Gemini CLI, Codex, Augment Code, or plain bash scripts — talk to each other. Post tasks, claim work, lock files, stream events. Any process that can run a shell command speaks Waggle.
+AI coding agents can't talk to each other. Claude Code doesn't know what Gemini CLI is doing. Codex can't see Augment Code's work. They edit the same repo in parallel, blind to each other.
+
+Waggle fixes this. It's a lightweight messaging protocol that any agent speaks through shell commands — no SDK, no integration, no MCP required.
 
 ```
-            You (human)
-                │
-        waggle task create
-                │
-    ┌───────────┼───────────┐
-    ▼           ▼           ▼
- Agent 1     Agent 2     Agent 3
-  (Claude)   (Gemini)    (Codex)
-    │           │           │
-    └───────────┼───────────┘
-                │
-          waggle broker
-       (auto-started, per-project)
+  Terminal 1          Terminal 2          Terminal 3
+  ┌─────────┐        ┌─────────┐        ┌─────────┐
+  │ Claude   │        │ Gemini  │        │ Codex   │
+  │ Code     │        │ CLI     │        │         │
+  └────┬─────┘        └────┬────┘        └────┬────┘
+       │                   │                   │
+       │    waggle cmd     │    waggle cmd     │    waggle cmd
+       ▼                   ▼                   ▼
+  ┌──────────────────────────────────────────────────┐
+  │              waggle broker                        │
+  │   tasks · events · locks · sessions              │
+  │   (auto-started, one per project)                │
+  └──────────────────────────────────────────────────┘
 ```
 
-No SDK. No integration. No MCP. Just `waggle <command>`.
+An orchestrator agent sends instructions. Worker agents receive them. Any agent can be either — roles are fluid. If it can run `waggle <command>`, it's in.
 
 ---
 
@@ -58,51 +60,60 @@ Single binary. No dependencies. Works on macOS and Linux.
 ## 30-Second Demo
 
 ```bash
+# Terminal 1 — orchestrator agent
 cd your-project
-
-# Post some work
 waggle task create '{"desc": "fix auth bug"}' --type fix --priority 10
 waggle task create '{"desc": "write tests"}' --type test --depends-on 1
-
-# Agent claims highest-priority eligible task
-TASK=$(waggle task claim --type fix)
-ID=$(echo $TASK | jq -r '.data.ID')
-TOKEN=$(echo $TASK | jq -r '.data.ClaimToken')
-
-# Agent finishes
-waggle task complete $ID '{"commit": "abc123"}' --token $TOKEN
-
-# Task 2 auto-unblocks (dependency resolved)
-waggle task list
+waggle events subscribe task.events    # watch everything happen
 ```
 
-The broker starts automatically on your first command. No setup needed.
+```bash
+# Terminal 2 — worker agent (Claude Code, Codex, Gemini, or a script)
+cd your-project
+TASK=$(waggle task claim --type fix)
+TOKEN=$(echo $TASK | jq -r '.data.ClaimToken')
+ID=$(echo $TASK | jq -r '.data.ID')
+# ... do the work ...
+waggle task complete $ID '{"commit": "abc123"}' --token $TOKEN
+# Task 2 auto-unblocks — another agent can claim it now
+```
+
+The broker starts automatically. Agents find each other through the shared project. No setup.
 
 ---
 
 ## Why Waggle?
 
-You open three terminals. Claude Code in one, Gemini CLI in another, a test runner script in the third. They're all editing the same repo, but they can't see each other.
+AI coding agents are powerful individually. But they're isolated. Each runs in its own terminal, its own context, its own world. There's no way for a Claude Code session to tell a Codex session "I'm done with the plan, start implementing." No way for a test runner to tell the orchestrator "all tests pass, ship it."
 
-Waggle gives them a shared work queue:
+Waggle is the missing communication layer:
 
-- **Tasks** — one agent posts work, another claims and completes it
-- **Dependencies** — task B waits until task A finishes
-- **Locks** — "I'm editing auth.py, don't touch it"
-- **Events** — real-time notifications when things happen
-- **Priority** — urgent work gets claimed first
+- **Messages** — agents send and receive through tasks, events, and locks
+- **Coordination** — "I'm editing auth.py" prevents conflicts without agents knowing about each other
+- **Orchestration** — one agent decomposes a problem into tasks, others pick them up
+- **Dependencies** — "don't start testing until implementation is done"
+- **Any platform** — Claude Code, Gemini CLI, Codex, Augment Code, bash scripts — all speak the same protocol
 
-Agents don't need to know about each other. They just talk to the broker.
+Think of it like HTTP for the web, but for AI agents working on code. The protocol is simple (shell commands + JSON), so any agent that can run bash is instantly compatible.
 
 ---
 
 ## How It Works
 
-**One broker per project.** Waggle detects your project from the git repo and starts a broker automatically. All agents in the same repo share the same broker — even across different clones and worktrees.
+**Shared broker, zero config.** Waggle identifies your project by the git repo (root commit hash). All agents in the same repo — even in different clones, worktrees, or sandboxes — automatically share one broker. The broker starts on first command.
 
-**Stateful connections.** Each command connects, does its thing, and disconnects cleanly. Claimed tasks survive disconnects (your agent can claim in one command and complete in another). If an agent crashes mid-task, the broker detects the broken connection and re-queues the work.
+**Four communication primitives:**
 
-**Everything is JSON.** All output is machine-readable NDJSON. Agents parse it with `jq` or any JSON library.
+| Primitive | What it does | Example |
+|-----------|-------------|---------|
+| **Tasks** | Durable work queue with claim tokens | Orchestrator posts, workers claim and complete |
+| **Events** | Real-time pub/sub fire-and-forget | Subscribe to `task.events` to watch all state changes |
+| **Locks** | Advisory resource coordination | "I'm editing this file, don't touch it" |
+| **Status** | Shared system state | Who's connected, what's queued, what's locked |
+
+**Crash recovery built in.** If an agent crashes, the broker detects the broken connection and re-queues its work. Claimed tasks have leases — expire without heartbeat and they're back in the queue.
+
+**Everything is JSON.** All input and output is NDJSON. Agents parse with `jq` or any JSON library.
 
 ---
 
@@ -171,9 +182,9 @@ waggle status                 # Sessions, tasks, locks
 
 ---
 
-## Agent Patterns
+## Communication Patterns
 
-### Simple Worker
+### Worker — Claims and Completes Tasks
 
 ```bash
 #!/bin/bash
@@ -192,7 +203,7 @@ while true; do
 done
 ```
 
-### Controller (Task Graph)
+### Orchestrator — Decomposes and Delegates
 
 ```bash
 #!/bin/bash
@@ -205,7 +216,7 @@ T3=$(waggle task create '{"desc": "review"}' --type review --depends-on $T2 | jq
 waggle events subscribe task.events
 ```
 
-### Cross-Agent Coordination
+### Mutual Exclusion — Agents Avoid Conflicts
 
 ```bash
 # Lock a file before editing
