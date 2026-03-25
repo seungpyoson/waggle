@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/seungpyoson/waggle/internal/config"
 )
 
 // Sentinel errors
@@ -110,8 +112,7 @@ func (s *Store) Send(from, to, body, priority string, ttl *int) (*Message, error
 
 	// Validate and default priority
 	if priority == "" {
-		// Import config package at top of file
-		priority = "normal"
+		priority = config.Defaults.DefaultMsgPriority
 	}
 	validPriorities := map[string]bool{"critical": true, "normal": true, "bulk": true}
 	if !validPriorities[priority] {
@@ -123,9 +124,8 @@ func (s *Store) Send(from, to, body, priority string, ttl *int) (*Message, error
 		if *ttl <= 0 {
 			return nil, fmt.Errorf("ttl must be positive")
 		}
-		// Import config package to access MaxTTL
-		if *ttl > 86400 { // MaxTTL hardcoded for now, will use config.Defaults.MaxTTL
-			return nil, fmt.Errorf("ttl exceeds maximum allowed (86400 seconds)")
+		if *ttl > config.Defaults.MaxTTL {
+			return nil, fmt.Errorf("ttl exceeds maximum allowed (%d seconds)", config.Defaults.MaxTTL)
 		}
 	}
 

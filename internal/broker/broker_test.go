@@ -1869,3 +1869,61 @@ func TestBroker_TTLCheckerRuns(t *testing.T) {
 	}
 }
 
+// TestBroker_AwaitAckRaceEarlyAck — ack arrives before select is entered
+// This test verifies the fix for the race condition where:
+// 1. Message is persisted
+// 2. Message is pushed to recipient
+// 3. Recipient acks immediately (before waiter is registered)
+// 4. Waiter is registered
+// 5. Sender enters select and would timeout
+//
+// The fix registers the waiter BEFORE the push, ensuring any ack finds the waiter.
+func TestBroker_AwaitAckRaceEarlyAck(t *testing.T) {
+	sockPath, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c1, _ := client.Connect(sockPath)
+	defer c1.Close()
+	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+
+	c2, _ := client.Connect(sockPath)
+	defer c2.Close()
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+
+	// Alice sends with await-ack
+	sendDone := make(chan *protocol.Response)
+	go func() {
+		resp, _ := c1.Send(protocol.Request{
+			Cmd:      protocol.CmdSend,
+			Name:     "bob",
+			Message:  "race test",
+			AwaitAck: true,
+			Timeout:  5,
+		})
+		sendDone <- resp
+	}()
+
+	// Bob receives push and acks immediately
+	// This creates the race: ack might arrive before sender enters select
+	pushResp, _ := c2.Receive()
+	var pushData struct {
+		ID int64 `json:"id"`
+	}
+	json.Unmarshal(pushResp.Data, &pushData)
+
+	// Ack immediately (no delay)
+	c2.Send(protocol.Request{
+		Cmd:       protocol.CmdAck,
+		MessageID: pushData.ID,
+	})
+
+	// Alice's send should unblock (not timeout)
+	select {
+	case resp := <-sendDone:
+		if !resp.OK {
+			t.Errorf("send should succeed after ack: %s (code=%s)", resp.Error, resp.Code)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("send timed out despite ack (race condition not fixed)")
+	}
+}

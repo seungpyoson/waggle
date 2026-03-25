@@ -520,6 +520,16 @@ func handleSend(s *Session, req protocol.Request) protocol.Response {
 		return protocol.ErrResponse(protocol.ErrInternalError, err.Error())
 	}
 
+	// Handle --await-ack: Register waiter BEFORE push to avoid race
+	// If ack arrives between push and waiter registration, sender would timeout
+	var ackCh chan struct{}
+	if req.AwaitAck {
+		ackCh = make(chan struct{}, 1) // buffered: ack can arrive before select
+		s.broker.ackWaitersMu.Lock()
+		s.broker.ackWaiters[msg.ID] = ackCh
+		s.broker.ackWaitersMu.Unlock()
+	}
+
 	// Push to recipient if connected
 	s.broker.mu.RLock()
 	recipient, online := s.broker.sessions[req.Name]
@@ -551,20 +561,15 @@ func handleSend(s *Session, req protocol.Request) protocol.Response {
 		}
 	}
 
-	// Handle --await-ack
+	// Wait for ack if requested
 	if req.AwaitAck {
 		timeout := time.Duration(req.Timeout) * time.Second
 		if timeout <= 0 {
 			timeout = config.Defaults.AwaitAckDefaultTimeout
 		}
 
-		ch := make(chan struct{}, 1) // buffered: ack can arrive before select
-		s.broker.ackWaitersMu.Lock()
-		s.broker.ackWaiters[msg.ID] = ch
-		s.broker.ackWaitersMu.Unlock()
-
 		select {
-		case <-ch:
+		case <-ackCh:
 			return protocol.OKResponse(mustMarshal(msg))
 		case <-time.After(timeout):
 			s.broker.ackWaitersMu.Lock()
