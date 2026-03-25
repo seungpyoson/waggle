@@ -22,6 +22,9 @@ const (
 	CmdLocks  = "locks"
 	CmdStatus = "status"
 	CmdStop   = "stop"
+
+	CmdSend  = "send"
+	CmdInbox = "inbox"
 )
 
 // Error code constants — the `code` field values in Response

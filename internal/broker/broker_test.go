@@ -580,3 +580,442 @@ func TestIsConnectionClosed_UnrelatedError(t *testing.T) {
 		t.Error("unrelated error should return false")
 	}
 }
+
+
+// ========== Direct Messaging Tests (Task 43) ==========
+
+// TestBroker_SendMessage — client1 sends to client2, client2 inbox returns it
+func TestBroker_SendMessage(t *testing.T) {
+	sockPath, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c1, _ := client.Connect(sockPath)
+	defer c1.Close()
+	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+
+	c2, _ := client.Connect(sockPath)
+	defer c2.Close()
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+
+	// Alice sends to Bob
+	resp, _ := c1.Send(protocol.Request{
+		Cmd:     protocol.CmdSend,
+		Name:    "bob",
+		Message: "hello from alice",
+	})
+	if !resp.OK {
+		t.Fatalf("send failed: %s", resp.Error)
+	}
+
+	// Bob receives the pushed message (since Bob is online)
+	pushResp, err := c2.Receive()
+	if err != nil {
+		t.Fatalf("failed to receive push: %v", err)
+	}
+	if !pushResp.OK {
+		t.Fatalf("push response not OK: %s", pushResp.Error)
+	}
+
+	// Bob checks inbox
+	resp, _ = c2.Send(protocol.Request{Cmd: protocol.CmdInbox})
+	if !resp.OK {
+		t.Fatalf("inbox failed: %s", resp.Error)
+	}
+
+	var messages []map[string]interface{}
+	json.Unmarshal(resp.Data, &messages)
+	if len(messages) != 1 {
+		t.Fatalf("inbox len = %d, want 1", len(messages))
+	}
+	if messages[0]["body"] != "hello from alice" {
+		t.Errorf("message body = %q, want 'hello from alice'", messages[0]["body"])
+	}
+	if messages[0]["from"] != "alice" {
+		t.Errorf("message from = %q, want 'alice'", messages[0]["from"])
+	}
+}
+
+// TestBroker_SendPushDelivery — client2 connected, receives push immediately on send
+func TestBroker_SendPushDelivery(t *testing.T) {
+	sockPath, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c1, _ := client.Connect(sockPath)
+	defer c1.Close()
+	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+
+	c2, _ := client.Connect(sockPath)
+	defer c2.Close()
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+
+	// Alice sends to Bob (who is online)
+	// This happens in a goroutine to allow Bob to receive the push concurrently
+	sendDone := make(chan bool)
+	go func() {
+		resp, _ := c1.Send(protocol.Request{
+			Cmd:     protocol.CmdSend,
+			Name:    "bob",
+			Message: "hello",
+		})
+		if !resp.OK {
+			t.Errorf("send failed: %s", resp.Error)
+		}
+		sendDone <- true
+	}()
+
+	// Bob should receive the pushed message
+	// The push is an unsolicited Response that Bob needs to read
+	pushResp, err := c2.Receive()
+	if err != nil {
+		t.Fatalf("failed to receive push: %v", err)
+	}
+	if !pushResp.OK {
+		t.Fatalf("push response not OK: %s", pushResp.Error)
+	}
+
+	// Verify the pushed message has the right structure
+	var pushData map[string]interface{}
+	json.Unmarshal(pushResp.Data, &pushData)
+	if pushData["type"] != "message" {
+		t.Errorf("push type = %q, want 'message'", pushData["type"])
+	}
+	if pushData["from"] != "alice" {
+		t.Errorf("push from = %q, want 'alice'", pushData["from"])
+	}
+	if pushData["body"] != "hello" {
+		t.Errorf("push body = %q, want 'hello'", pushData["body"])
+	}
+
+	// Wait for send to complete
+	<-sendDone
+
+	// Exercise writeMu with concurrent operations:
+	// Bob sends an inbox command while Alice sends another message
+	// This creates concurrent writes to Bob's connection (push + response)
+	go func() {
+		c1.Send(protocol.Request{
+			Cmd:     protocol.CmdSend,
+			Name:    "bob",
+			Message: "second message",
+		})
+	}()
+
+	// Bob checks inbox concurrently
+	resp, _ := c2.Send(protocol.Request{Cmd: protocol.CmdInbox})
+	if !resp.OK {
+		t.Fatalf("inbox failed: %s", resp.Error)
+	}
+
+	// Read the second push
+	pushResp2, err := c2.Receive()
+	if err != nil {
+		t.Fatalf("failed to receive second push: %v", err)
+	}
+	if !pushResp2.OK {
+		t.Fatalf("second push response not OK: %s", pushResp2.Error)
+	}
+
+	// Verify via inbox that messages have state 'pushed'
+	resp, _ = c2.Send(protocol.Request{Cmd: protocol.CmdInbox})
+	if !resp.OK {
+		t.Fatalf("inbox failed: %s", resp.Error)
+	}
+
+	var messages []map[string]interface{}
+	json.Unmarshal(resp.Data, &messages)
+	if len(messages) != 2 {
+		t.Fatalf("inbox len = %d, want 2", len(messages))
+	}
+	// Verify both messages have state 'pushed'
+	for i, msg := range messages {
+		if msg["state"] != "pushed" {
+			t.Errorf("message[%d] state = %q, want 'pushed'", i, msg["state"])
+		}
+	}
+}
+
+// TestBroker_SendOfflineDelivery — send to offline name, name connects later, inbox has message
+func TestBroker_SendOfflineDelivery(t *testing.T) {
+	sockPath, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c1, _ := client.Connect(sockPath)
+	defer c1.Close()
+	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+
+	// Alice sends to Bob (who is offline)
+	resp, _ := c1.Send(protocol.Request{
+		Cmd:     protocol.CmdSend,
+		Name:    "bob",
+		Message: "hello offline",
+	})
+	if !resp.OK {
+		t.Fatalf("send to offline should succeed: %s", resp.Error)
+	}
+
+	// Bob connects later
+	c2, _ := client.Connect(sockPath)
+	defer c2.Close()
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+
+	// Bob checks inbox
+	resp, _ = c2.Send(protocol.Request{Cmd: protocol.CmdInbox})
+	if !resp.OK {
+		t.Fatalf("inbox failed: %s", resp.Error)
+	}
+
+	var messages []map[string]interface{}
+	json.Unmarshal(resp.Data, &messages)
+	if len(messages) != 1 {
+		t.Fatalf("inbox len = %d, want 1", len(messages))
+	}
+	if messages[0]["body"] != "hello offline" {
+		t.Errorf("message body = %q, want 'hello offline'", messages[0]["body"])
+	}
+	// State should be 'queued' (not pushed)
+	if messages[0]["state"] != "queued" {
+		t.Errorf("message state = %q, want 'queued'", messages[0]["state"])
+	}
+}
+
+// TestBroker_SendRequiresName — send with empty name returns INVALID_REQUEST
+func TestBroker_SendRequiresName(t *testing.T) {
+	sockPath, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c, _ := client.Connect(sockPath)
+	defer c.Close()
+	c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+
+	resp, _ := c.Send(protocol.Request{
+		Cmd:     protocol.CmdSend,
+		Name:    "",
+		Message: "hello",
+	})
+	if resp.OK {
+		t.Fatal("send with empty name should fail")
+	}
+	if resp.Code != protocol.ErrInvalidRequest {
+		t.Errorf("error code = %q, want %q", resp.Code, protocol.ErrInvalidRequest)
+	}
+}
+
+// TestBroker_SendRequiresMessage — send with empty message returns INVALID_REQUEST
+func TestBroker_SendRequiresMessage(t *testing.T) {
+	sockPath, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c, _ := client.Connect(sockPath)
+	defer c.Close()
+	c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+
+	resp, _ := c.Send(protocol.Request{
+		Cmd:     protocol.CmdSend,
+		Name:    "bob",
+		Message: "",
+	})
+	if resp.OK {
+		t.Fatal("send with empty message should fail")
+	}
+	if resp.Code != protocol.ErrInvalidRequest {
+		t.Errorf("error code = %q, want %q", resp.Code, protocol.ErrInvalidRequest)
+	}
+}
+
+// TestBroker_SendRequiresSession — send without connect returns NOT_CONNECTED
+func TestBroker_SendRequiresSession(t *testing.T) {
+	sockPath, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c, _ := client.Connect(sockPath)
+	defer c.Close()
+
+	// Try to send without connecting
+	resp, _ := c.Send(protocol.Request{
+		Cmd:     protocol.CmdSend,
+		Name:    "bob",
+		Message: "hello",
+	})
+	if resp.OK {
+		t.Fatal("send without session should fail")
+	}
+	if resp.Code != protocol.ErrNotConnected {
+		t.Errorf("error code = %q, want %q", resp.Code, protocol.ErrNotConnected)
+	}
+}
+
+// TestBroker_MessagesSurviveRestart — send message, stop broker, start new broker (same DB), inbox returns message
+func TestBroker_MessagesSurviveRestart(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+
+	sockPath := fmt.Sprintf("/tmp/waggle-test-%d.sock", time.Now().UnixNano())
+	dbPath := fmt.Sprintf("%s/db", tmpDir)
+
+	// Start first broker
+	b1, err := New(Config{SocketPath: sockPath, DBPath: dbPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go b1.Serve()
+	time.Sleep(100 * time.Millisecond)
+
+	// Send message
+	c1, _ := client.Connect(sockPath)
+	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	c1.Send(protocol.Request{
+		Cmd:     protocol.CmdSend,
+		Name:    "bob",
+		Message: "persistent message",
+	})
+	c1.Close()
+
+	// Stop broker
+	b1.Shutdown()
+	time.Sleep(100 * time.Millisecond)
+
+	// Start second broker (same DB)
+	b2, err := New(Config{SocketPath: sockPath, DBPath: dbPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go b2.Serve()
+	time.Sleep(100 * time.Millisecond)
+	defer func() {
+		b2.Shutdown()
+		os.Remove(sockPath)
+	}()
+
+	// Check inbox
+	c2, _ := client.Connect(sockPath)
+	defer c2.Close()
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+	resp, _ := c2.Send(protocol.Request{Cmd: protocol.CmdInbox})
+	if !resp.OK {
+		t.Fatalf("inbox failed: %s", resp.Error)
+	}
+
+	var messages []map[string]interface{}
+	json.Unmarshal(resp.Data, &messages)
+	if len(messages) != 1 {
+		t.Fatalf("inbox len = %d, want 1", len(messages))
+	}
+	if messages[0]["body"] != "persistent message" {
+		t.Errorf("message body = %q, want 'persistent message'", messages[0]["body"])
+	}
+}
+
+// TestBroker_InboxPersistsAcrossReconnect — send, recipient disconnects, reconnects, inbox still has message
+func TestBroker_InboxPersistsAcrossReconnect(t *testing.T) {
+	sockPath, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c1, _ := client.Connect(sockPath)
+	defer c1.Close()
+	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+
+	c2, _ := client.Connect(sockPath)
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+
+	// Alice sends to Bob
+	c1.Send(protocol.Request{
+		Cmd:     protocol.CmdSend,
+		Name:    "bob",
+		Message: "reconnect test",
+	})
+
+	// Bob disconnects
+	c2.Close()
+	time.Sleep(50 * time.Millisecond)
+
+	// Bob reconnects
+	c3, _ := client.Connect(sockPath)
+	defer c3.Close()
+	c3.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+
+	// Check inbox
+	resp, _ := c3.Send(protocol.Request{Cmd: protocol.CmdInbox})
+	if !resp.OK {
+		t.Fatalf("inbox failed: %s", resp.Error)
+	}
+
+	var messages []map[string]interface{}
+	json.Unmarshal(resp.Data, &messages)
+	if len(messages) != 1 {
+		t.Fatalf("inbox len = %d, want 1", len(messages))
+	}
+	if messages[0]["body"] != "reconnect test" {
+		t.Errorf("message body = %q, want 'reconnect test'", messages[0]["body"])
+	}
+}
+
+// TestBroker_MultipleSendersOrdering — A sends to C, B sends to C, C's inbox has both in order
+func TestBroker_MultipleSendersOrdering(t *testing.T) {
+	sockPath, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c1, _ := client.Connect(sockPath)
+	defer c1.Close()
+	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+
+	c2, _ := client.Connect(sockPath)
+	defer c2.Close()
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+
+	c3, _ := client.Connect(sockPath)
+	defer c3.Close()
+	c3.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "charlie"})
+
+	// Alice sends to Charlie
+	c1.Send(protocol.Request{
+		Cmd:     protocol.CmdSend,
+		Name:    "charlie",
+		Message: "from alice",
+	})
+
+	// Charlie receives the first pushed message
+	pushResp1, err := c3.Receive()
+	if err != nil {
+		t.Fatalf("charlie failed to receive first push: %v", err)
+	}
+	if !pushResp1.OK {
+		t.Fatalf("first push response not OK: %s", pushResp1.Error)
+	}
+
+	time.Sleep(10 * time.Millisecond)
+
+	// Bob sends to Charlie
+	c2.Send(protocol.Request{
+		Cmd:     protocol.CmdSend,
+		Name:    "charlie",
+		Message: "from bob",
+	})
+
+	// Charlie receives the second pushed message
+	pushResp2, err := c3.Receive()
+	if err != nil {
+		t.Fatalf("charlie failed to receive second push: %v", err)
+	}
+	if !pushResp2.OK {
+		t.Fatalf("second push response not OK: %s", pushResp2.Error)
+	}
+
+	// Charlie checks inbox
+	resp, _ := c3.Send(protocol.Request{Cmd: protocol.CmdInbox})
+	if !resp.OK {
+		t.Fatalf("inbox failed: %s", resp.Error)
+	}
+
+	var messages []map[string]interface{}
+	json.Unmarshal(resp.Data, &messages)
+	if len(messages) != 2 {
+		t.Fatalf("inbox len = %d, want 2", len(messages))
+	}
+	if messages[0]["body"] != "from alice" {
+		t.Errorf("messages[0] body = %q, want 'from alice'", messages[0]["body"])
+	}
+	if messages[1]["body"] != "from bob" {
+		t.Errorf("messages[1] body = %q, want 'from bob'", messages[1]["body"])
+	}
+}
+

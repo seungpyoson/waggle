@@ -3,6 +3,7 @@ package broker
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
 	"time"
@@ -64,6 +65,10 @@ func route(s *Session, req protocol.Request) protocol.Response {
 		return handleStatus(s)
 	case protocol.CmdStop:
 		return handleStop(s)
+	case protocol.CmdSend:
+		return handleSend(s, req)
+	case protocol.CmdInbox:
+		return handleInbox(s, req)
 	default:
 		return protocol.ErrResponse(protocol.ErrInvalidRequest, "unknown command")
 	}
@@ -465,5 +470,53 @@ func publishTaskEvent(b *Broker, event string, task *tasks.Task) {
 func mustMarshal(v interface{}) json.RawMessage {
 	data, _ := json.Marshal(v)
 	return data
+}
+
+func handleSend(s *Session, req protocol.Request) protocol.Response {
+	if req.Name == "" {
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, "recipient name required")
+	}
+	if req.Message == "" {
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, "message required")
+	}
+
+	msg, err := s.broker.msgStore.Send(s.name, req.Name, req.Message)
+	if err != nil {
+		return protocol.ErrResponse(protocol.ErrInternalError, err.Error())
+	}
+
+	// Push to recipient if connected
+	s.broker.mu.RLock()
+	recipient, online := s.broker.sessions[req.Name]
+	s.broker.mu.RUnlock()
+
+	if online {
+		pushMsg := protocol.Response{
+			OK: true,
+			Data: mustMarshal(map[string]any{
+				"type":    "message",
+				"id":      msg.ID,
+				"from":    msg.From,
+				"body":    msg.Body,
+				"sent_at": msg.CreatedAt,
+			}),
+		}
+		recipient.writeMu.Lock()
+		recipient.enc.Encode(pushMsg)
+		recipient.writeMu.Unlock()
+		if err := s.broker.msgStore.MarkPushed(msg.ID); err != nil {
+			log.Printf("session %s: failed to mark message %d as pushed: %v", s.name, msg.ID, err)
+		}
+	}
+
+	return protocol.OKResponse(mustMarshal(msg))
+}
+
+func handleInbox(s *Session, req protocol.Request) protocol.Response {
+	messages, err := s.broker.msgStore.Inbox(s.name)
+	if err != nil {
+		return protocol.ErrResponse(protocol.ErrInternalError, err.Error())
+	}
+	return protocol.OKResponse(mustMarshal(messages))
 }
 

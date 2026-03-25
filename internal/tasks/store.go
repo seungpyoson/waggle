@@ -79,31 +79,14 @@ type Store struct {
 	claimMu sync.Mutex // Serializes claim operations
 }
 
-// NewStore creates a new task store
-func NewStore(dbPath string) (*Store, error) {
+// NewStore creates a new task store from an existing database connection
+func NewStore(db *sql.DB) (*Store, error) {
 	if err := config.ValidateDefaults(); err != nil {
 		return nil, fmt.Errorf("invalid config: %w", err)
 	}
 
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		return nil, err
-	}
-	db.SetMaxOpenConns(1) // SQLite serializes writers
-
-	// Set pragmas
-	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("setting WAL mode: %w", err)
-	}
-	if _, err := db.Exec(fmt.Sprintf("PRAGMA busy_timeout=%d", config.Defaults.BusyTimeout.Milliseconds())); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("setting busy_timeout: %w", err)
-	}
-
 	s := &Store{db: db}
 	if err := s.migrate(); err != nil {
-		db.Close()
 		return nil, err
 	}
 
