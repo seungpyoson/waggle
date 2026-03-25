@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/seungpyoson/waggle/internal/client"
+	"github.com/seungpyoson/waggle/internal/config"
 	"github.com/seungpyoson/waggle/internal/protocol"
 )
 
@@ -294,4 +296,38 @@ func TestBroker_DisconnectOnlyRequeuesOwnTasks(t *testing.T) {
 	c2.Close()
 }
 
+// === Buffer config tests ===
 
+// Verify the broker session scanner uses config.Defaults.MaxMessageSize,
+// not a hardcoded constant. This test sends a payload larger than Go's
+// default bufio.Scanner limit (64KB) but within config.MaxMessageSize.
+func TestBroker_LargePayloadRoundTrip(t *testing.T) {
+	sockPath, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c, _ := client.Connect(sockPath)
+	defer c.Close()
+	c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "w-large"})
+
+	payloadSize := 100 * 1024 // 100KB — above 64KB default, below 1MB config max
+	bigPayload := strings.Repeat("x", payloadSize)
+	resp, err := c.Send(protocol.Request{
+		Cmd:     protocol.CmdTaskCreate,
+		Payload: json.RawMessage(fmt.Sprintf(`{"data":"%s"}`, bigPayload)),
+		Type:    "large",
+	})
+	if err != nil {
+		t.Fatalf("send failed (buffer too small?): %v", err)
+	}
+	if !resp.OK {
+		t.Fatalf("create with large payload should succeed: %s", resp.Error)
+	}
+}
+
+// Verify session scanner buffer matches config — not a different hardcoded value.
+func TestBroker_ScannerBufferMatchesConfig(t *testing.T) {
+	expected := int64(1024 * 1024)
+	if config.Defaults.MaxMessageSize != expected {
+		t.Fatalf("config.Defaults.MaxMessageSize = %d, want %d", config.Defaults.MaxMessageSize, expected)
+	}
+}

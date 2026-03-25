@@ -7,6 +7,7 @@ import (
 	"net"
 	"strings"
 
+	"github.com/seungpyoson/waggle/internal/config"
 	"github.com/seungpyoson/waggle/internal/protocol"
 )
 
@@ -22,10 +23,10 @@ type Session struct {
 // newSession creates a new session
 func newSession(conn net.Conn, broker *Broker) *Session {
 	scan := bufio.NewScanner(conn)
-	// Increase buffer for large payloads (default bufio.Scanner is 64KB).
-	// Must match client's buffer size to handle round-trip of large messages.
-	const maxBuf = 1 << 20 // 1MB
-	scan.Buffer(make([]byte, maxBuf), maxBuf)
+	// Match client buffer size for large AI agent payloads.
+	// Uses config.Defaults.MaxMessageSize (single source of truth) to avoid asymmetry.
+	bufSize := int(config.Defaults.MaxMessageSize)
+	scan.Buffer(make([]byte, bufSize), bufSize)
 	return &Session{
 		conn:   conn,
 		enc:    json.NewEncoder(conn),
