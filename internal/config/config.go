@@ -28,6 +28,16 @@ func ValidateDefaults() error {
 			return fmt.Errorf("config.Defaults.%s must be positive, got %v", name, d)
 		}
 	}
+	ints := map[string]int{
+		"MaxRetries":    Defaults.MaxRetries,
+		"MaxPriority":   Defaults.MaxPriority,
+		"MaxFieldLength": Defaults.MaxFieldLength,
+	}
+	for name, v := range ints {
+		if v <= 0 {
+			return fmt.Errorf("config.Defaults.%s must be positive, got %d", name, v)
+		}
+	}
 	return nil
 }
 

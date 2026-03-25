@@ -111,6 +111,10 @@ func WaitForReady(pidFile string, timeout, interval time.Duration) error {
 		}
 		time.Sleep(interval)
 	}
+	// Final check: broker may have started during the last sleep
+	if IsRunning(pidFile) {
+		return nil
+	}
 	return fmt.Errorf("broker failed to start within %v", timeout)
 }
 

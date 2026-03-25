@@ -321,3 +321,23 @@ func TestValidateDefaults_RejectsNegativeDurations(t *testing.T) {
 		t.Fatal("ValidateDefaults() should reject negative LeaseCheckPeriod")
 	}
 }
+
+func TestValidateDefaults_RejectsZeroMaxRetries(t *testing.T) {
+	orig := Defaults.MaxRetries
+	Defaults.MaxRetries = 0
+	defer func() { Defaults.MaxRetries = orig }()
+
+	if err := ValidateDefaults(); err == nil {
+		t.Fatal("ValidateDefaults() should reject zero MaxRetries")
+	}
+}
+
+func TestValidateDefaults_RejectsZeroMaxFieldLength(t *testing.T) {
+	orig := Defaults.MaxFieldLength
+	Defaults.MaxFieldLength = 0
+	defer func() { Defaults.MaxFieldLength = orig }()
+
+	if err := ValidateDefaults(); err == nil {
+		t.Fatal("ValidateDefaults() should reject zero MaxFieldLength")
+	}
+}
