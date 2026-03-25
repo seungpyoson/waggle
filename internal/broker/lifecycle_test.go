@@ -241,6 +241,14 @@ func TestWaitForReady_RejectsZeroTimeout(t *testing.T) {
 	}
 }
 
+// TestWaitForReady_RejectsNegativeTimeout verifies WaitForReady returns error for negative timeout
+func TestWaitForReady_RejectsNegativeTimeout(t *testing.T) {
+	err := WaitForReady("/nonexistent/pid", -1*time.Second, 100*time.Millisecond)
+	if err == nil {
+		t.Fatal("expected error for negative timeout")
+	}
+}
+
 // TestWaitForReady_RejectsNegativeInterval verifies WaitForReady returns error for negative interval
 func TestWaitForReady_RejectsNegativeInterval(t *testing.T) {
 	err := WaitForReady("/nonexistent/pid", 1*time.Second, -1*time.Millisecond)

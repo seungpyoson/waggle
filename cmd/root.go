@@ -65,7 +65,7 @@ var (
 
 				// Wait for broker to start
 				if err := broker.WaitForReady(paths.PID, config.Defaults.StartupTimeout, config.Defaults.StartupPollInterval); err != nil {
-					return err
+					return fmt.Errorf("auto-start broker: %w", err)
 				}
 			}
 
