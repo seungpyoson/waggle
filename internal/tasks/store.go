@@ -336,7 +336,7 @@ func (s *Store) Claim(worker string, filter ClaimFilter) (*Task, error) {
 		return nil, err
 	}
 
-	// Build query with optional type filter
+	// Build query with optional type and tags filters
 	query := `
 		SELECT id FROM tasks
 		WHERE state = 'pending' AND blocked = 0
@@ -345,6 +345,14 @@ func (s *Store) Claim(worker string, filter ClaimFilter) (*Task, error) {
 	if filter.Type != "" {
 		query += " AND type = ?"
 		args = append(args, filter.Type)
+	}
+	// Tags filter: task must have ALL specified tags (AND logic)
+	if len(filter.Tags) > 0 {
+		for _, tag := range filter.Tags {
+			// Use JSON functions to check if tag exists in the tags array
+			query += " AND EXISTS (SELECT 1 FROM json_each(tags) WHERE value = ?)"
+			args = append(args, tag)
+		}
 	}
 	query += " ORDER BY priority DESC, created_at ASC LIMIT 1"
 
