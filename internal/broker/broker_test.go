@@ -238,6 +238,52 @@ func TestBroker_EventsSubscribeFormat(t *testing.T) {
 	}
 }
 
+// Test 3d: Status includes task counts by state
+func TestBroker_StatusIncludesTaskCounts(t *testing.T) {
+	sockPath, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c, _ := client.Connect(sockPath)
+	c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "w-1"})
+
+	// Create tasks in different states
+	c.Send(protocol.Request{
+		Cmd:     protocol.CmdTaskCreate,
+		Payload: json.RawMessage(`{"a":1}`),
+	})
+	c.Send(protocol.Request{
+		Cmd:     protocol.CmdTaskCreate,
+		Payload: json.RawMessage(`{"b":2}`),
+	})
+	// Claim one task
+	c.Send(protocol.Request{Cmd: protocol.CmdTaskClaim})
+
+	// Get status
+	resp, _ := c.Send(protocol.Request{Cmd: protocol.CmdStatus})
+	if !resp.OK {
+		t.Fatalf("status: %s", resp.Error)
+	}
+
+	var status map[string]interface{}
+	json.Unmarshal(resp.Data, &status)
+
+	// Check for task counts
+	tasks, ok := status["tasks"].(map[string]interface{})
+	if !ok {
+		t.Fatal("status should include tasks map")
+	}
+
+	pending := int(tasks["pending"].(float64))
+	claimed := int(tasks["claimed"].(float64))
+
+	if pending != 1 {
+		t.Errorf("expected 1 pending task, got %d", pending)
+	}
+	if claimed != 1 {
+		t.Errorf("expected 1 claimed task, got %d", claimed)
+	}
+}
+
 // Test 4: Disconnect unsubscribes from events
 func TestBroker_DisconnectUnsubscribesEvents(t *testing.T) {
 	sockPath, cleanup := startTestBroker(t)

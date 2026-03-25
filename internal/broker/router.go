@@ -354,11 +354,18 @@ func handleStatus(s *Session) protocol.Response {
 	sessionCount := len(s.broker.sessions)
 	s.broker.mu.RUnlock()
 
+	// Get task counts by state
+	taskCounts, err := s.broker.store.CountByState()
+	if err != nil {
+		return protocol.ErrResponse(protocol.ErrInternalError, "failed to get task counts")
+	}
+
 	status := map[string]interface{}{
 		"sessions":    sessionCount,
 		"topics":      s.broker.hub.TopicCount(),
 		"subscribers": s.broker.hub.SubscriberCount(),
 		"locks":       s.broker.lockMgr.Count(),
+		"tasks":       taskCounts,
 	}
 
 	data, _ := json.Marshal(status)

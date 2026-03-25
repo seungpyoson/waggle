@@ -636,6 +636,31 @@ func (s *Store) RequeueByOwner(owner string) (int, error) {
 	return int(rows), nil
 }
 
+// CountByState returns task counts grouped by state
+func (s *Store) CountByState() (map[string]int, error) {
+	rows, err := s.db.Query(`
+		SELECT state, COUNT(*) as count
+		FROM tasks
+		GROUP BY state
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	counts := make(map[string]int)
+	for rows.Next() {
+		var state string
+		var count int
+		if err := rows.Scan(&state, &count); err != nil {
+			return nil, err
+		}
+		counts[state] = count
+	}
+
+	return counts, rows.Err()
+}
+
 // RequeueExpiredLeases finds expired leases and re-queues them or marks them as failed
 func (s *Store) RequeueExpiredLeases() (int, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
