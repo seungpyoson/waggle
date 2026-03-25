@@ -13,7 +13,7 @@ var stopCmd = &cobra.Command{
 	Use:   "stop",
 	Short: "Stop the broker daemon",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		c, err := connectToBroker()
+		c, err := connectToBroker("")
 		if err != nil {
 			printErr("BROKER_NOT_RUNNING", err.Error())
 			return nil

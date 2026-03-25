@@ -25,7 +25,7 @@ var taskCompleteCmd = &cobra.Command{
 		taskID := args[0]
 		result := args[1]
 
-		c, err := connectWithSession("")
+		c, err := connectToBroker("")
 		if err != nil {
 			printErr("BROKER_NOT_RUNNING", err.Error())
 			return nil

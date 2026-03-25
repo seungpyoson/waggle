@@ -35,7 +35,7 @@ var taskCreateCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		payload := args[0]
 
-		c, err := connectWithSession("")
+		c, err := connectToBroker("")
 		if err != nil {
 			printErr("BROKER_NOT_RUNNING", err.Error())
 			return nil

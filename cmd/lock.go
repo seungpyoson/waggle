@@ -18,7 +18,7 @@ var lockCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		resource := args[0]
 
-		c, err := connectToBroker()
+		c, err := connectToBroker("")
 		if err != nil {
 			printErr("BROKER_NOT_RUNNING", err.Error())
 			return nil
@@ -53,7 +53,7 @@ var unlockCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		resource := args[0]
 
-		c, err := connectToBroker()
+		c, err := connectToBroker("")
 		if err != nil {
 			printErr("BROKER_NOT_RUNNING", err.Error())
 			return nil
@@ -85,7 +85,7 @@ var locksCmd = &cobra.Command{
 	Use:   "locks",
 	Short: "List all locks",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		c, err := connectToBroker()
+		c, err := connectToBroker("")
 		if err != nil {
 			printErr("BROKER_NOT_RUNNING", err.Error())
 			return nil

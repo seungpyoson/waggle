@@ -111,23 +111,12 @@ func printErr(code, message string) {
 	os.Exit(1)
 }
 
-// connectToBroker establishes a connection to the broker
-func connectToBroker() (*client.Client, error) {
-	return client.Connect(paths.Socket)
-}
-
-// getUniqueSessionName generates a unique session name for CLI commands
-// Uses cli-{pid} to ensure each CLI process has a unique session
-// This prevents session conflicts when multiple CLI commands run simultaneously
-func getUniqueSessionName() string {
-	return "cli-" + strconv.Itoa(os.Getpid())
-}
-
-// connectWithSession establishes a connection and creates a session
-// If name is empty, generates a unique session name
-func connectWithSession(name string) (*client.Client, error) {
+// connectToBroker establishes a connection with session handshake.
+// If name is empty, generates a unique session name (cli-{pid}).
+// This is the ONLY way to connect — every command needs a session.
+func connectToBroker(name string) (*client.Client, error) {
 	if name == "" {
-		name = getUniqueSessionName()
+		name = "cli-" + strconv.Itoa(os.Getpid())
 	}
 
 	c, err := client.Connect(paths.Socket)
@@ -135,7 +124,6 @@ func connectWithSession(name string) (*client.Client, error) {
 		return nil, err
 	}
 
-	// Send connect request to establish session
 	resp, err := c.Send(protocol.Request{
 		Cmd:  protocol.CmdConnect,
 		Name: name,
