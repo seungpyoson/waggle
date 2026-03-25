@@ -15,7 +15,6 @@ import (
 	"github.com/seungpyoson/waggle/internal/events"
 	"github.com/seungpyoson/waggle/internal/locks"
 	"github.com/seungpyoson/waggle/internal/messages"
-	"github.com/seungpyoson/waggle/internal/spawn"
 	"github.com/seungpyoson/waggle/internal/tasks"
 )
 
@@ -35,7 +34,6 @@ type Broker struct {
 	store        *tasks.Store
 	msgStore     *messages.Store
 	lockMgr      *locks.Manager
-	spawnMgr     *spawn.Manager
 	listener     net.Listener
 	sessions     map[string]*Session
 	mu           sync.RWMutex
@@ -128,7 +126,6 @@ func New(cfg Config) (*Broker, error) {
 		store:      store,
 		msgStore:   msgStore,
 		lockMgr:    locks.NewManager(),
-		spawnMgr:   spawn.NewManager(),
 		listener:   listener,
 		sessions:   make(map[string]*Session),
 		stopCh:     make(chan struct{}),
@@ -193,11 +190,6 @@ func (b *Broker) Serve() error {
 
 // Shutdown gracefully shuts down the broker
 func (b *Broker) Shutdown() error {
-	// Kill spawned agents before stopping
-	if b.spawnMgr != nil {
-		b.spawnMgr.StopAll()
-	}
-
 	close(b.stopCh)
 
 	// Close listener

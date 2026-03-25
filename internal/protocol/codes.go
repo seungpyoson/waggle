@@ -27,8 +27,6 @@ const (
 	CmdInbox    = "inbox"
 	CmdAck      = "ack"
 	CmdPresence = "presence"
-
-	CmdSpawnRegister = "spawn.register"
 )
 
 // Error code constants — the `code` field values in Response
