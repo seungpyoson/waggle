@@ -122,8 +122,11 @@ func handleSubscribe(s *Session, req protocol.Request) protocol.Response {
 	go func() {
 		for msg := range ch {
 			// msg is already a marshaled Event, write it directly
+			// CLASS 1 FIX (B1): Hold writeMu to prevent race with readLoop enc.Encode
+			s.writeMu.Lock()
 			s.conn.Write(msg)
 			s.conn.Write([]byte("\n"))
+			s.writeMu.Unlock()
 		}
 	}()
 
@@ -473,11 +476,20 @@ func mustMarshal(v interface{}) json.RawMessage {
 }
 
 func handleSend(s *Session, req protocol.Request) protocol.Response {
+	// CLASS 3 FIX (G3): Validate recipient name length
 	if req.Name == "" {
 		return protocol.ErrResponse(protocol.ErrInvalidRequest, "recipient name required")
 	}
+	if len(req.Name) > config.Defaults.MaxFieldLength {
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, fmt.Sprintf("recipient name too long (max %d chars)", config.Defaults.MaxFieldLength))
+	}
+
+	// CLASS 3 FIX (G2): Validate message body size
 	if req.Message == "" {
 		return protocol.ErrResponse(protocol.ErrInvalidRequest, "message required")
+	}
+	if len(req.Message) > int(config.Defaults.MaxMessageSize) {
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, fmt.Sprintf("message body too large (max %d bytes)", config.Defaults.MaxMessageSize))
 	}
 
 	msg, err := s.broker.msgStore.Send(s.name, req.Name, req.Message)
@@ -490,7 +502,8 @@ func handleSend(s *Session, req protocol.Request) protocol.Response {
 	recipient, online := s.broker.sessions[req.Name]
 	s.broker.mu.RUnlock()
 
-	if online {
+	// CLASS 2 FIX (B3): Skip push delivery when sending to self to prevent protocol corruption
+	if online && recipient != s {
 		pushMsg := protocol.Response{
 			OK: true,
 			Data: mustMarshal(map[string]any{
@@ -502,10 +515,16 @@ func handleSend(s *Session, req protocol.Request) protocol.Response {
 			}),
 		}
 		recipient.writeMu.Lock()
-		recipient.enc.Encode(pushMsg)
-		recipient.writeMu.Unlock()
-		if err := s.broker.msgStore.MarkPushed(msg.ID); err != nil {
-			log.Printf("session %s: failed to mark message %d as pushed: %v", s.name, msg.ID, err)
+		// CLASS 1 FIX (B2): Check encode error before marking as pushed
+		if err := recipient.enc.Encode(pushMsg); err != nil {
+			recipient.writeMu.Unlock()
+			// Don't mark as pushed if delivery failed
+			log.Printf("session %s: failed to push message %d to %s: %v", s.name, msg.ID, req.Name, err)
+		} else {
+			recipient.writeMu.Unlock()
+			if err := s.broker.msgStore.MarkPushed(msg.ID); err != nil {
+				log.Printf("session %s: failed to mark message %d as pushed: %v", s.name, msg.ID, err)
+			}
 		}
 	}
 

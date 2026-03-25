@@ -40,6 +40,14 @@ func NewStore(db *sql.DB) (*Store, error) {
 		return nil, fmt.Errorf("creating messages table: %w", err)
 	}
 
+	// CLASS 5 FIX (G5): Add index on to_name and state for inbox queries
+	indexSchema := `
+	CREATE INDEX IF NOT EXISTS idx_messages_to_name ON messages(to_name, state);
+	`
+	if _, err := db.Exec(indexSchema); err != nil {
+		return nil, fmt.Errorf("creating messages index: %w", err)
+	}
+
 	return &Store{db: db}, nil
 }
 

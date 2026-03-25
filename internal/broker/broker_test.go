@@ -1019,3 +1019,253 @@ func TestBroker_MultipleSendersOrdering(t *testing.T) {
 	}
 }
 
+// ========== Task 43 PR Review Fix Tests ==========
+
+// TestBroker_SendToSelf — send to own name, verify no protocol corruption, verify message appears in inbox
+func TestBroker_SendToSelf(t *testing.T) {
+	sockPath, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c, _ := client.Connect(sockPath)
+	defer c.Close()
+	c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+
+	// Alice sends to herself
+	resp, _ := c.Send(protocol.Request{
+		Cmd:     protocol.CmdSend,
+		Name:    "alice",
+		Message: "note to self",
+	})
+	if !resp.OK {
+		t.Fatalf("send to self failed: %s", resp.Error)
+	}
+
+	// Verify the send response is correct (not corrupted by push)
+	var sendData map[string]interface{}
+	json.Unmarshal(resp.Data, &sendData)
+	if sendData["body"] != "note to self" {
+		t.Errorf("send response body = %q, want 'note to self'", sendData["body"])
+	}
+
+	// Check inbox — message should be there
+	resp, _ = c.Send(protocol.Request{Cmd: protocol.CmdInbox})
+	if !resp.OK {
+		t.Fatalf("inbox failed: %s", resp.Error)
+	}
+
+	var messages []map[string]interface{}
+	json.Unmarshal(resp.Data, &messages)
+	if len(messages) != 1 {
+		t.Fatalf("inbox len = %d, want 1", len(messages))
+	}
+	if messages[0]["body"] != "note to self" {
+		t.Errorf("message body = %q, want 'note to self'", messages[0]["body"])
+	}
+	// State should be 'queued' (not pushed, since we skip push to self)
+	if messages[0]["state"] != "queued" {
+		t.Errorf("message state = %q, want 'queued'", messages[0]["state"])
+	}
+}
+
+// TestBroker_SessionNameCollision — connect same name twice, disconnect first, verify second still works for push
+func TestBroker_SessionNameCollision(t *testing.T) {
+	sockPath, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	// Alice connects on first connection
+	c1, _ := client.Connect(sockPath)
+	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+
+	// Alice connects on second connection (overwrites first in sessions map)
+	c2, _ := client.Connect(sockPath)
+	defer c2.Close()
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+
+	// First connection disconnects
+	c1.Close()
+	time.Sleep(50 * time.Millisecond)
+
+	// Bob sends to alice — should reach the second connection
+	c3, _ := client.Connect(sockPath)
+	defer c3.Close()
+	c3.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+	resp, _ := c3.Send(protocol.Request{
+		Cmd:     protocol.CmdSend,
+		Name:    "alice",
+		Message: "test collision",
+	})
+	if !resp.OK {
+		t.Fatalf("send failed: %s", resp.Error)
+	}
+
+	// Alice (second connection) should receive the push
+	pushResp, err := c2.Receive()
+	if err != nil {
+		t.Fatalf("alice (second connection) failed to receive push: %v", err)
+	}
+	if !pushResp.OK {
+		t.Fatalf("push response not OK: %s", pushResp.Error)
+	}
+
+	var pushData map[string]interface{}
+	json.Unmarshal(pushResp.Data, &pushData)
+	if pushData["body"] != "test collision" {
+		t.Errorf("push body = %q, want 'test collision'", pushData["body"])
+	}
+}
+
+// TestBroker_ConcurrentSendToSameRecipient — 10 goroutines all sending to same connected recipient under -race
+func TestBroker_ConcurrentSendToSameRecipient(t *testing.T) {
+	sockPath, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	// Bob connects and will receive all messages
+	c1, _ := client.Connect(sockPath)
+	defer c1.Close()
+	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+
+	// 10 senders connect
+	senders := make([]*client.Client, 10)
+	for i := 0; i < 10; i++ {
+		c, _ := client.Connect(sockPath)
+		defer c.Close()
+		c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: fmt.Sprintf("sender-%d", i)})
+		senders[i] = c
+	}
+
+	// All senders send to bob concurrently
+	done := make(chan bool, 10)
+	for i := 0; i < 10; i++ {
+		go func(idx int) {
+			resp, _ := senders[idx].Send(protocol.Request{
+				Cmd:     protocol.CmdSend,
+				Name:    "bob",
+				Message: fmt.Sprintf("msg-%d", idx),
+			})
+			if !resp.OK {
+				t.Errorf("sender-%d send failed: %s", idx, resp.Error)
+			}
+			done <- true
+		}(i)
+	}
+
+	// Wait for all sends to complete
+	for i := 0; i < 10; i++ {
+		<-done
+	}
+
+	// Bob should receive 10 push messages
+	for i := 0; i < 10; i++ {
+		_, err := c1.Receive()
+		if err != nil {
+			t.Fatalf("bob failed to receive push %d: %v", i, err)
+		}
+	}
+
+	// Verify inbox has all 10 messages
+	resp, _ := c1.Send(protocol.Request{Cmd: protocol.CmdInbox})
+	if !resp.OK {
+		t.Fatalf("inbox failed: %s", resp.Error)
+	}
+
+	var messages []map[string]interface{}
+	json.Unmarshal(resp.Data, &messages)
+	if len(messages) != 10 {
+		t.Fatalf("inbox len = %d, want 10", len(messages))
+	}
+}
+
+// TestBroker_SubscribeAndPushRace — session is subscribed to events AND receives push message concurrently under -race
+func TestBroker_SubscribeAndPushRace(t *testing.T) {
+	sockPath, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	// Alice subscribes to task.events
+	c1, _ := client.Connect(sockPath)
+	defer c1.Close()
+	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	resp, _ := c1.Send(protocol.Request{Cmd: protocol.CmdSubscribe, Topic: "task.events"})
+	if !resp.OK {
+		t.Fatalf("subscribe failed: %s", resp.Error)
+	}
+
+	// Bob connects
+	c2, _ := client.Connect(sockPath)
+	defer c2.Close()
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+
+	// Bob creates tasks and sends messages sequentially (not concurrently)
+	// The race we're testing is on the SERVER side (writeMu protecting concurrent writes to alice's connection)
+	// NOT on the client side (c2 is used from one goroutine only)
+	for i := 0; i < 5; i++ {
+		c2.Send(protocol.Request{
+			Cmd:     protocol.CmdTaskCreate,
+			Payload: json.RawMessage(fmt.Sprintf(`{"task":%d}`, i)),
+			Type:    "test",
+		})
+		c2.Send(protocol.Request{
+			Cmd:     protocol.CmdSend,
+			Name:    "alice",
+			Message: fmt.Sprintf("msg-%d", i),
+		})
+	}
+
+	// Alice should receive both event stream messages and push messages
+	// We don't care about the order, just that no race occurs on the server
+	receivedCount := 0
+	timeout := time.After(2 * time.Second)
+	for receivedCount < 10 {
+		select {
+		case <-timeout:
+			t.Fatalf("timeout waiting for messages, received %d/10", receivedCount)
+		default:
+			_, err := c1.Receive()
+			if err != nil {
+				t.Fatalf("alice failed to receive message %d: %v", receivedCount, err)
+			}
+			receivedCount++
+		}
+	}
+}
+
+// TestBroker_SendRecipientNameTooLong — validate recipient name length
+func TestBroker_SendRecipientNameTooLong(t *testing.T) {
+	sockPath, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c, _ := client.Connect(sockPath)
+	defer c.Close()
+	c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+
+	// Create a name longer than MaxFieldLength (256)
+	longName := strings.Repeat("a", 257)
+	resp, _ := c.Send(protocol.Request{
+		Cmd:     protocol.CmdSend,
+		Name:    longName,
+		Message: "test",
+	})
+	if resp.OK {
+		t.Fatal("send with long recipient name should fail")
+	}
+	if resp.Code != protocol.ErrInvalidRequest {
+		t.Errorf("error code = %q, want %q", resp.Code, protocol.ErrInvalidRequest)
+	}
+}
+
+// TestBroker_SendMessageBodyTooLarge — validate message body size
+func TestBroker_SendMessageBodyTooLarge(t *testing.T) {
+	sockPath, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c, _ := client.Connect(sockPath)
+	defer c.Close()
+	c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+
+	// Create a message just under MaxMessageSize but large enough to test validation
+	// We can't test > MaxMessageSize because the client scanner will fail first
+	// Instead, test a message that's within scanner limits but would fail server validation
+	// For now, skip this test since the scanner buffer prevents us from testing this edge case
+	// The validation is in place in the code, but we can't trigger it via the client
+	t.Skip("Cannot test message body size validation via client due to scanner buffer limits")
+}
+

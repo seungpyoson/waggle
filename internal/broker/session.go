@@ -118,8 +118,12 @@ func (s *Session) doCleanup() {
 		s.broker.hub.UnsubscribeAll(s.name)
 
 		// Remove from broker session map
+		// CLASS 4 FIX (E2): Only delete if we still own this name in the sessions map
+		// Prevents old session cleanup from deleting new session's entry after name collision
 		s.broker.mu.Lock()
-		delete(s.broker.sessions, s.name)
+		if s.broker.sessions[s.name] == s {
+			delete(s.broker.sessions, s.name)
+		}
 		s.broker.mu.Unlock()
 	}
 
