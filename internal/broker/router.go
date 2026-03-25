@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/seungpyoson/waggle/internal/config"
 	"github.com/seungpyoson/waggle/internal/protocol"
 	"github.com/seungpyoson/waggle/internal/tasks"
 )
@@ -50,6 +51,8 @@ func route(s *Session, req protocol.Request) protocol.Response {
 		return handleTaskCancel(s, req)
 	case protocol.CmdTaskGet:
 		return handleTaskGet(s, req)
+	case protocol.CmdTaskUpdate:
+		return handleTaskUpdate(s, req)
 	case protocol.CmdLock:
 		return handleLock(s, req)
 	case protocol.CmdUnlock:
@@ -69,6 +72,9 @@ func handleConnect(s *Session, req protocol.Request) protocol.Response {
 	if req.Name == "" {
 		return protocol.ErrResponse(protocol.ErrInvalidRequest, "name required")
 	}
+	if len(req.Name) > config.Defaults.MaxFieldLength {
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, "name too long (max 256 chars)")
+	}
 	if s.name != "" {
 		return protocol.ErrResponse(protocol.ErrAlreadyConnected, "already connected")
 	}
@@ -82,6 +88,7 @@ func handleConnect(s *Session, req protocol.Request) protocol.Response {
 }
 
 func handleDisconnect(s *Session) protocol.Response {
+	s.cleanDisconnect = true
 	s.cleanup()
 	return protocol.OKResponse(nil)
 }
@@ -102,15 +109,13 @@ func handleSubscribe(s *Session, req protocol.Request) protocol.Response {
 	ch := s.broker.hub.Subscribe(req.Topic, s.name)
 
 	// Switch to streaming mode
+	// Messages from the hub are already marshaled Event objects
+	// Write them directly to the connection without wrapping
 	go func() {
 		for msg := range ch {
-			evt := protocol.Event{
-				Topic: req.Topic,
-				Event: "message",
-				Data:  msg,
-				TS:    time.Now().UTC().Format(time.RFC3339),
-			}
-			s.enc.Encode(evt)
+			// msg is already a marshaled Event, write it directly
+			s.conn.Write(msg)
+			s.conn.Write([]byte("\n"))
 		}
 	}()
 
@@ -118,6 +123,19 @@ func handleSubscribe(s *Session, req protocol.Request) protocol.Response {
 }
 
 func handleTaskCreate(s *Session, req protocol.Request) protocol.Response {
+
+	// Validate priority
+	if req.Priority < 0 || req.Priority > config.Defaults.MaxPriority {
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, "priority must be between 0 and 100")
+	}
+
+	// Validate field lengths
+	if len(req.Type) > config.Defaults.MaxFieldLength {
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, "type too long (max 256 chars)")
+	}
+	if len(req.IdempotencyKey) > config.Defaults.MaxFieldLength {
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, "idempotency_key too long (max 256 chars)")
+	}
 
 	// Parse tags
 	var tags []string
@@ -321,6 +339,53 @@ func handleTaskGet(s *Session, req protocol.Request) protocol.Response {
 	return protocol.OKResponse(data)
 }
 
+func handleTaskUpdate(s *Session, req protocol.Request) protocol.Response {
+	taskID, err := strconv.ParseInt(req.TaskID, 10, 64)
+	if err != nil {
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, "invalid task_id")
+	}
+
+	// Validate priority if provided
+	if req.Priority != 0 && (req.Priority < 0 || req.Priority > config.Defaults.MaxPriority) {
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, "priority must be between 0 and 100")
+	}
+
+	var params tasks.UpdateParams
+
+	// Parse priority if provided (non-zero means it was set)
+	if req.Priority != 0 {
+		params.Priority = &req.Priority
+	}
+
+	// Parse tags if provided
+	if req.Tags != "" {
+		params.Tags = strings.Split(req.Tags, ",")
+		// Trim whitespace from each tag
+		for i := range params.Tags {
+			params.Tags[i] = strings.TrimSpace(params.Tags[i])
+		}
+	}
+
+	// At least one field must be specified
+	if params.Priority == nil && params.Tags == nil {
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, "at least one field must be specified")
+	}
+
+	err = s.broker.store.Update(taskID, params)
+	if err != nil {
+		return protocol.ErrResponse(protocol.ErrTaskNotFound, err.Error())
+	}
+
+	// Return updated task
+	task, err := s.broker.store.Get(taskID)
+	if err != nil {
+		return protocol.ErrResponse(protocol.ErrTaskNotFound, err.Error())
+	}
+
+	data, _ := json.Marshal(task)
+	return protocol.OKResponse(data)
+}
+
 func handleLock(s *Session, req protocol.Request) protocol.Response {
 	if req.Resource == "" {
 		return protocol.ErrResponse(protocol.ErrInvalidRequest, "resource required")
@@ -355,11 +420,18 @@ func handleStatus(s *Session) protocol.Response {
 	sessionCount := len(s.broker.sessions)
 	s.broker.mu.RUnlock()
 
+	// Get task counts by state
+	taskCounts, err := s.broker.store.CountByState()
+	if err != nil {
+		return protocol.ErrResponse(protocol.ErrInternalError, "failed to get task counts")
+	}
+
 	status := map[string]interface{}{
 		"sessions":    sessionCount,
 		"topics":      s.broker.hub.TopicCount(),
 		"subscribers": s.broker.hub.SubscriberCount(),
 		"locks":       s.broker.lockMgr.Count(),
+		"tasks":       taskCounts,
 	}
 
 	data, _ := json.Marshal(status)

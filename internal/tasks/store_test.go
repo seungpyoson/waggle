@@ -117,6 +117,56 @@ func TestStore_ClaimWithTypeFilter(t *testing.T) {
 	}
 }
 
+func TestStore_ClaimWithTagsFilter(t *testing.T) {
+	s := newTestStore(t)
+	s.Create(CreateParams{Payload: `{"a":1}`, Tags: []string{"backend", "api"}})
+	s.Create(CreateParams{Payload: `{"b":2}`, Tags: []string{"frontend", "ui"}})
+	s.Create(CreateParams{Payload: `{"c":3}`, Tags: []string{"frontend", "api"}})
+
+	// Claim with single tag filter
+	claimed, err := s.Claim("w", ClaimFilter{Tags: []string{"frontend"}})
+	if err != nil {
+		t.Fatalf("claim failed: %v", err)
+	}
+	// Should get first frontend task (b or c)
+	hasTag := false
+	for _, tag := range claimed.Tags {
+		if tag == "frontend" {
+			hasTag = true
+			break
+		}
+	}
+	if !hasTag {
+		t.Errorf("expected frontend task, got tags = %v", claimed.Tags)
+	}
+
+	// Claim with multiple tag filter (AND logic)
+	claimed2, err := s.Claim("w2", ClaimFilter{Tags: []string{"frontend", "api"}})
+	if err != nil {
+		t.Fatalf("claim failed: %v", err)
+	}
+	// Should get task c which has both tags
+	hasFrontend := false
+	hasAPI := false
+	for _, tag := range claimed2.Tags {
+		if tag == "frontend" {
+			hasFrontend = true
+		}
+		if tag == "api" {
+			hasAPI = true
+		}
+	}
+	if !hasFrontend || !hasAPI {
+		t.Errorf("expected frontend+api task, got tags = %v", claimed2.Tags)
+	}
+
+	// Claim with non-matching tag should fail
+	_, err = s.Claim("w3", ClaimFilter{Tags: []string{"nonexistent"}})
+	if err == nil {
+		t.Error("expected error for non-matching tag filter")
+	}
+}
+
 func TestStore_ClaimSkipsBlocked(t *testing.T) {
 	s := newTestStore(t)
 	dep, _ := s.Create(CreateParams{Payload: `{"dep":true}`})

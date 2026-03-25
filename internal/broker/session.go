@@ -5,18 +5,18 @@ import (
 	"encoding/json"
 	"log"
 	"net"
-	"strings"
 
 	"github.com/seungpyoson/waggle/internal/protocol"
 )
 
 // Session represents a client connection
 type Session struct {
-	name   string
-	conn   net.Conn
-	enc    *json.Encoder
-	scan   *bufio.Scanner
-	broker *Broker
+	name            string
+	conn            net.Conn
+	enc             *json.Encoder
+	scan            *bufio.Scanner
+	broker          *Broker
+	cleanDisconnect bool // Set to true when disconnect command is received
 }
 
 // newSession creates a new session
@@ -60,9 +60,9 @@ func (s *Session) cleanup() {
 		s.broker.lockMgr.ReleaseAll(s.name)
 
 		// Re-queue tasks claimed by this session
-		// Skip requeue for CLI sessions - they are short-lived and don't need cleanup
-		// CLI sessions use names like "cli-12345" and are expected to complete tasks in separate invocations
-		if !strings.HasPrefix(s.name, "cli-") {
+		// Only requeue on unclean disconnect (connection dropped without disconnect command)
+		// Clean disconnect means the client intentionally disconnected and wants to keep tasks claimed
+		if !s.cleanDisconnect {
 			count, err := s.broker.store.RequeueByOwner(s.name)
 			if err != nil {
 				log.Printf("session: error requeuing tasks for %s: %v", s.name, err)

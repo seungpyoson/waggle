@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -336,7 +337,7 @@ func (s *Store) Claim(worker string, filter ClaimFilter) (*Task, error) {
 		return nil, err
 	}
 
-	// Build query with optional type filter
+	// Build query with optional type and tags filters
 	query := `
 		SELECT id FROM tasks
 		WHERE state = 'pending' AND blocked = 0
@@ -345,6 +346,14 @@ func (s *Store) Claim(worker string, filter ClaimFilter) (*Task, error) {
 	if filter.Type != "" {
 		query += " AND type = ?"
 		args = append(args, filter.Type)
+	}
+	// Tags filter: task must have ALL specified tags (AND logic)
+	if len(filter.Tags) > 0 {
+		for _, tag := range filter.Tags {
+			// Use JSON functions to check if tag exists in the tags array
+			query += " AND EXISTS (SELECT 1 FROM json_each(tags) WHERE value = ?)"
+			args = append(args, tag)
+		}
 	}
 	query += " ORDER BY priority DESC, created_at ASC LIMIT 1"
 
@@ -626,6 +635,88 @@ func (s *Store) RequeueByOwner(owner string) (int, error) {
 	}
 
 	return int(rows), nil
+}
+
+// CountByState returns task counts grouped by state
+func (s *Store) CountByState() (map[string]int, error) {
+	rows, err := s.db.Query(`
+		SELECT state, COUNT(*) as count
+		FROM tasks
+		GROUP BY state
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	counts := make(map[string]int)
+	for rows.Next() {
+		var state string
+		var count int
+		if err := rows.Scan(&state, &count); err != nil {
+			return nil, err
+		}
+		counts[state] = count
+	}
+
+	return counts, rows.Err()
+}
+
+// UpdateParams holds parameters for updating a task
+type UpdateParams struct {
+	Priority *int
+	Tags     []string
+}
+
+// Update updates a task's priority and/or tags
+func (s *Store) Update(id int64, params UpdateParams) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	// Build dynamic update query
+	updates := []string{}
+	args := []interface{}{}
+
+	if params.Priority != nil {
+		updates = append(updates, "priority = ?")
+		args = append(args, *params.Priority)
+	}
+
+	if params.Tags != nil {
+		tagsJSON := "[]"
+		if len(params.Tags) > 0 {
+			b, err := json.Marshal(params.Tags)
+			if err != nil {
+				return err
+			}
+			tagsJSON = string(b)
+		}
+		updates = append(updates, "tags = ?")
+		args = append(args, tagsJSON)
+	}
+
+	if len(updates) == 0 {
+		return fmt.Errorf("no fields to update")
+	}
+
+	updates = append(updates, "updated_at = ?")
+	args = append(args, now)
+	args = append(args, id)
+
+	query := "UPDATE tasks SET " + strings.Join(updates, ", ") + " WHERE id = ?"
+	res, err := s.db.Exec(query, args...)
+	if err != nil {
+		return err
+	}
+
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return fmt.Errorf("task not found")
+	}
+
+	return nil
 }
 
 // RequeueExpiredLeases finds expired leases and re-queues them or marks them as failed

@@ -157,7 +157,132 @@ func TestBroker_DisconnectRequeuesClaimedTasks(t *testing.T) {
 	}
 }
 
+// Test 3b: Clean disconnect does NOT requeue claimed tasks
+func TestBroker_CleanDisconnectDoesNotRequeue(t *testing.T) {
+	sockPath, cleanup := startTestBroker(t)
+	defer cleanup()
 
+	c, _ := client.Connect(sockPath)
+	c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "w-1"})
+
+	// Create and claim task
+	c.Send(protocol.Request{
+		Cmd:     protocol.CmdTaskCreate,
+		Payload: json.RawMessage(`{"desc":"test"}`),
+		Type:    "test",
+	})
+	resp, _ := c.Send(protocol.Request{Cmd: protocol.CmdTaskClaim})
+	if !resp.OK {
+		t.Fatalf("claim: %s", resp.Error)
+	}
+
+	// Clean disconnect (send disconnect command)
+	c.Send(protocol.Request{Cmd: protocol.CmdDisconnect})
+	c.Close()
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify task NOT re-queued (should still be claimed)
+	c2, _ := client.Connect(sockPath)
+	defer c2.Close()
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "w-2"})
+	resp, _ = c2.Send(protocol.Request{Cmd: protocol.CmdTaskClaim})
+	if resp.OK {
+		t.Error("task should NOT be re-queued after clean disconnect")
+	}
+}
+
+// Test 3c: Events subscribe returns raw event JSON (not wrapped in Response)
+func TestBroker_EventsSubscribeFormat(t *testing.T) {
+	sockPath, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c, _ := client.Connect(sockPath)
+	c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "subscriber"})
+
+	// Subscribe to task.events
+	resp, _ := c.Send(protocol.Request{Cmd: protocol.CmdSubscribe, Topic: "task.events"})
+	if !resp.OK {
+		t.Fatalf("subscribe: %s", resp.Error)
+	}
+
+	// Start reading events
+	eventCh, err := c.ReadStream()
+	if err != nil {
+		t.Fatalf("read stream: %v", err)
+	}
+
+	// Create a task to trigger an event
+	c2, _ := client.Connect(sockPath)
+	defer c2.Close()
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "creator"})
+	c2.Send(protocol.Request{
+		Cmd:     protocol.CmdTaskCreate,
+		Payload: json.RawMessage(`{"test":true}`),
+		Type:    "test",
+	})
+
+	// Read the event with timeout
+	select {
+	case evt := <-eventCh:
+		if evt.Topic != "task.events" {
+			t.Errorf("expected topic=task.events, got %q", evt.Topic)
+		}
+		if evt.Event != "task.created" {
+			t.Errorf("expected event=task.created, got %q", evt.Event)
+		}
+		if len(evt.Data) == 0 {
+			t.Error("expected event data")
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("timeout waiting for event")
+	}
+}
+
+// Test 3d: Status includes task counts by state
+func TestBroker_StatusIncludesTaskCounts(t *testing.T) {
+	sockPath, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c, _ := client.Connect(sockPath)
+	c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "w-1"})
+
+	// Create tasks in different states
+	c.Send(protocol.Request{
+		Cmd:     protocol.CmdTaskCreate,
+		Payload: json.RawMessage(`{"a":1}`),
+	})
+	c.Send(protocol.Request{
+		Cmd:     protocol.CmdTaskCreate,
+		Payload: json.RawMessage(`{"b":2}`),
+	})
+	// Claim one task
+	c.Send(protocol.Request{Cmd: protocol.CmdTaskClaim})
+
+	// Get status
+	resp, _ := c.Send(protocol.Request{Cmd: protocol.CmdStatus})
+	if !resp.OK {
+		t.Fatalf("status: %s", resp.Error)
+	}
+
+	var status map[string]interface{}
+	json.Unmarshal(resp.Data, &status)
+
+	// Check for task counts
+	tasks, ok := status["tasks"].(map[string]interface{})
+	if !ok {
+		t.Fatal("status should include tasks map")
+	}
+
+	pending := int(tasks["pending"].(float64))
+	claimed := int(tasks["claimed"].(float64))
+
+	if pending != 1 {
+		t.Errorf("expected 1 pending task, got %d", pending)
+	}
+	if claimed != 1 {
+		t.Errorf("expected 1 claimed task, got %d", claimed)
+	}
+}
 
 // Test 4: Disconnect unsubscribes from events
 func TestBroker_DisconnectUnsubscribesEvents(t *testing.T) {
@@ -294,4 +419,47 @@ func TestBroker_DisconnectOnlyRequeuesOwnTasks(t *testing.T) {
 	c2.Close()
 }
 
+// Test 6: Input validation rejects invalid values
+func TestBroker_InputValidation(t *testing.T) {
+	sockPath, cleanup := startTestBroker(t)
+	defer cleanup()
 
+	c, _ := client.Connect(sockPath)
+	c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "w-1"})
+
+	// Test negative priority
+	resp, _ := c.Send(protocol.Request{
+		Cmd:      protocol.CmdTaskCreate,
+		Payload:  json.RawMessage(`{"test":true}`),
+		Priority: -1,
+	})
+	if resp.OK {
+		t.Error("expected error for negative priority")
+	}
+	if resp.Code != protocol.ErrInvalidRequest {
+		t.Errorf("expected code=%s, got %s", protocol.ErrInvalidRequest, resp.Code)
+	}
+
+	// Test priority > 100
+	resp, _ = c.Send(protocol.Request{
+		Cmd:      protocol.CmdTaskCreate,
+		Payload:  json.RawMessage(`{"test":true}`),
+		Priority: 101,
+	})
+	if resp.OK {
+		t.Error("expected error for priority > 100")
+	}
+
+	// Test name too long (> 256 chars)
+	longName := string(make([]byte, 257))
+	for i := range longName {
+		longName = longName[:i] + "a"
+	}
+	resp, _ = c.Send(protocol.Request{
+		Cmd:  protocol.CmdConnect,
+		Name: longName,
+	})
+	if resp.OK {
+		t.Error("expected error for name > 256 chars")
+	}
+}
