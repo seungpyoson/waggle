@@ -88,8 +88,16 @@ if [ -n "$TASKS" ]; then
     TASK_COUNT=$(echo "$TASKS" | jq -r '.data | length' 2>/dev/null || echo "0")
 fi
 
-# 8. Output context only if there's something to report
-if [ "$INBOX_COUNT" != "0" ] || [ "$TASK_COUNT" != "0" ]; then
+# 8. Check connected agents (2s timeout)
+SESSIONS=$($TIMEOUT_CMD 2 waggle sessions 2>/dev/null) || SESSIONS=""
+SESSION_COUNT=0
+if [ -n "$SESSIONS" ]; then
+    # Count only non-ephemeral sessions (not starting with _)
+    SESSION_COUNT=$(echo "$SESSIONS" | jq -r '[.data[] | select(.name | startswith("_") | not)] | length' 2>/dev/null || echo "0")
+fi
+
+# 9. Output context only if there's something to report
+if [ "$INBOX_COUNT" != "0" ] || [ "$TASK_COUNT" != "0" ] || [ "$SESSION_COUNT" != "0" ]; then
     echo ""
     echo "## Waggle Agent: ${AGENT_NAME}"
     echo ""
@@ -101,6 +109,11 @@ if [ "$INBOX_COUNT" != "0" ] || [ "$TASK_COUNT" != "0" ]; then
     if [ "$TASK_COUNT" != "0" ]; then
         echo "### Pending Tasks (${TASK_COUNT})"
         echo "$TASKS" | jq -r '.data[] | "- #\(.ID) [\(.Type // "untyped")]: \(.Payload)"' 2>/dev/null || true
+        echo ""
+    fi
+    if [ "$SESSION_COUNT" != "0" ]; then
+        echo "### Connected Agents (${SESSION_COUNT})"
+        echo "$SESSIONS" | jq -r '.data[] | select(.name | startswith("_") | not) | "- \(.name) (\(.state))"' 2>/dev/null || true
         echo ""
     fi
     echo "Use \`/waggle\` commands to interact. Agent name: \`${AGENT_NAME}\`"
