@@ -81,7 +81,10 @@ var listenCmd = &cobra.Command{
 					output.Sync()
 				}
 			case <-sigCh:
-				disconnectAndClose(c)
+				// Close connection directly — NOT disconnectAndClose.
+				// disconnectAndClose calls c.Send() which races with the ReadMessages goroutine
+				// that's concurrently calling c.scanner.Scan(). bufio.Scanner is NOT goroutine-safe.
+				c.Close()
 				return nil
 			}
 		}

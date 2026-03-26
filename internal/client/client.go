@@ -107,8 +107,12 @@ type PushedMessage struct {
 
 // ReadMessages returns a channel that receives pushed messages from the broker.
 // Filters out non-message responses (connect responses, etc).
+//
+// IMPORTANT: This method takes exclusive ownership of the connection's read stream.
+// After calling ReadMessages, do NOT call Send, Receive, or ReadStream on the same client.
+// The goroutine exits when the connection is closed.
 func (c *Client) ReadMessages() (<-chan PushedMessage, error) {
-	ch := make(chan PushedMessage)
+	ch := make(chan PushedMessage, 64) // buffered to prevent goroutine leak if reader is slow
 	go func() {
 		defer close(ch)
 		for c.scanner.Scan() {

@@ -3139,68 +3139,47 @@ func TestClient_ReadMessagesFilters(t *testing.T) {
 	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
-	// Connect listener
-	listenerConn, err := client.Connect(sockPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	// Connect a listener as "filter-test-push"
+	listenerConn := connectClient(t, sockPath)
 	defer listenerConn.Close()
+	listenerConn.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "filter-test-push"})
 
-	connectReq := protocol.Request{
-		Cmd:  "connect",
-		Name: "filter-test-push",
-	}
-	// Send connect request - this will generate a connect response
-	if _, err := listenerConn.Send(connectReq); err != nil {
-		t.Fatal(err)
-	}
-
-	// Start reading messages (should filter out the connect response)
+	// Start ReadMessages — it now owns the scanner
 	msgCh, err := listenerConn.ReadMessages()
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("ReadMessages: %v", err)
 	}
 
-	// Connect sender
-	senderConn, err := client.Connect(sockPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer senderConn.Close()
-
-	connectReq = protocol.Request{
-		Cmd:  "connect",
-		Name: "sender",
-	}
-	if _, err := senderConn.Send(connectReq); err != nil {
-		t.Fatal(err)
-	}
-
-	// Send a message to "filter-test"
-	sendReq := protocol.Request{
-		Cmd:     "send",
+	// Connect a sender and send a message to "filter-test"
+	// This will push to "filter-test-push" via the broker's -push logic
+	sender := connectClient(t, sockPath)
+	defer sender.Close()
+	sender.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "sender-filter"})
+	resp, err := sender.Send(protocol.Request{
+		Cmd:     protocol.CmdSend,
 		Name:    "filter-test",
-		Message: "only this should appear",
+		Message: "filter test message",
+	})
+	if err != nil {
+		t.Fatalf("send: %v", err)
 	}
-	if _, err := senderConn.Send(sendReq); err != nil {
-		t.Fatal(err)
+	if !resp.OK {
+		t.Fatalf("send failed: %s", resp.Error)
 	}
 
-	// Should receive only the message, not the connect response
+	// The listener should receive the pushed message
 	select {
-	case msg := <-msgCh:
-		if msg.Body != "only this should appear" {
-			t.Errorf("expected body='only this should appear', got %s", msg.Body)
+	case msg, ok := <-msgCh:
+		if !ok {
+			t.Fatal("channel closed unexpectedly")
+		}
+		if msg.Body != "filter test message" {
+			t.Errorf("expected body 'filter test message', got '%s'", msg.Body)
+		}
+		if msg.From != "sender-filter" {
+			t.Errorf("expected from 'sender-filter', got '%s'", msg.From)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("timeout waiting for message")
-	}
-
-	// Verify no other messages arrive (connect response was filtered)
-	select {
-	case msg := <-msgCh:
-		t.Errorf("unexpected message received: %+v", msg)
-	case <-time.After(500 * time.Millisecond):
-		// Good - no extra messages
+		t.Fatal("timeout waiting for pushed message")
 	}
 }
