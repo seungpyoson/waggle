@@ -83,6 +83,138 @@ func readStream(t *testing.T, c *client.Client) <-chan protocol.Event {
 	return ch
 }
 
+// TestBroker_SessionsCommand — D1: connect "alice" and "bob", send CmdPresence, response contains both
+func TestBroker_SessionsCommand(t *testing.T) {
+	sockPath, _, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c1 := connectClient(t, sockPath)
+	defer c1.Close()
+	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+
+	c2 := connectClient(t, sockPath)
+	defer c2.Close()
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+
+	// Use a third client for discovery
+	c3 := connectClient(t, sockPath)
+	defer c3.Close()
+	c3.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "_discovery-test"})
+
+	resp, _ := c3.Send(protocol.Request{Cmd: protocol.CmdPresence})
+	if !resp.OK {
+		t.Fatalf("presence: %s", resp.Error)
+	}
+
+	var agents []map[string]string
+	json.Unmarshal(resp.Data, &agents)
+
+	names := make(map[string]bool)
+	for _, a := range agents {
+		names[a["name"]] = true
+	}
+	if !names["alice"] {
+		t.Error("alice not in sessions")
+	}
+	if !names["bob"] {
+		t.Error("bob not in sessions")
+	}
+}
+
+// TestBroker_SessionsAfterDisconnect — D2: disconnected agents not listed
+func TestBroker_SessionsAfterDisconnect(t *testing.T) {
+	sockPath, _, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c1 := connectClient(t, sockPath)
+	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+
+	c2 := connectClient(t, sockPath)
+	defer c2.Close()
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+
+	// Disconnect alice
+	c1.Send(protocol.Request{Cmd: protocol.CmdDisconnect})
+	c1.Close()
+	time.Sleep(100 * time.Millisecond)
+
+	// Check from bob
+	resp, _ := c2.Send(protocol.Request{Cmd: protocol.CmdPresence})
+	var agents []map[string]string
+	json.Unmarshal(resp.Data, &agents)
+
+	for _, a := range agents {
+		if a["name"] == "alice" {
+			t.Error("alice should not be listed after disconnect")
+		}
+	}
+}
+
+// TestBroker_SessionsSorted — D4: results sorted alphabetically
+func TestBroker_SessionsSorted(t *testing.T) {
+	sockPath, _, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	// Connect bob first, then alice
+	c1 := connectClient(t, sockPath)
+	defer c1.Close()
+	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+
+	c2 := connectClient(t, sockPath)
+	defer c2.Close()
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+
+	resp, _ := c1.Send(protocol.Request{Cmd: protocol.CmdPresence})
+	var agents []map[string]string
+	json.Unmarshal(resp.Data, &agents)
+
+	if len(agents) < 2 {
+		t.Fatalf("expected at least 2 agents, got %d", len(agents))
+	}
+	// Find alice and bob positions
+	aliceIdx, bobIdx := -1, -1
+	for i, a := range agents {
+		if a["name"] == "alice" {
+			aliceIdx = i
+		}
+		if a["name"] == "bob" {
+			bobIdx = i
+		}
+	}
+	if aliceIdx == -1 || bobIdx == -1 {
+		t.Fatal("alice or bob not found")
+	}
+	if aliceIdx > bobIdx {
+		t.Errorf("alice (idx=%d) should come before bob (idx=%d)", aliceIdx, bobIdx)
+	}
+}
+
+// TestBroker_SessionsEmpty — D5: no agents returns empty array
+func TestBroker_SessionsEmpty(t *testing.T) {
+	sockPath, _, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c := connectClient(t, sockPath)
+	defer c.Close()
+	c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "_discovery-empty"})
+
+	resp, _ := c.Send(protocol.Request{Cmd: protocol.CmdPresence})
+	var agents []map[string]string
+	json.Unmarshal(resp.Data, &agents)
+
+	// Should contain at least the discovery session itself
+	// but filter: only non-underscore names should be empty
+	realAgents := 0
+	for _, a := range agents {
+		if a["name"] != "" && a["name"][0] != '_' {
+			realAgents++
+		}
+	}
+	if realAgents != 0 {
+		t.Errorf("expected 0 non-ephemeral agents, got %d", realAgents)
+	}
+}
+
 // Test 1: Full round trip — create, claim, complete
 func TestBroker_FullRoundTrip_CreateClaimComplete(t *testing.T) {
 	sockPath, _, cleanup := startTestBroker(t)
