@@ -52,7 +52,7 @@ This is critical: streaming commands (`listen`, `events subscribe`) enter long-r
 
 **Fallback cleanup on timeout:** If `connectToBroker()` fails with a timeout error (dial or handshake), it cleans up the socket and PID files before returning the error. This handles the case where `IsResponding()` gave a false positive (e.g., zombie's backlog was full on probe but freed a slot before the real connect). The next command invocation will detect no broker and auto-start a fresh one.
 
-**Retry within same invocation:** If `connectToBroker()` fails with a timeout and cleanup succeeds, `PersistentPreRunE` retries the auto-start flow once (cleanup → start fresh broker → reconnect). This ensures the first command after a zombie succeeds rather than requiring the user to run it twice.
+**No same-invocation retry:** If a zombie slips past `IsResponding()` (e.g., backlog slot freed between probe and real connect), `connectToBroker()` times out, cleans up stale files, and returns an error. The next command auto-starts a fresh broker. A same-invocation retry was considered but rejected — the probe catches 99%+ of zombies, and the added complexity isn't justified for the narrow edge case.
 
 ### 4. broker.IsResponding() — zombie detection
 
@@ -107,7 +107,7 @@ waggle: unresponsive broker (PID %d) detected, starting fresh instance
 These must hold after the fix:
 
 1. **No command hangs >ConnectTimeout on zombie broker** — any command that connects to a zombie fails or auto-recovers within 5s
-2. **Auto-recovery from zombie** — first command after zombie: detects zombie (~1s probe), cleans up, starts fresh broker (~1s), retries connection within same invocation. Total ~2-3s, then normal. **Edge case:** if zombie holds a SQLite write lock, the new broker's first write may fail with SQLITE_BUSY after `busy_timeout` (5s). This is self-healing — the zombie's lock is released when it eventually exits.
+2. **Auto-recovery from zombie** — first command after zombie: detects zombie (~1s probe), cleans up, starts fresh broker (~1s), connects. Total ~2-3s, then normal. If probe misses (narrow edge case), first command times out and cleans up; second command auto-starts. **Edge case:** if zombie holds a SQLite write lock, the new broker's first write may fail with SQLITE_BUSY after `busy_timeout` (5s). This is self-healing — the zombie's lock is released when it eventually exits.
 3. **Streaming commands work beyond ConnectTimeout** — `waggle listen` and `waggle events subscribe` can stream messages for hours after handshake
 4. **Healthy broker: negligible overhead** — when broker is healthy, `IsResponding()` completes in low milliseconds (local Unix socket dial+send+read round-trip), no user-visible latency
 5. **No process killed** — zombie detection never sends signals to other processes. Cleanup is file-only (socket, PID).

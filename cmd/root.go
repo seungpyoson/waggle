@@ -2,7 +2,9 @@ package cmd
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -54,8 +56,11 @@ var (
 			if broker.IsRunning(paths.PID) {
 				if !broker.IsResponding(paths.Socket, config.Defaults.HealthCheckTimeout) {
 					// Zombie: process exists but not responding — warn, clean up, restart
-					pid, _ := broker.ReadPID(paths.PID)
-					fmt.Fprintf(os.Stderr, "waggle: unresponsive broker (PID %d) detected, starting fresh instance\n", pid)
+					if pid, err := broker.ReadPID(paths.PID); err == nil {
+						fmt.Fprintf(os.Stderr, "waggle: unresponsive broker (PID %d) detected, starting fresh instance\n", pid)
+					} else {
+						fmt.Fprintf(os.Stderr, "waggle: unresponsive broker detected, starting fresh instance\n")
+					}
 					os.Remove(paths.Socket)
 					os.Remove(paths.PID)
 					needsStart = true
@@ -134,8 +139,11 @@ func connectToBroker(name string) (*client.Client, error) {
 	})
 	if err != nil {
 		c.Close()
-		// On timeout, clean up stale files so retry/next invocation can auto-start
-		cleanupStaleFiles()
+		// Only cleanup stale files on timeout errors (zombie broker).
+		// Other errors (protocol, etc.) should not trigger cleanup.
+		if isTimeoutError(err) {
+			cleanupStaleFiles()
+		}
 		return nil, err
 	}
 
@@ -151,6 +159,12 @@ func connectToBroker(name string) (*client.Client, error) {
 	}
 
 	return c, nil
+}
+
+// isTimeoutError returns true if the error is a network timeout.
+func isTimeoutError(err error) bool {
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 // cleanupStaleFiles removes socket and PID files when a connect timeout
