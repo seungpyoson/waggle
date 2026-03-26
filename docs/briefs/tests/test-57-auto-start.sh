@@ -1,6 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
+# Set WAGGLE_ROOT so tests work from any directory
+export WAGGLE_ROOT="${HOME}"
+
 PASS=0
 FAIL=0
 
@@ -12,7 +15,7 @@ assert_broker_stopped() {
     ! waggle --no-auto-start status >/dev/null 2>&1
 }
 stop_broker() {
-    pkill -f "waggle.*start" 2>/dev/null || true
+    pkill -f "waggle.*--foreground" 2>/dev/null || true
     sleep 1
 }
 
@@ -32,9 +35,9 @@ stop_broker
 echo "TEST: no_duplicate"
 waggle start
 sleep 0.5
-PID1=$(cat ~/.waggle/broker.pid 2>/dev/null || pgrep -f "waggle.*start" | head -1)
+PID1=$(pgrep -f "waggle.*--foreground" | head -1)
 WAGGLE_AGENT_NAME=test-$$ bash ~/.claude/hooks/waggle-connect.sh
-PID2=$(cat ~/.waggle/broker.pid 2>/dev/null || pgrep -f "waggle.*start" | head -1)
+PID2=$(pgrep -f "waggle.*--foreground" | head -1)
 if [ "$PID1" = "$PID2" ]; then
     echo "  PASS"; ((PASS++))
 else
@@ -63,7 +66,7 @@ for i in 1 2 3; do
     WAGGLE_AGENT_NAME=test-$$-$i bash ~/.claude/hooks/waggle-connect.sh &
 done
 wait
-BROKER_COUNT=$(pgrep -f "waggle start" | wc -l | tr -d ' ')
+BROKER_COUNT=$(pgrep -f "waggle.*--foreground" | wc -l | tr -d ' ')
 if [ "$BROKER_COUNT" -le 1 ]; then
     echo "  PASS ($BROKER_COUNT broker)"; ((PASS++))
 else
@@ -81,6 +84,29 @@ if echo "$OUTPUT" | grep -q "Pending Tasks"; then
     echo "  PASS"; ((PASS++))
 else
     echo "  FAIL: hook did not show pending tasks"; ((FAIL++))
+fi
+stop_broker
+
+# test_no_waggle — A6
+echo "TEST: no_waggle"
+stop_broker
+OUTPUT=$(PATH="/usr/bin:/bin" WAGGLE_AGENT_NAME=test-$$ bash ~/.claude/hooks/waggle-connect.sh 2>&1) || true
+if [ -z "$OUTPUT" ]; then
+    echo "  PASS"; ((PASS++))
+else
+    echo "  FAIL: hook produced output without waggle on PATH"; ((FAIL++))
+fi
+
+# test_any_directory — A7
+echo "TEST: any_directory"
+stop_broker
+(cd /tmp && WAGGLE_AGENT_NAME=test-$$ bash ~/.claude/hooks/waggle-connect.sh)
+# When hook runs from /tmp (non-git), it uses WAGGLE_ROOT=$HOME
+# So we need to check status with the same WAGGLE_ROOT
+if (cd /tmp && WAGGLE_ROOT="$HOME" waggle --no-auto-start status >/dev/null 2>&1); then
+    echo "  PASS"; ((PASS++))
+else
+    echo "  FAIL: broker not running after hook from /tmp"; ((FAIL++))
 fi
 stop_broker
 
