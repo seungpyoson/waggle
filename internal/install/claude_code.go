@@ -101,25 +101,28 @@ func uninstallClaudeCode(homeDir string) error {
 	return nil
 }
 
+// readSettingsJSON reads and parses settings.json.
+// Always returns a usable map — missing, empty, or corrupted files
+// produce an empty map. The file is input, not a precondition.
+func readSettingsJSON(path string) (map[string]interface{}, error) {
+	data, err := os.ReadFile(path)
+	if err != nil || len(data) == 0 {
+		return make(map[string]interface{}), nil
+	}
+	var settings map[string]interface{}
+	if err := json.Unmarshal(data, &settings); err != nil {
+		return make(map[string]interface{}), nil
+	}
+	return settings, nil
+}
+
 // registerSessionStartHook adds the waggle hook to settings.json SessionStart array.
 // Uses JSON parsing to safely merge without overwriting existing hooks.
 func registerSessionStartHook(claudeDir string) error {
 	settingsPath := filepath.Join(claudeDir, "settings.json")
 
 	// Read existing settings
-	var settings map[string]interface{}
-	data, err := os.ReadFile(settingsPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			settings = make(map[string]interface{})
-		} else {
-			return fmt.Errorf("reading settings: %w", err)
-		}
-	} else {
-		if err := json.Unmarshal(data, &settings); err != nil {
-			return fmt.Errorf("parsing settings: %w", err)
-		}
-	}
+	settings, _ := readSettingsJSON(settingsPath)
 
 	// Get or create hooks section
 	hooks, _ := settings["hooks"].(map[string]interface{})
@@ -173,15 +176,7 @@ func registerSessionStartHook(claudeDir string) error {
 func deregisterSessionStartHook(claudeDir string) error {
 	settingsPath := filepath.Join(claudeDir, "settings.json")
 
-	data, err := os.ReadFile(settingsPath)
-	if err != nil {
-		return nil // no settings = nothing to deregister
-	}
-
-	var settings map[string]interface{}
-	if err := json.Unmarshal(data, &settings); err != nil {
-		return fmt.Errorf("parsing settings: %w", err)
-	}
+	settings, _ := readSettingsJSON(settingsPath)
 
 	hooks, _ := settings["hooks"].(map[string]interface{})
 	if hooks == nil {

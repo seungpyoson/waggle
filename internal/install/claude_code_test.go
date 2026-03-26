@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -459,5 +460,88 @@ func TestEmbeddedFilesMatchSource(t *testing.T) {
 
 	if len(sourceFiles) != len(embedFiles) {
 		t.Errorf("file count mismatch: source=%d, embed=%d", len(sourceFiles), len(embedFiles))
+	}
+}
+
+func TestInstall_EmptySettingsJSON(t *testing.T) {
+	tmpHome := t.TempDir()
+	claudeDir := filepath.Join(tmpHome, ".claude")
+	os.MkdirAll(claudeDir, 0755)
+	os.WriteFile(filepath.Join(claudeDir, "settings.json"), []byte(""), 0644)
+
+	err := installClaudeCode(tmpHome)
+	if err != nil {
+		t.Fatalf("install failed with empty settings.json: %v", err)
+	}
+
+	// Verify settings.json is now valid with waggle hook
+	data, _ := os.ReadFile(filepath.Join(claudeDir, "settings.json"))
+	var settings map[string]interface{}
+	if err := json.Unmarshal(data, &settings); err != nil {
+		t.Fatalf("settings.json is not valid JSON after install: %v", err)
+	}
+	hooks, ok := settings["hooks"].(map[string]interface{})
+	if !ok {
+		t.Fatal("no hooks section in settings.json")
+	}
+	sessionStart, ok := hooks["SessionStart"].([]interface{})
+	if !ok {
+		t.Fatal("no SessionStart in hooks")
+	}
+	found := false
+	for _, entry := range sessionStart {
+		if entryMap, ok := entry.(map[string]interface{}); ok {
+			if entryHooks, ok := entryMap["hooks"].([]interface{}); ok {
+				for _, h := range entryHooks {
+					if hMap, ok := h.(map[string]interface{}); ok {
+						if cmd, ok := hMap["command"].(string); ok && strings.Contains(cmd, "waggle") {
+							found = true
+						}
+					}
+				}
+			}
+		}
+	}
+	if !found {
+		t.Error("waggle hook not found in SessionStart")
+	}
+}
+
+func TestInstall_CorruptedSettingsJSON(t *testing.T) {
+	tmpHome := t.TempDir()
+	claudeDir := filepath.Join(tmpHome, ".claude")
+	os.MkdirAll(claudeDir, 0755)
+	os.WriteFile(filepath.Join(claudeDir, "settings.json"), []byte("not json{{"), 0644)
+
+	err := installClaudeCode(tmpHome)
+	if err != nil {
+		t.Fatalf("install failed with corrupted settings.json: %v", err)
+	}
+
+	// Verify settings.json is now valid with waggle hook
+	data, _ := os.ReadFile(filepath.Join(claudeDir, "settings.json"))
+	var settings map[string]interface{}
+	if err := json.Unmarshal(data, &settings); err != nil {
+		t.Fatalf("settings.json is not valid JSON after install: %v", err)
+	}
+	hooks, ok := settings["hooks"].(map[string]interface{})
+	if !ok {
+		t.Fatal("no hooks section in settings.json")
+	}
+	_, ok = hooks["SessionStart"].([]interface{})
+	if !ok {
+		t.Fatal("no SessionStart in hooks")
+	}
+}
+
+func TestUninstall_EmptySettingsJSON(t *testing.T) {
+	tmpHome := t.TempDir()
+	claudeDir := filepath.Join(tmpHome, ".claude")
+	os.MkdirAll(claudeDir, 0755)
+	os.WriteFile(filepath.Join(claudeDir, "settings.json"), []byte(""), 0644)
+
+	err := uninstallClaudeCode(tmpHome)
+	if err != nil {
+		t.Fatalf("uninstall failed with empty settings.json: %v", err)
 	}
 }
