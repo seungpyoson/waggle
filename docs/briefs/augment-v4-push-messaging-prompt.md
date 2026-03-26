@@ -137,6 +137,7 @@ Phase E: PR (do NOT merge)
 9. **Errors are loud.** Every error is returned or logged. No `_ = err`.
 10. **Reuse existing patterns.** Read the codebase before writing new code. Match existing style.
 11. **Hook scripts must be fast.** SessionStart: <3s total. PreToolUse: <100ms.
+12. **CLI commands must work with `--help` from any directory.** Every new CLI command must be tested with `cd /tmp && waggle <cmd> --help` — must print help and exit 0. No broker or project context required for help text. (See #65.)
 
 ### Issue-Specific Notes
 

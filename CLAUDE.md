@@ -30,6 +30,8 @@ Read `docs/superpowers/specs/2026-03-24-waggle-design.md` before making changes.
 - **No dual paths** — One way to do each thing
 - **Fail loud** — Errors surface immediately with context
 - **Broker is dumb, agents are smart** — Broker routes, agents own semantics
+- **Never block the host** — Hooks, CLI `--help`, and any code that runs at session start must work in degraded state (no broker, no git, no network). Max 3s, exit 0 on failure. Test from `/tmp` with broker killed.
+- **CLI `--help` needs nothing** — Every CLI command's `--help` must work from any directory without a broker or project context
 
 ### Code Structure
 
