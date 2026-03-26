@@ -119,7 +119,25 @@ func handlePublish(s *Session, req protocol.Request) protocol.Response {
 	if req.Topic == "" {
 		return protocol.ErrResponse(protocol.ErrInvalidRequest, "topic required")
 	}
-	s.broker.hub.Publish(req.Topic, []byte(req.Message))
+
+	// Validate JSON if message is provided
+	if req.Message != "" && !json.Valid([]byte(req.Message)) {
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, "message must be valid JSON")
+	}
+
+	// Build event data
+	var data json.RawMessage
+	if req.Message != "" {
+		data = json.RawMessage(req.Message)
+	}
+
+	evt := protocol.Event{
+		Topic: req.Topic,
+		Event: "custom",
+		Data:  data,
+		TS:    time.Now().UTC().Format(time.RFC3339),
+	}
+	s.broker.hub.Publish(req.Topic, mustMarshal(evt))
 	return protocol.OKResponse(nil)
 }
 
