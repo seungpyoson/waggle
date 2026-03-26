@@ -2238,3 +2238,315 @@ func TestBroker_PresenceEventOnDisconnect(t *testing.T) {
 		t.Fatal("timeout waiting for presence.offline event")
 	}
 }
+
+// TestBroker_CreateTaskWithTTL verifies task creation with TTL via protocol
+func TestBroker_CreateTaskWithTTL(t *testing.T) {
+	sockPath, b, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c, err := client.Connect(sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	// Connect
+	resp, _ := c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "cli"})
+	if !resp.OK {
+		t.Fatalf("connect failed: %s", resp.Error)
+	}
+
+	// Create task with TTL=60
+	resp, _ = c.Send(protocol.Request{
+		Cmd:     protocol.CmdTaskCreate,
+		Payload: json.RawMessage(`{"desc":"ttl test"}`),
+		Type:    "test",
+		TTL:     60,
+	})
+	if !resp.OK {
+		t.Fatalf("task create failed: %s", resp.Error)
+	}
+
+	// Verify TTL is stored
+	var taskData struct {
+		ID int64 `json:"id"`
+	}
+	json.Unmarshal(resp.Data, &taskData)
+	task, err := b.store.Get(taskData.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.TTL != 60 {
+		t.Errorf("expected TTL=60, got %d", task.TTL)
+	}
+}
+
+// TestBroker_TaskTTLCheckerRuns verifies the TTL checker goroutine runs
+func TestBroker_TaskTTLCheckerRuns(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+
+	sockPath := fmt.Sprintf("/tmp/waggle-test-%d.sock", time.Now().UnixNano())
+	dbPath := fmt.Sprintf("%s/db", tmpDir)
+
+	// Create broker with short task TTL check period
+	b, err := New(Config{
+		SocketPath:         sockPath,
+		DBPath:             dbPath,
+		TaskTTLCheckPeriod: 500 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	go b.Serve()
+	time.Sleep(100 * time.Millisecond)
+	defer func() {
+		b.Shutdown()
+		os.Remove(sockPath)
+	}()
+
+	c, err := client.Connect(sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	// Connect
+	resp, _ := c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "cli"})
+	if !resp.OK {
+		t.Fatalf("connect failed: %s", resp.Error)
+	}
+
+	// Create task with TTL=1 second
+	resp, _ = c.Send(protocol.Request{
+		Cmd:     protocol.CmdTaskCreate,
+		Payload: json.RawMessage(`{"desc":"expires soon"}`),
+		Type:    "test",
+		TTL:     1,
+	})
+	if !resp.OK {
+		t.Fatalf("task create failed: %s", resp.Error)
+	}
+
+	var taskData struct {
+		ID int64 `json:"id"`
+	}
+	json.Unmarshal(resp.Data, &taskData)
+	taskID := taskData.ID
+
+	// Wait for TTL to expire + checker to run
+	time.Sleep(3 * time.Second)
+
+	// Query state directly to prove goroutine ran
+	task, err := b.store.Get(taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.State != "canceled" {
+		t.Errorf("expected state=canceled, got %s", task.State)
+	}
+	if task.FailureReason != "ttl_expired" {
+		t.Errorf("expected failure_reason=ttl_expired, got %s", task.FailureReason)
+	}
+}
+
+// TestBroker_StatusQueueHealth verifies status includes queue health
+func TestBroker_StatusQueueHealth(t *testing.T) {
+	sockPath, _, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c, err := client.Connect(sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	// Connect
+	resp, _ := c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "cli"})
+	if !resp.OK {
+		t.Fatalf("connect failed: %s", resp.Error)
+	}
+
+	// Create 2 tasks
+	for i := 0; i < 2; i++ {
+		resp, _ = c.Send(protocol.Request{
+			Cmd:     protocol.CmdTaskCreate,
+			Payload: json.RawMessage(fmt.Sprintf(`{"desc":"task %d"}`, i)),
+			Type:    "test",
+		})
+		if !resp.OK {
+			t.Fatalf("task create failed: %s", resp.Error)
+		}
+	}
+
+	// Get status
+	resp, _ = c.Send(protocol.Request{Cmd: protocol.CmdStatus})
+	if !resp.OK {
+		t.Fatalf("status failed: %s", resp.Error)
+	}
+
+	// Verify queue_health is present
+	var statusData map[string]interface{}
+	json.Unmarshal(resp.Data, &statusData)
+	queueHealth, ok := statusData["queue_health"]
+	if !ok {
+		t.Fatal("expected queue_health in status")
+	}
+
+	health := queueHealth.(map[string]interface{})
+	if health["pending_count"].(float64) != 2 {
+		t.Errorf("expected pending_count=2, got %v", health["pending_count"])
+	}
+}
+
+// TestBroker_TaskStaleEvent verifies task.stale event is published
+func TestBroker_TaskStaleEvent(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+
+	sockPath := fmt.Sprintf("/tmp/waggle-test-%d.sock", time.Now().UnixNano())
+	dbPath := fmt.Sprintf("%s/db", tmpDir)
+
+	// Create broker with short task TTL check period and stale threshold
+	b, err := New(Config{
+		SocketPath:         sockPath,
+		DBPath:             dbPath,
+		TaskTTLCheckPeriod: 500 * time.Millisecond,
+		TaskStaleThreshold: 1 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	go b.Serve()
+	time.Sleep(100 * time.Millisecond)
+	defer func() {
+		b.Shutdown()
+		os.Remove(sockPath)
+	}()
+
+	// Subscriber client
+	c1, err := client.Connect(sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c1.Close()
+
+	// Connect subscriber
+	resp, _ := c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "subscriber"})
+	if !resp.OK {
+		t.Fatalf("connect failed: %s", resp.Error)
+	}
+
+	// Subscribe to task.events
+	resp, _ = c1.Send(protocol.Request{
+		Cmd:   protocol.CmdSubscribe,
+		Topic: "task.events",
+	})
+	if !resp.OK {
+		t.Fatalf("subscribe failed: %s", resp.Error)
+	}
+
+	// Start reading events
+	eventCh, err := c1.ReadStream()
+	if err != nil {
+		t.Fatalf("read stream: %v", err)
+	}
+
+	// Creator client (separate connection to avoid protocol race)
+	c2, err := client.Connect(sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c2.Close()
+
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "creator"})
+
+	// Create task (will become stale after 1 second)
+	resp, _ = c2.Send(protocol.Request{
+		Cmd:     protocol.CmdTaskCreate,
+		Payload: json.RawMessage(`{"desc":"stale task"}`),
+		Type:    "test",
+	})
+	if !resp.OK {
+		t.Fatalf("task create failed: %s", resp.Error)
+	}
+
+	// Wait for task.stale event with timeout
+	timeout := time.After(5 * time.Second)
+	var staleEvent protocol.Event
+	foundStale := false
+
+	for !foundStale {
+		select {
+		case evt := <-eventCh:
+			if evt.Event == "task.stale" {
+				staleEvent = evt
+				foundStale = true
+			}
+		case <-timeout:
+			t.Fatal("timeout waiting for task.stale event")
+		}
+	}
+
+	// Verify the stale event
+	if staleEvent.Event != "task.stale" {
+		t.Errorf("expected event=task.stale, got %s", staleEvent.Event)
+	}
+
+	// Parse the event data
+	var data map[string]interface{}
+	if err := json.Unmarshal(staleEvent.Data, &data); err != nil {
+		t.Fatalf("failed to parse event data: %v", err)
+	}
+
+	// Verify stale_count > 0
+	staleCount, ok := data["stale_count"].(float64)
+	if !ok || staleCount <= 0 {
+		t.Errorf("expected stale_count > 0, got %v", data["stale_count"])
+	}
+
+	// Verify oldest_age_seconds > 0
+	oldestAge, ok := data["oldest_age_seconds"].(float64)
+	if !ok || oldestAge <= 0 {
+		t.Errorf("expected oldest_age_seconds > 0, got %v", data["oldest_age_seconds"])
+	}
+}
+
+func TestBroker_CreateTaskWithInvalidTTL(t *testing.T) {
+	sockPath, _, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c, _ := client.Connect(sockPath)
+	defer c.Close()
+	c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "cli"})
+
+	// Negative TTL
+	resp, _ := c.Send(protocol.Request{
+		Cmd:     protocol.CmdTaskCreate,
+		Payload: json.RawMessage(`{"desc":"neg ttl"}`),
+		Type:    "test",
+		TTL:     -1,
+	})
+	if resp.OK {
+		t.Fatal("expected error for negative TTL")
+	}
+	if resp.Code != protocol.ErrInvalidRequest {
+		t.Errorf("expected code=%s, got %s", protocol.ErrInvalidRequest, resp.Code)
+	}
+
+	// Exceeds max TTL
+	resp, _ = c.Send(protocol.Request{
+		Cmd:     protocol.CmdTaskCreate,
+		Payload: json.RawMessage(`{"desc":"big ttl"}`),
+		Type:    "test",
+		TTL:     config.Defaults.MaxTaskTTL + 1,
+	})
+	if resp.OK {
+		t.Fatal("expected error for TTL exceeding max")
+	}
+	if resp.Code != protocol.ErrInvalidRequest {
+		t.Errorf("expected code=%s, got %s", protocol.ErrInvalidRequest, resp.Code)
+	}
+}

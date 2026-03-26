@@ -180,6 +180,15 @@ func handleTaskCreate(s *Session, req protocol.Request) protocol.Response {
 		}
 	}
 
+	// Validate TTL
+	if req.TTL < 0 {
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, "ttl must be non-negative")
+	}
+	if req.TTL > config.Defaults.MaxTaskTTL {
+		return protocol.ErrResponse(protocol.ErrInvalidRequest,
+			fmt.Sprintf("ttl exceeds maximum (%d seconds)", config.Defaults.MaxTaskTTL))
+	}
+
 	task, err := s.broker.store.Create(tasks.CreateParams{
 		IdempotencyKey: req.IdempotencyKey,
 		Type:           req.Type,
@@ -189,6 +198,7 @@ func handleTaskCreate(s *Session, req protocol.Request) protocol.Response {
 		DependsOn:      dependsOn,
 		LeaseDuration:  req.Lease,
 		MaxRetries:     req.MaxRetries,
+		TTL:            req.TTL,
 	})
 	if err != nil {
 		return protocol.ErrResponse(protocol.ErrInternalError, err.Error())
@@ -458,6 +468,12 @@ func handleStatus(s *Session) protocol.Response {
 		"locks":       s.broker.lockMgr.Count(),
 		"tasks":       taskCounts,
 		"spawned":     s.broker.spawnMgr.List(),
+	}
+
+	// Add queue health
+	health, err := s.broker.store.QueueHealth(s.broker.config.TaskStaleThreshold)
+	if err == nil {
+		status["queue_health"] = health
 	}
 
 	data, _ := json.Marshal(status)

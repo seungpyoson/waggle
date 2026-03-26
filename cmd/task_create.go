@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"encoding/json"
+	"fmt"
+	"time"
 
 	"github.com/seungpyoson/waggle/internal/protocol"
 	"github.com/spf13/cobra"
@@ -15,6 +17,7 @@ var (
 	taskMaxRetries    int
 	taskPriority      int
 	taskIdempotencyKey string
+	taskCreateTTL     string
 )
 
 func init() {
@@ -25,6 +28,7 @@ func init() {
 	taskCreateCmd.Flags().IntVar(&taskMaxRetries, "max-retries", 0, "Maximum retries")
 	taskCreateCmd.Flags().IntVar(&taskPriority, "priority", 0, "Task priority")
 	taskCreateCmd.Flags().StringVar(&taskIdempotencyKey, "idempotency-key", "", "Idempotency key")
+	taskCreateCmd.Flags().StringVar(&taskCreateTTL, "ttl", "", "Task TTL (e.g., '5m', '1h', '30s') — auto-cancel if unclaimed")
 	taskCmd.AddCommand(taskCreateCmd)
 }
 
@@ -42,6 +46,22 @@ var taskCreateCmd = &cobra.Command{
 		}
 		defer disconnectAndClose(c)
 
+		// Parse TTL
+		var ttlSeconds int
+		if taskCreateTTL != "" {
+			d, err := time.ParseDuration(taskCreateTTL)
+			if err != nil {
+				printErr("INVALID_REQUEST", fmt.Sprintf("invalid ttl duration: %v", err))
+				return nil
+			}
+			ttlSeconds = int(d.Seconds())
+			// Reject sub-second TTL that would silently become no-TTL
+			if d > 0 && ttlSeconds == 0 {
+				printErr("INVALID_REQUEST", "ttl must be at least 1 second")
+				return nil
+			}
+		}
+
 		req := protocol.Request{
 			Cmd:            protocol.CmdTaskCreate,
 			Payload:        json.RawMessage(payload),
@@ -52,6 +72,7 @@ var taskCreateCmd = &cobra.Command{
 			Lease:          taskLease,
 			MaxRetries:     taskMaxRetries,
 			IdempotencyKey: taskIdempotencyKey,
+			TTL:            ttlSeconds,
 		}
 
 		resp, err := c.Send(req)
