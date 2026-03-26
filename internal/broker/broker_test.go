@@ -2550,3 +2550,252 @@ func TestBroker_CreateTaskWithInvalidTTL(t *testing.T) {
 		t.Errorf("expected code=%s, got %s", protocol.ErrInvalidRequest, resp.Code)
 	}
 }
+
+// ========== Issue #56: Custom Event Payload Wrapping Tests ==========
+
+// TestBroker_CustomEventHasTopic — subscribe to "chat.demo", publish {"msg":"hi"}, verify event.Topic == "chat.demo"
+func TestBroker_CustomEventHasTopic(t *testing.T) {
+	sockPath, _, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c1, _ := client.Connect(sockPath)
+	defer c1.Close()
+	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "subscriber"})
+	resp, _ := c1.Send(protocol.Request{Cmd: protocol.CmdSubscribe, Topic: "chat.demo"})
+	if !resp.OK {
+		t.Fatalf("subscribe: %s", resp.Error)
+	}
+	eventCh, err := c1.ReadStream()
+	if err != nil {
+		t.Fatalf("ReadStream: %v", err)
+	}
+
+	c2, _ := client.Connect(sockPath)
+	defer c2.Close()
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "publisher"})
+	c2.Send(protocol.Request{Cmd: protocol.CmdPublish, Topic: "chat.demo", Message: `{"msg":"hi"}`})
+
+	select {
+	case evt := <-eventCh:
+		if evt.Topic != "chat.demo" {
+			t.Errorf("event.Topic = %q, want %q", evt.Topic, "chat.demo")
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("timeout waiting for event")
+	}
+}
+
+// TestBroker_CustomEventHasTimestamp — verify event.TS is non-empty RFC3339
+func TestBroker_CustomEventHasTimestamp(t *testing.T) {
+	sockPath, _, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c1, _ := client.Connect(sockPath)
+	defer c1.Close()
+	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "subscriber"})
+	c1.Send(protocol.Request{Cmd: protocol.CmdSubscribe, Topic: "chat.demo"})
+	eventCh, _ := c1.ReadStream()
+
+	c2, _ := client.Connect(sockPath)
+	defer c2.Close()
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "publisher"})
+	c2.Send(protocol.Request{Cmd: protocol.CmdPublish, Topic: "chat.demo", Message: `{"msg":"hi"}`})
+
+	select {
+	case evt := <-eventCh:
+		if evt.TS == "" {
+			t.Error("event.TS should be non-empty")
+		}
+		if _, err := time.Parse(time.RFC3339, evt.TS); err != nil {
+			t.Errorf("event.TS = %q is not valid RFC3339: %v", evt.TS, err)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("timeout waiting for event")
+	}
+}
+
+// TestBroker_CustomEventHasData — publish {"key":"value"}, verify it appears in event.Data
+func TestBroker_CustomEventHasData(t *testing.T) {
+	sockPath, _, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c1, _ := client.Connect(sockPath)
+	defer c1.Close()
+	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "subscriber"})
+	c1.Send(protocol.Request{Cmd: protocol.CmdSubscribe, Topic: "chat.demo"})
+	eventCh, _ := c1.ReadStream()
+
+	c2, _ := client.Connect(sockPath)
+	defer c2.Close()
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "publisher"})
+	c2.Send(protocol.Request{Cmd: protocol.CmdPublish, Topic: "chat.demo", Message: `{"key":"value"}`})
+
+	select {
+	case evt := <-eventCh:
+		if len(evt.Data) == 0 {
+			t.Error("event.Data should be non-empty")
+		}
+		var data map[string]string
+		if err := json.Unmarshal(evt.Data, &data); err != nil {
+			t.Fatalf("failed to parse event.Data: %v", err)
+		}
+		if data["key"] != "value" {
+			t.Errorf("event.Data[key] = %q, want %q", data["key"], "value")
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("timeout waiting for event")
+	}
+}
+
+// TestBroker_CustomEventName — verify event.Event == "custom"
+func TestBroker_CustomEventName(t *testing.T) {
+	sockPath, _, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c1, _ := client.Connect(sockPath)
+	defer c1.Close()
+	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "subscriber"})
+	c1.Send(protocol.Request{Cmd: protocol.CmdSubscribe, Topic: "chat.demo"})
+	eventCh, _ := c1.ReadStream()
+
+	c2, _ := client.Connect(sockPath)
+	defer c2.Close()
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "publisher"})
+	c2.Send(protocol.Request{Cmd: protocol.CmdPublish, Topic: "chat.demo", Message: `{"msg":"hi"}`})
+
+	select {
+	case evt := <-eventCh:
+		if evt.Event != "custom" {
+			t.Errorf("event.Event = %q, want %q", evt.Event, "custom")
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("timeout waiting for event")
+	}
+}
+
+// TestBroker_TaskEventsRegression — create a task, subscriber gets full task.created event
+func TestBroker_TaskEventsRegression(t *testing.T) {
+	sockPath, _, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c1, _ := client.Connect(sockPath)
+	defer c1.Close()
+	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "subscriber"})
+	resp, _ := c1.Send(protocol.Request{Cmd: protocol.CmdSubscribe, Topic: "task.events"})
+	if !resp.OK {
+		t.Fatalf("subscribe: %s", resp.Error)
+	}
+	eventCh, _ := c1.ReadStream()
+
+	c2, _ := client.Connect(sockPath)
+	defer c2.Close()
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "creator"})
+	c2.Send(protocol.Request{
+		Cmd:     protocol.CmdTaskCreate,
+		Payload: json.RawMessage(`{"desc":"regression"}`),
+		Type:    "test",
+	})
+
+	select {
+	case evt := <-eventCh:
+		if evt.Topic != "task.events" {
+			t.Errorf("event.Topic = %q, want task.events", evt.Topic)
+		}
+		if evt.Event != "task.created" {
+			t.Errorf("event.Event = %q, want task.created", evt.Event)
+		}
+		if len(evt.Data) == 0 {
+			t.Error("event.Data should be non-empty for task events")
+		}
+		if evt.TS == "" {
+			t.Error("event.TS should be non-empty")
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("timeout waiting for event")
+	}
+}
+
+// TestBroker_PresenceEventsRegression — connect agent, subscriber gets presence.online event
+func TestBroker_PresenceEventsRegression(t *testing.T) {
+	sockPath, _, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c1, _ := client.Connect(sockPath)
+	defer c1.Close()
+	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "subscriber"})
+	resp, _ := c1.Send(protocol.Request{Cmd: protocol.CmdSubscribe, Topic: "presence.events"})
+	if !resp.OK {
+		t.Fatalf("subscribe: %s", resp.Error)
+	}
+	eventCh, _ := c1.ReadStream()
+
+	c2, _ := client.Connect(sockPath)
+	defer c2.Close()
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "new-agent"})
+
+	select {
+	case evt := <-eventCh:
+		if evt.Topic != "presence.events" {
+			t.Errorf("event.Topic = %q, want presence.events", evt.Topic)
+		}
+		if evt.Event != "presence.online" {
+			t.Errorf("event.Event = %q, want presence.online", evt.Event)
+		}
+		if evt.TS == "" {
+			t.Error("event.TS should be non-empty")
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("timeout waiting for event")
+	}
+}
+
+// TestBroker_CustomEventInvalidJSON — publish "not json", broker returns error response
+func TestBroker_CustomEventInvalidJSON(t *testing.T) {
+	sockPath, _, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c, _ := client.Connect(sockPath)
+	defer c.Close()
+	c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "publisher"})
+
+	resp, _ := c.Send(protocol.Request{
+		Cmd:     protocol.CmdPublish,
+		Topic:   "chat.demo",
+		Message: "not json",
+	})
+	if resp.OK {
+		t.Fatal("publish with invalid JSON should fail")
+	}
+	if resp.Code != protocol.ErrInvalidRequest {
+		t.Errorf("error code = %q, want %q", resp.Code, protocol.ErrInvalidRequest)
+	}
+}
+
+// TestBroker_CustomEventEmptyMessage — publish with empty message, event has null data
+func TestBroker_CustomEventEmptyMessage(t *testing.T) {
+	sockPath, _, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c1, _ := client.Connect(sockPath)
+	defer c1.Close()
+	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "subscriber"})
+	c1.Send(protocol.Request{Cmd: protocol.CmdSubscribe, Topic: "chat.demo"})
+	eventCh, _ := c1.ReadStream()
+
+	c2, _ := client.Connect(sockPath)
+	defer c2.Close()
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "publisher"})
+	resp, _ := c2.Send(protocol.Request{Cmd: protocol.CmdPublish, Topic: "chat.demo", Message: ""})
+	if !resp.OK {
+		t.Fatalf("publish with empty message should succeed: %s", resp.Error)
+	}
+
+	select {
+	case evt := <-eventCh:
+		if len(evt.Data) != 0 {
+			t.Errorf("event.Data should be empty for empty message, got %s", evt.Data)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("timeout waiting for event")
+	}
+}
