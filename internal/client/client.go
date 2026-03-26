@@ -17,9 +17,9 @@ type Client struct {
 	scanner *bufio.Scanner
 }
 
-// Connect establishes a connection to the broker socket.
-func Connect(socketPath string) (*Client, error) {
-	conn, err := net.Dial("unix", socketPath)
+// Connect establishes a connection to the broker socket with a timeout.
+func Connect(socketPath string, timeout time.Duration) (*Client, error) {
+	conn, err := net.DialTimeout("unix", socketPath, timeout)
 	if err != nil {
 		return nil, fmt.Errorf("connect to broker: %w", err)
 	}
@@ -29,10 +29,7 @@ func Connect(socketPath string) (*Client, error) {
 	bufSize := int(config.Defaults.MaxMessageSize)
 	scanner.Buffer(make([]byte, bufSize), bufSize)
 
-	return &Client{
-		conn:    conn,
-		scanner: scanner,
-	}, nil
+	return &Client{conn: conn, scanner: scanner}, nil
 }
 
 // Send sends a request and reads one response.
@@ -148,6 +145,12 @@ func (c *Client) ReadMessages() (<-chan PushedMessage, error) {
 // Returns error if the deadline cannot be set (e.g., connection already broken).
 func (c *Client) SetDeadline(timeout time.Duration) error {
 	return c.conn.SetDeadline(time.Now().Add(timeout))
+}
+
+// ClearDeadline removes any deadline set on the underlying connection.
+// Used after handshake completes for streaming commands that must not time out.
+func (c *Client) ClearDeadline() error {
+	return c.conn.SetDeadline(time.Time{})
 }
 
 // Close closes the connection.

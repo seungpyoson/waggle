@@ -1,12 +1,17 @@
 package broker
 
 import (
+	"bufio"
+	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/seungpyoson/waggle/internal/config"
 )
 
 // WritePID writes the current process ID to the specified file.
@@ -52,6 +57,51 @@ func IsRunning(pidFile string) bool {
 		return false
 	}
 	
+	return true
+}
+
+// IsResponding checks if the broker at socketPath actually processes requests.
+// Performs a dial+send+read probe: connects, sends a status request, reads a
+// response. Returns false if any step fails or times out — meaning the broker
+// is zombie (listening but not accepting/responding) or dead.
+//
+// The probe uses CmdStatus which is in the broker's noSessionRequired set,
+// so no session state is created. The unnamed session is cleaned up when the
+// probe closes the connection.
+func IsResponding(socketPath string, timeout time.Duration) bool {
+	conn, err := net.DialTimeout("unix", socketPath, timeout)
+	if err != nil {
+		return false
+	}
+	defer conn.Close()
+
+	// Set deadline for the entire send+read exchange.
+	// If this fails, the probe has no deadline and could hang forever on a zombie.
+	if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
+		return false
+	}
+
+	// Send a status request (no session required)
+	req := struct {
+		Cmd string `json:"cmd"`
+	}{Cmd: "status"}
+	data, err := json.Marshal(req)
+	if err != nil {
+		return false
+	}
+	data = append(data, '\n')
+	if _, err := conn.Write(data); err != nil {
+		return false
+	}
+
+	// Read any response — we just need to know the broker is processing
+	scanner := bufio.NewScanner(conn)
+	bufSize := int(config.Defaults.MaxMessageSize)
+	scanner.Buffer(make([]byte, bufSize), bufSize)
+	if !scanner.Scan() {
+		return false
+	}
+
 	return true
 }
 

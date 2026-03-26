@@ -2,7 +2,9 @@ package cmd
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -50,28 +52,34 @@ var (
 				return nil
 			}
 
-			// Auto-start broker if not running
-			if !broker.IsRunning(paths.PID) {
-				// Cleanup stale files
-				if err := broker.CleanupStale(paths.PID, paths.Socket); err != nil {
-					return fmt.Errorf("cleaning up stale files: %w", err)
+			needsStart := false
+			if broker.IsRunning(paths.PID) {
+				if !broker.IsResponding(paths.Socket, config.Defaults.HealthCheckTimeout) {
+					// Zombie: process exists but not responding — warn, clean up, restart
+					if pid, err := broker.ReadPID(paths.PID); err == nil {
+						fmt.Fprintf(os.Stderr, "waggle: unresponsive broker (PID %d) detected, starting fresh instance\n", pid)
+					} else {
+						fmt.Fprintf(os.Stderr, "waggle: unresponsive broker detected, starting fresh instance\n")
+					}
+					// Remove stale files so autoStartBroker can bind a fresh socket.
+					// If removal fails, autoStartBroker will fail with "address in use" —
+					// surface the error now rather than let it cascade.
+					if err := os.Remove(paths.Socket); err != nil && !os.IsNotExist(err) {
+						return fmt.Errorf("removing stale socket: %w", err)
+					}
+					if err := os.Remove(paths.PID); err != nil && !os.IsNotExist(err) {
+						return fmt.Errorf("removing stale PID file: %w", err)
+					}
+					needsStart = true
 				}
+				// else: healthy, skip auto-start
+			} else {
+				needsStart = true
+			}
 
-				// Ensure directories exist
-				socketDir := filepath.Dir(paths.Socket)
-				if err := broker.EnsureDirs(paths.DataDir, socketDir); err != nil {
-					return fmt.Errorf("creating directories: %w", err)
-				}
-
-				// Start daemon
-				args := []string{os.Args[0], "start", "--foreground"}
-				if err := broker.StartDaemon(paths.DataDir, socketDir, paths.Log, projectID, args); err != nil {
-					return fmt.Errorf("starting broker daemon: %w", err)
-				}
-
-				// Wait for broker to start
-				if err := broker.WaitForReady(paths.PID, config.Defaults.StartupTimeout, config.Defaults.StartupPollInterval); err != nil {
-					return fmt.Errorf("auto-start broker: %w", err)
+			if needsStart {
+				if err := autoStartBroker(); err != nil {
+					return err
 				}
 			}
 
@@ -121,9 +129,15 @@ func connectToBroker(name string) (*client.Client, error) {
 		name = "cli-" + strconv.Itoa(os.Getpid())
 	}
 
-	c, err := client.Connect(paths.Socket)
+	c, err := client.Connect(paths.Socket, config.Defaults.ConnectTimeout)
 	if err != nil {
 		return nil, err
+	}
+
+	// Deadline for handshake only — cleared after success
+	if err := c.SetDeadline(config.Defaults.ConnectTimeout); err != nil {
+		c.Close()
+		return nil, fmt.Errorf("set handshake deadline: %w", err)
 	}
 
 	resp, err := c.Send(protocol.Request{
@@ -132,6 +146,11 @@ func connectToBroker(name string) (*client.Client, error) {
 	})
 	if err != nil {
 		c.Close()
+		// Only cleanup stale files on timeout errors (zombie broker).
+		// Other errors (protocol, etc.) should not trigger cleanup.
+		if isTimeoutError(err) {
+			cleanupStaleFiles()
+		}
 		return nil, err
 	}
 
@@ -140,7 +159,60 @@ func connectToBroker(name string) (*client.Client, error) {
 		return nil, fmt.Errorf("%s: %s", resp.Code, resp.Error)
 	}
 
+	// Clear deadline — streaming commands need to read indefinitely
+	if err := c.ClearDeadline(); err != nil {
+		c.Close()
+		return nil, fmt.Errorf("clear deadline: %w", err)
+	}
+
 	return c, nil
+}
+
+// isTimeoutError returns true if the error is a network timeout.
+func isTimeoutError(err error) bool {
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
+}
+
+// cleanupStaleFiles removes socket and PID files when a connect timeout
+// suggests the broker is zombie. Errors are logged to stderr but do not
+// propagate — this is a fallback path where we've already failed to connect.
+func cleanupStaleFiles() {
+	if err := os.Remove(paths.Socket); err != nil && !os.IsNotExist(err) {
+		fmt.Fprintf(os.Stderr, "waggle: warning: failed to remove stale socket: %v\n", err)
+	}
+	if err := os.Remove(paths.PID); err != nil && !os.IsNotExist(err) {
+		fmt.Fprintf(os.Stderr, "waggle: warning: failed to remove stale PID file: %v\n", err)
+	}
+}
+
+// autoStartBroker cleans up stale files, ensures directories exist, starts the
+// broker daemon, and waits for it to become ready.
+func autoStartBroker() error {
+	// Cleanup stale files. CleanupStale returns error if broker IS running
+	// (its internal IsRunning check). In the zombie recovery path, we already
+	// removed the PID file, so IsRunning returns false. In the normal dead-broker
+	// path, IsRunning also returns false. If it errors, the files may still exist
+	// and StartDaemon will fail with "address in use" — surface it.
+	if err := broker.CleanupStale(paths.PID, paths.Socket); err != nil {
+		return fmt.Errorf("cleaning up stale files: %w", err)
+	}
+
+	socketDir := filepath.Dir(paths.Socket)
+	if err := broker.EnsureDirs(paths.DataDir, socketDir); err != nil {
+		return fmt.Errorf("creating directories: %w", err)
+	}
+
+	args := []string{os.Args[0], "start", "--foreground"}
+	if err := broker.StartDaemon(paths.DataDir, socketDir, paths.Log, paths.ProjectID, args); err != nil {
+		return fmt.Errorf("starting broker daemon: %w", err)
+	}
+
+	if err := broker.WaitForReady(paths.PID, config.Defaults.StartupTimeout, config.Defaults.StartupPollInterval); err != nil {
+		return fmt.Errorf("auto-start broker: %w", err)
+	}
+
+	return nil
 }
 
 // disconnectAndClose sends a clean disconnect command then closes the connection.

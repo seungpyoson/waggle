@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/seungpyoson/waggle/internal/protocol"
 )
@@ -45,7 +47,7 @@ func TestClient_SendAndReceive(t *testing.T) {
 		}
 	}()
 
-	c, err := Connect(sockPath)
+	c, err := Connect(sockPath, 5*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +63,7 @@ func TestClient_SendAndReceive(t *testing.T) {
 }
 
 func TestClient_ConnectFail(t *testing.T) {
-	_, err := Connect("/tmp/nonexistent-waggle-test.sock")
+	_, err := Connect("/tmp/nonexistent-waggle-test.sock", 5*time.Second)
 	if err == nil {
 		t.Fatal("expected connection error")
 	}
@@ -104,7 +106,7 @@ func TestClient_ReadStream(t *testing.T) {
 		}
 	}()
 
-	c, err := Connect(sockPath)
+	c, err := Connect(sockPath, 5*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +177,7 @@ func TestClient_LargePayload(t *testing.T) {
 		}
 	}()
 
-	c, err := Connect(sockPath)
+	c, err := Connect(sockPath, 5*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,3 +205,53 @@ func TestClient_LargePayload(t *testing.T) {
 	}
 }
 
+func TestConnect_TimeoutOnZombieSocket(t *testing.T) {
+	// Simulate a zombie broker: socket file exists (was created by a dead broker)
+	// but nothing is listening. net.DialTimeout must fail fast rather than hang.
+	sockPath := fmt.Sprintf("%s/wg-zombie-%d.sock", os.TempDir(), os.Getpid())
+	os.Remove(sockPath) // ensure no leftover
+	t.Cleanup(func() { os.Remove(sockPath) })
+
+	// Create the socket file without listening (simulate stale socket file)
+	f, err := os.Create(sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	timeout := 500 * time.Millisecond
+	start := time.Now()
+	_, err = Connect(sockPath, timeout)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	if elapsed > 2*timeout {
+		t.Errorf("took %v, expected ~%v", elapsed, timeout)
+	}
+}
+
+func TestConnect_SuccessWithTimeout(t *testing.T) {
+	// Use os.TempDir() directly to avoid macOS 104-byte Unix socket path limit
+	sockPath := fmt.Sprintf("%s/wg-healthy-%d.sock", os.TempDir(), os.Getpid())
+	t.Cleanup(func() { os.Remove(sockPath) })
+	ln, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		conn, _ := ln.Accept()
+		if conn != nil {
+			defer conn.Close()
+			conn.Write([]byte("{\"ok\":true}\n"))
+		}
+	}()
+
+	c, err := Connect(sockPath, 5*time.Second)
+	if err != nil {
+		t.Fatalf("expected success: %v", err)
+	}
+	c.Close()
+}

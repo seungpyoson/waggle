@@ -2,6 +2,7 @@ package broker
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -306,6 +307,52 @@ func TestLifecycle_IdleTimeout(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	if _, err := os.Stat(sockPath); !os.IsNotExist(err) {
 		t.Error("socket should be removed after idle timeout")
+	}
+}
+
+func TestIsResponding_ZombieSocket(t *testing.T) {
+	sockPath := fmt.Sprintf("/tmp/waggle-zombie-test-%d.sock", time.Now().UnixNano())
+	ln, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(sockPath)
+	defer ln.Close()
+
+	start := time.Now()
+	result := IsResponding(sockPath, 500*time.Millisecond)
+	elapsed := time.Since(start)
+
+	if result {
+		t.Error("expected false for zombie")
+	}
+	if elapsed > 2*time.Second {
+		t.Errorf("took %v, expected ~500ms", elapsed)
+	}
+}
+
+func TestIsResponding_HealthyBroker(t *testing.T) {
+	tmpDir := t.TempDir()
+	sockPath := fmt.Sprintf("/tmp/waggle-responding-test-%d.sock", time.Now().UnixNano())
+	dbPath := filepath.Join(tmpDir, "state.db")
+	defer os.Remove(sockPath)
+
+	b, err := New(Config{SocketPath: sockPath, DBPath: dbPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go b.Serve()
+	defer b.Shutdown()
+	time.Sleep(100 * time.Millisecond)
+
+	if !IsResponding(sockPath, 1*time.Second) {
+		t.Error("expected true")
+	}
+}
+
+func TestIsResponding_MissingSocket(t *testing.T) {
+	if IsResponding("/tmp/nonexistent-waggle.sock", 500*time.Millisecond) {
+		t.Error("expected false for missing socket")
 	}
 }
 
