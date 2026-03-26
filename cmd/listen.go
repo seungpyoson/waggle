@@ -26,6 +26,21 @@ var listenCmd = &cobra.Command{
 	Use:   "listen",
 	Short: "Listen for pushed messages (persistent connection)",
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// When --output is set, this command typically runs backgrounded (e.g., from
+		// hooks). Redirect stderr to a .err file so errors don't corrupt the host
+		// terminal (TUI). This must happen BEFORE any printErr/fmt.Fprintf calls.
+		// Redirect both os.Stderr (Go-level) and fd 2 (OS-level) to catch all output.
+		if listenOutput != "" {
+			errFile, err := os.OpenFile(listenOutput+".err", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+			if err == nil {
+				os.Stderr = errFile
+				// Also redirect OS fd 2 so log.Printf and any C-level writes go to file
+				syscall.Dup2(int(errFile.Fd()), 2)
+				defer errFile.Close()
+			}
+			// If errFile fails to open, keep original stderr — better than crashing
+		}
+
 		c, err := connectToBroker(listenName)
 		if err != nil {
 			printErr("BROKER_NOT_RUNNING", err.Error())
