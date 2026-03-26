@@ -10,6 +10,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/seungpyoson/waggle/internal/config"
 )
 
 // WritePID writes the current process ID to the specified file.
@@ -91,8 +93,7 @@ func IsResponding(socketPath string, timeout time.Duration) bool {
 
 	// Read any response — we just need to know the broker is processing
 	scanner := bufio.NewScanner(conn)
-	// Match broker's MaxMessageSize to handle any status response size
-	bufSize := 64 * 1024 // 64KB — generous for status response (~200B)
+	bufSize := int(config.Defaults.MaxMessageSize)
 	scanner.Buffer(make([]byte, bufSize), bufSize)
 	if !scanner.Scan() {
 		return false
