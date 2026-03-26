@@ -87,11 +87,16 @@ func uninstallClaudeCode(homeDir string) error {
 	claudeDir := filepath.Join(homeDir, ".claude")
 
 	// Remove hook files
-	os.Remove(filepath.Join(claudeDir, "hooks", "waggle-connect.sh"))
-	os.Remove(filepath.Join(claudeDir, "hooks", "waggle-heartbeat.sh"))
+	for _, name := range []string{"waggle-connect.sh", "waggle-heartbeat.sh"} {
+		if err := os.Remove(filepath.Join(claudeDir, "hooks", name)); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("removing %s: %w", name, err)
+		}
+	}
 
 	// Remove skill directory
-	os.RemoveAll(filepath.Join(claudeDir, "skills", "waggle"))
+	if err := os.RemoveAll(filepath.Join(claudeDir, "skills", "waggle")); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("removing skills directory: %w", err)
+	}
 
 	// Deregister hook from settings.json
 	if err := deregisterSessionStartHook(claudeDir); err != nil {

@@ -389,6 +389,32 @@ func TestUninstall_IdempotentNoFiles(t *testing.T) {
 	// Should be no error
 }
 
+func TestUninstall_PermissionError(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("test not meaningful when running as root")
+	}
+
+	tmpHome := t.TempDir()
+
+	// Install first
+	if err := installClaudeCode(tmpHome); err != nil {
+		t.Fatalf("install failed: %v", err)
+	}
+
+	// Make hooks directory non-writable to prevent deletion
+	hooksDir := filepath.Join(tmpHome, ".claude", "hooks")
+	os.Chmod(hooksDir, 0555)
+	t.Cleanup(func() {
+		os.Chmod(hooksDir, 0755)
+	})
+
+	// Uninstall should return an error (not silently succeed)
+	err := uninstallClaudeCode(tmpHome)
+	if err == nil {
+		t.Error("expected permission error, got nil")
+	}
+}
+
 func TestEmbeddedFilesMatchSource(t *testing.T) {
 	// The test file is in internal/install/, so ../../integrations/claude-code/ is the source
 	sourceDir := filepath.Join("..", "..", "integrations", "claude-code")
