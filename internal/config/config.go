@@ -89,6 +89,11 @@ var Defaults = struct {
 	SpawnStopPollInterval time.Duration
 	SpawnKillPollInterval time.Duration
 	AgentConfigFile       string
+
+	// Task lifecycle defaults
+	TaskTTLCheckPeriod time.Duration
+	TaskStaleThreshold time.Duration
+	MaxTaskTTL         int
 }{
 	DirName:    ".waggle",
 	DBFile:     "state.db",
@@ -124,6 +129,10 @@ var Defaults = struct {
 	SpawnStopPollInterval: 100 * time.Millisecond,
 	SpawnKillPollInterval: 50 * time.Millisecond,
 	AgentConfigFile:       "agents.json",
+
+	TaskTTLCheckPeriod: 30 * time.Second,
+	TaskStaleThreshold: 5 * time.Minute,
+	MaxTaskTTL:         86400, // 24 hours
 }
 
 type Paths struct {

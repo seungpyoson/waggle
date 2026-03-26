@@ -42,6 +42,7 @@ type Task struct {
 	LeaseDuration   int
 	MaxRetries      int
 	RetryCount      int
+	TTL             int    `json:"ttl,omitempty"` // seconds, 0 = no expiry
 	Result          string
 	FailureReason   string
 	CreatedAt       string
@@ -58,6 +59,7 @@ type CreateParams struct {
 	DependsOn      []int64
 	LeaseDuration  int
 	MaxRetries     int
+	TTL            int // seconds, 0 = no expiry
 }
 
 // ClaimFilter holds filters for claiming tasks
@@ -87,6 +89,9 @@ func NewStore(db *sql.DB) (*Store, error) {
 
 	s := &Store{db: db}
 	if err := s.migrate(); err != nil {
+		return nil, err
+	}
+	if err := s.migrateTaskSchema(); err != nil {
 		return nil, err
 	}
 
@@ -168,6 +173,30 @@ func (s *Store) migrate() error {
 	return nil
 }
 
+// nullableInt converts 0 to SQL NULL
+func nullableInt(v int) interface{} {
+	if v == 0 {
+		return nil
+	}
+	return v
+}
+
+// migrateTaskSchema adds the ttl column if it doesn't exist
+func (s *Store) migrateTaskSchema() error {
+	var colCount int
+	if err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM pragma_table_info('tasks') WHERE name = 'ttl'`,
+	).Scan(&colCount); err != nil {
+		return fmt.Errorf("checking ttl column: %w", err)
+	}
+	if colCount == 0 {
+		if _, err := s.db.Exec("ALTER TABLE tasks ADD COLUMN ttl INTEGER"); err != nil {
+			return fmt.Errorf("adding ttl column: %w", err)
+		}
+	}
+	return nil
+}
+
 // Create creates a new task
 func (s *Store) Create(params CreateParams) (*Task, error) {
 	// Check for existing task with same idempotency key
@@ -180,6 +209,14 @@ func (s *Store) Create(params CreateParams) (*Task, error) {
 		if err != sql.ErrNoRows {
 			return nil, err
 		}
+	}
+
+	// Validate TTL
+	if params.TTL < 0 {
+		return nil, fmt.Errorf("ttl must be non-negative")
+	}
+	if params.TTL > config.Defaults.MaxTaskTTL {
+		return nil, fmt.Errorf("ttl exceeds maximum (%d seconds)", config.Defaults.MaxTaskTTL)
 	}
 
 	// Set defaults
@@ -220,9 +257,9 @@ func (s *Store) Create(params CreateParams) (*Task, error) {
 	}
 
 	result, err := s.db.Exec(`
-		INSERT INTO tasks (idempotency_key, type, tags, payload, priority, blocked, depends_on, lease_duration, max_retries)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, idempotencyKey, params.Type, tagsJSON, params.Payload, params.Priority, blocked, dependsOnJSON, leaseDuration, maxRetries)
+		INSERT INTO tasks (idempotency_key, type, tags, payload, priority, blocked, depends_on, lease_duration, max_retries, ttl)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, idempotencyKey, params.Type, tagsJSON, params.Payload, params.Priority, blocked, dependsOnJSON, leaseDuration, maxRetries, nullableInt(params.TTL))
 	if err != nil {
 		return nil, err
 	}
@@ -240,7 +277,7 @@ func (s *Store) Get(id int64) (*Task, error) {
 	row := s.db.QueryRow(`
 		SELECT id, idempotency_key, type, tags, payload, priority, state, blocked, depends_on,
 		       claim_token, claimed_by, claimed_at, lease_expires_at, lease_duration, max_retries,
-		       retry_count, result, failure_reason, created_at, updated_at
+		       retry_count, ttl, result, failure_reason, created_at, updated_at
 		FROM tasks WHERE id = ?
 	`, id)
 
@@ -253,11 +290,12 @@ func scanTask(row *sql.Row) (*Task, error) {
 	var idempotencyKey, taskType, tagsJSON, dependsOnJSON sql.NullString
 	var claimToken, claimedBy, claimedAt, leaseExpiresAt sql.NullString
 	var result, failureReason sql.NullString
+	var ttl sql.NullInt64
 
 	err := row.Scan(
 		&t.ID, &idempotencyKey, &taskType, &tagsJSON, &t.Payload, &t.Priority, &t.State, &t.Blocked, &dependsOnJSON,
 		&claimToken, &claimedBy, &claimedAt, &leaseExpiresAt, &t.LeaseDuration, &t.MaxRetries,
-		&t.RetryCount, &result, &failureReason, &t.CreatedAt, &t.UpdatedAt,
+		&t.RetryCount, &ttl, &result, &failureReason, &t.CreatedAt, &t.UpdatedAt,
 	)
 	if err != nil {
 		return nil, err
@@ -281,6 +319,9 @@ func scanTask(row *sql.Row) (*Task, error) {
 	}
 	if leaseExpiresAt.Valid {
 		t.LeaseExpiresAt = leaseExpiresAt.String
+	}
+	if ttl.Valid {
+		t.TTL = int(ttl.Int64)
 	}
 	if result.Valid {
 		t.Result = result.String
@@ -488,7 +529,7 @@ func (s *Store) List(filter ListFilter) ([]*Task, error) {
 	query := `
 		SELECT id, idempotency_key, type, tags, payload, priority, state, blocked, depends_on,
 		       claim_token, claimed_by, claimed_at, lease_expires_at, lease_duration, max_retries,
-		       retry_count, result, failure_reason, created_at, updated_at
+		       retry_count, ttl, result, failure_reason, created_at, updated_at
 		FROM tasks
 		WHERE 1=1
 	`
@@ -521,11 +562,12 @@ func (s *Store) List(filter ListFilter) ([]*Task, error) {
 		var idempotencyKey, taskType, tagsJSON, dependsOnJSON sql.NullString
 		var claimToken, claimedBy, claimedAt, leaseExpiresAt sql.NullString
 		var result, failureReason sql.NullString
+		var ttl sql.NullInt64
 
 		err := rows.Scan(
 			&t.ID, &idempotencyKey, &taskType, &tagsJSON, &t.Payload, &t.Priority, &t.State, &t.Blocked, &dependsOnJSON,
 			&claimToken, &claimedBy, &claimedAt, &leaseExpiresAt, &t.LeaseDuration, &t.MaxRetries,
-			&t.RetryCount, &result, &failureReason, &t.CreatedAt, &t.UpdatedAt,
+			&t.RetryCount, &ttl, &result, &failureReason, &t.CreatedAt, &t.UpdatedAt,
 		)
 		if err != nil {
 			return nil, err
@@ -550,6 +592,9 @@ func (s *Store) List(filter ListFilter) ([]*Task, error) {
 		if leaseExpiresAt.Valid {
 			t.LeaseExpiresAt = leaseExpiresAt.String
 		}
+		if ttl.Valid {
+			t.TTL = int(ttl.Int64)
+		}
 		if result.Valid {
 			t.Result = result.String
 		}
@@ -573,6 +618,71 @@ func (s *Store) List(filter ListFilter) ([]*Task, error) {
 	}
 
 	return tasks, rows.Err()
+}
+
+// CancelExpiredTTL cancels pending tasks whose TTL has expired.
+// Only cancels 'pending' tasks — claimed tasks are managed by the lease checker.
+func (s *Store) CancelExpiredTTL() (int, error) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	result, err := s.db.Exec(`
+		UPDATE tasks
+		SET state = 'canceled',
+		    failure_reason = 'ttl_expired',
+		    updated_at = ?
+		WHERE state = 'pending'
+		  AND ttl IS NOT NULL
+		  AND CAST(strftime('%s','now') AS INTEGER) >= CAST(strftime('%s', created_at) AS INTEGER) + ttl
+	`, now)
+	if err != nil {
+		return 0, fmt.Errorf("canceling expired tasks: %w", err)
+	}
+
+	count, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("getting rows affected: %w", err)
+	}
+
+	return int(count), nil
+}
+
+// QueueHealth represents health metrics for the task queue
+type QueueHealth struct {
+	OldestPendingAge int `json:"oldest_pending_age_seconds"`
+	StaleCount       int `json:"stale_count"`
+	PendingCount     int `json:"pending_count"`
+}
+
+// QueueHealth returns health metrics for the task queue.
+func (s *Store) QueueHealth(staleThreshold time.Duration) (*QueueHealth, error) {
+	var health QueueHealth
+
+	// Oldest pending age + count
+	var oldestAge sql.NullInt64
+	err := s.db.QueryRow(`
+		SELECT
+		    CAST(strftime('%s','now') AS INTEGER) - MIN(CAST(strftime('%s', created_at) AS INTEGER)),
+		    COUNT(*)
+		FROM tasks WHERE state = 'pending'
+	`).Scan(&oldestAge, &health.PendingCount)
+	if err != nil {
+		return nil, fmt.Errorf("querying queue health: %w", err)
+	}
+	if oldestAge.Valid {
+		health.OldestPendingAge = int(oldestAge.Int64)
+	}
+
+	// Stale count (pending > threshold)
+	thresholdSecs := int(staleThreshold.Seconds())
+	err = s.db.QueryRow(`
+		SELECT COUNT(*) FROM tasks
+		WHERE state = 'pending'
+		  AND CAST(strftime('%s','now') AS INTEGER) - CAST(strftime('%s', created_at) AS INTEGER) > ?
+	`, thresholdSecs).Scan(&health.StaleCount)
+	if err != nil {
+		return nil, fmt.Errorf("querying stale count: %w", err)
+	}
+
+	return &health, nil
 }
 
 // RequeueAllClaimed requeues all claimed tasks (for crash recovery)

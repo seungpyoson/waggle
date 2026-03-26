@@ -189,6 +189,7 @@ func handleTaskCreate(s *Session, req protocol.Request) protocol.Response {
 		DependsOn:      dependsOn,
 		LeaseDuration:  req.Lease,
 		MaxRetries:     req.MaxRetries,
+		TTL:            req.TTL,
 	})
 	if err != nil {
 		return protocol.ErrResponse(protocol.ErrInternalError, err.Error())
@@ -458,6 +459,12 @@ func handleStatus(s *Session) protocol.Response {
 		"locks":       s.broker.lockMgr.Count(),
 		"tasks":       taskCounts,
 		"spawned":     s.broker.spawnMgr.List(),
+	}
+
+	// Add queue health
+	health, err := s.broker.store.QueueHealth(config.Defaults.TaskStaleThreshold)
+	if err == nil {
+		status["queue_health"] = health
 	}
 
 	data, _ := json.Marshal(status)

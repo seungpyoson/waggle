@@ -39,6 +39,385 @@ func newTestStore(t *testing.T) *Store {
 	return s
 }
 
+// TestStore_CancelExpiredTTL verifies that tasks with expired TTL are canceled
+func TestStore_CancelExpiredTTL(t *testing.T) {
+	s := newTestStore(t)
+
+	// Create task with TTL=1 second
+	task, err := s.Create(CreateParams{
+		Payload: `{"desc":"expires soon"}`,
+		Type:    "test",
+		TTL:     1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Wait for TTL to expire
+	time.Sleep(2 * time.Second)
+
+	// Cancel expired tasks
+	count, err := s.CancelExpiredTTL()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Errorf("expected 1 canceled task, got %d", count)
+	}
+
+	// Verify task is canceled
+	updated, err := s.Get(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.State != StateCanceled {
+		t.Errorf("expected state=canceled, got %s", updated.State)
+	}
+	if updated.FailureReason != "ttl_expired" {
+		t.Errorf("expected failure_reason=ttl_expired, got %s", updated.FailureReason)
+	}
+}
+
+// TestStore_CancelExpiredTTL_NoTTL verifies tasks without TTL are not canceled
+func TestStore_CancelExpiredTTL_NoTTL(t *testing.T) {
+	s := newTestStore(t)
+
+	// Create task without TTL
+	task, err := s.Create(CreateParams{
+		Payload: `{"desc":"no ttl"}`,
+		Type:    "test",
+		TTL:     0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Wait
+	time.Sleep(2 * time.Second)
+
+	// Cancel expired tasks
+	count, err := s.CancelExpiredTTL()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Errorf("expected 0 canceled tasks, got %d", count)
+	}
+
+	// Verify task is still pending
+	updated, err := s.Get(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.State != StatePending {
+		t.Errorf("expected state=pending, got %s", updated.State)
+	}
+}
+
+// TestStore_CancelExpiredTTL_ClaimedIgnored verifies claimed tasks are not canceled by TTL
+func TestStore_CancelExpiredTTL_ClaimedIgnored(t *testing.T) {
+	s := newTestStore(t)
+
+	// Create task with TTL=1 second
+	task, err := s.Create(CreateParams{
+		Payload: `{"desc":"claimed task"}`,
+		Type:    "test",
+		TTL:     1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Claim the task
+	_, err = s.Claim("worker-1", ClaimFilter{Type: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Wait for TTL to expire
+	time.Sleep(2 * time.Second)
+
+	// Cancel expired tasks
+	count, err := s.CancelExpiredTTL()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Errorf("expected 0 canceled tasks (claimed task should be ignored), got %d", count)
+	}
+
+	// Verify task is still claimed
+	updated, err := s.Get(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.State != StateClaimed {
+		t.Errorf("expected state=claimed, got %s", updated.State)
+	}
+}
+
+// TestStore_CancelExpiredTTL_Idempotent verifies CancelExpiredTTL is idempotent
+func TestStore_CancelExpiredTTL_Idempotent(t *testing.T) {
+	s := newTestStore(t)
+
+	// Create task with TTL=1 second
+	_, err := s.Create(CreateParams{
+		Payload: `{"desc":"idempotent test"}`,
+		Type:    "test",
+		TTL:     1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Wait for TTL to expire
+	time.Sleep(2 * time.Second)
+
+	// First call should cancel 1 task
+	count, err := s.CancelExpiredTTL()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Errorf("first call: expected 1 canceled task, got %d", count)
+	}
+
+	// Second call should cancel 0 tasks
+	count, err = s.CancelExpiredTTL()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Errorf("second call: expected 0 canceled tasks, got %d", count)
+	}
+}
+
+// TestStore_CancelExpiredTTL_ClaimRace verifies claim wins over TTL expiry
+func TestStore_CancelExpiredTTL_ClaimRace(t *testing.T) {
+	s := newTestStore(t)
+
+	// Create task with TTL=1 second
+	_, err := s.Create(CreateParams{
+		Payload: `{"desc":"race test"}`,
+		Type:    "test",
+		TTL:     1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Start goroutine that claims the task
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		time.Sleep(500 * time.Millisecond)
+		s.Claim("worker-1", ClaimFilter{Type: "test"})
+	}()
+
+	// Wait for TTL to expire
+	time.Sleep(2 * time.Second)
+
+	// Try to cancel expired tasks
+	count, err := s.CancelExpiredTTL()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wg.Wait()
+
+	// If the task was claimed, it should not be canceled
+	// Count could be 0 (claimed) or 1 (not claimed yet)
+	// We verify the final state is either claimed or canceled
+	tasks, err := s.List(ListFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(tasks))
+	}
+	if tasks[0].State != StateClaimed && tasks[0].State != StateCanceled {
+		t.Errorf("expected state=claimed or canceled, got %s", tasks[0].State)
+	}
+	// If claimed, count should be 0
+	if tasks[0].State == StateClaimed && count != 0 {
+		t.Errorf("task is claimed but count=%d (expected 0)", count)
+	}
+}
+
+// TestStore_CreateTaskTTLValidation verifies TTL validation
+func TestStore_CreateTaskTTLValidation(t *testing.T) {
+	s := newTestStore(t)
+
+	// Negative TTL should fail
+	_, err := s.Create(CreateParams{
+		Payload: `{"desc":"negative ttl"}`,
+		Type:    "test",
+		TTL:     -1,
+	})
+	if err == nil {
+		t.Error("expected error for negative TTL")
+	}
+
+	// TTL=0 should succeed (no TTL)
+	_, err = s.Create(CreateParams{
+		Payload: `{"desc":"no ttl"}`,
+		Type:    "test",
+		TTL:     0,
+	})
+	if err != nil {
+		t.Errorf("TTL=0 should succeed: %v", err)
+	}
+
+	// TTL exceeding max should fail
+	_, err = s.Create(CreateParams{
+		Payload: `{"desc":"too long ttl"}`,
+		Type:    "test",
+		TTL:     config.Defaults.MaxTaskTTL + 1,
+	})
+	if err == nil {
+		t.Error("expected error for TTL exceeding max")
+	}
+}
+
+// TestStore_QueueHealth verifies queue health metrics
+func TestStore_QueueHealth(t *testing.T) {
+	s := newTestStore(t)
+
+	// Create 3 tasks at staggered times
+	for i := 0; i < 3; i++ {
+		_, err := s.Create(CreateParams{
+			Payload: fmt.Sprintf(`{"desc":"task %d"}`, i),
+			Type:    "test",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i < 2 {
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+
+	// Wait a bit to ensure age > 0
+	time.Sleep(1 * time.Second)
+
+	// Get queue health
+	health, err := s.QueueHealth(5 * time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if health.PendingCount != 3 {
+		t.Errorf("expected pending_count=3, got %d", health.PendingCount)
+	}
+	if health.OldestPendingAge <= 0 {
+		t.Errorf("expected oldest_pending_age > 0, got %d", health.OldestPendingAge)
+	}
+}
+
+// TestStore_QueueHealth_Empty verifies queue health with no pending tasks
+func TestStore_QueueHealth_Empty(t *testing.T) {
+	s := newTestStore(t)
+
+	// Get queue health with no tasks
+	health, err := s.QueueHealth(5 * time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if health.PendingCount != 0 {
+		t.Errorf("expected pending_count=0, got %d", health.PendingCount)
+	}
+	if health.OldestPendingAge != 0 {
+		t.Errorf("expected oldest_pending_age=0, got %d", health.OldestPendingAge)
+	}
+	if health.StaleCount != 0 {
+		t.Errorf("expected stale_count=0, got %d", health.StaleCount)
+	}
+}
+
+// TestStore_TaskSchemaMigration verifies schema migration preserves existing tasks
+func TestStore_TaskSchemaMigration(t *testing.T) {
+	// Create v1 schema (without ttl column)
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+
+	// Set pragmas
+	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(fmt.Sprintf("PRAGMA busy_timeout=%d", config.Defaults.BusyTimeout.Milliseconds())); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create v1 schema (no ttl column)
+	schema := fmt.Sprintf(`
+	CREATE TABLE schema_version (version INTEGER NOT NULL);
+	INSERT INTO schema_version (version) VALUES (1);
+
+	CREATE TABLE tasks (
+		id              INTEGER PRIMARY KEY AUTOINCREMENT,
+		idempotency_key TEXT UNIQUE,
+		type            TEXT,
+		tags            TEXT,
+		payload         TEXT NOT NULL,
+		priority        INTEGER DEFAULT 0,
+		state           TEXT NOT NULL DEFAULT 'pending',
+		blocked         BOOLEAN DEFAULT FALSE,
+		depends_on      TEXT,
+		claim_token     TEXT,
+		claimed_by      TEXT,
+		claimed_at      TEXT,
+		lease_expires_at TEXT,
+		lease_duration  INTEGER DEFAULT %d,
+		max_retries     INTEGER DEFAULT %d,
+		retry_count     INTEGER DEFAULT 0,
+		result          TEXT,
+		failure_reason  TEXT,
+		created_at      TEXT NOT NULL DEFAULT (strftime('%%Y-%%m-%%dT%%H:%%M:%%SZ', 'now')),
+		updated_at      TEXT NOT NULL DEFAULT (strftime('%%Y-%%m-%%dT%%H:%%M:%%SZ', 'now'))
+	);
+	`, int(config.Defaults.LeaseDuration.Seconds()), config.Defaults.MaxRetries)
+
+	if _, err := db.Exec(schema); err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert a task
+	_, err = db.Exec(`
+		INSERT INTO tasks (payload, type, state)
+		VALUES (?, ?, ?)
+	`, `{"desc":"v1 task"}`, "test", "pending")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Now create store (should run migration)
+	s, err := NewStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify task is intact
+	tasks, err := s.List(ListFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(tasks))
+	}
+	if tasks[0].Payload != `{"desc":"v1 task"}` {
+		t.Errorf("task payload mismatch: %s", tasks[0].Payload)
+	}
+	if tasks[0].TTL != 0 {
+		t.Errorf("expected TTL=0 for migrated task, got %d", tasks[0].TTL)
+	}
+}
+
 func TestStore_CreateAndGet(t *testing.T) {
 	s := newTestStore(t)
 
