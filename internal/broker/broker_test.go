@@ -66,7 +66,7 @@ func startTestBrokerWithTTL(t *testing.T, ttlCheckPeriod time.Duration) (string,
 // connectClient connects to the broker and fatals on error.
 func connectClient(t *testing.T, sockPath string) *client.Client {
 	t.Helper()
-	c, err := client.Connect(sockPath)
+	c, err := client.Connect(sockPath, 5*time.Second)
 	if err != nil {
 		t.Fatalf("client.Connect: %v", err)
 	}
@@ -266,7 +266,7 @@ func TestBroker_FullRoundTrip_CreateClaimComplete(t *testing.T) {
 	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
-	c, err := client.Connect(sockPath)
+	c, err := client.Connect(sockPath, 5*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2442,7 +2442,7 @@ func TestBroker_CreateTaskWithTTL(t *testing.T) {
 	sockPath, b, cleanup := startTestBroker(t)
 	defer cleanup()
 
-	c, err := client.Connect(sockPath)
+	c, err := client.Connect(sockPath, 5*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2504,7 +2504,7 @@ func TestBroker_TaskTTLCheckerRuns(t *testing.T) {
 		os.Remove(sockPath)
 	}()
 
-	c, err := client.Connect(sockPath)
+	c, err := client.Connect(sockPath, 5*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2554,7 +2554,7 @@ func TestBroker_StatusQueueHealth(t *testing.T) {
 	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
-	c, err := client.Connect(sockPath)
+	c, err := client.Connect(sockPath, 5*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2625,7 +2625,7 @@ func TestBroker_TaskStaleEvent(t *testing.T) {
 	}()
 
 	// Subscriber client
-	c1, err := client.Connect(sockPath)
+	c1, err := client.Connect(sockPath, 5*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2653,7 +2653,7 @@ func TestBroker_TaskStaleEvent(t *testing.T) {
 	}
 
 	// Creator client (separate connection to avoid protocol race)
-	c2, err := client.Connect(sockPath)
+	c2, err := client.Connect(sockPath, 5*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3004,7 +3004,7 @@ func TestBroker_PushToListenerSession(t *testing.T) {
 	defer cleanup()
 
 	// Connect as "alice-push" (the persistent listener)
-	listenerConn, err := client.Connect(sockPath)
+	listenerConn, err := client.Connect(sockPath, 5*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3019,7 +3019,7 @@ func TestBroker_PushToListenerSession(t *testing.T) {
 	}
 
 	// Connect as sender
-	senderConn, err := client.Connect(sockPath)
+	senderConn, err := client.Connect(sockPath, 5*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3075,7 +3075,7 @@ func TestBroker_ListenReceivesPush(t *testing.T) {
 	defer cleanup()
 
 	// Connect listener using ReadMessages
-	listenerConn, err := client.Connect(sockPath)
+	listenerConn, err := client.Connect(sockPath, 5*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3096,7 +3096,7 @@ func TestBroker_ListenReceivesPush(t *testing.T) {
 	}
 
 	// Connect sender
-	senderConn, err := client.Connect(sockPath)
+	senderConn, err := client.Connect(sockPath, 5*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
