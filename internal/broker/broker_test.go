@@ -2408,11 +2408,12 @@ func TestBroker_TaskStaleEvent(t *testing.T) {
 	sockPath := fmt.Sprintf("/tmp/waggle-test-%d.sock", time.Now().UnixNano())
 	dbPath := fmt.Sprintf("%s/db", tmpDir)
 
-	// Create broker with short task TTL check period
+	// Create broker with short task TTL check period and stale threshold
 	b, err := New(Config{
 		SocketPath:         sockPath,
 		DBPath:             dbPath,
 		TaskTTLCheckPeriod: 500 * time.Millisecond,
+		TaskStaleThreshold: 1 * time.Second,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2425,20 +2426,21 @@ func TestBroker_TaskStaleEvent(t *testing.T) {
 		os.Remove(sockPath)
 	}()
 
-	c, err := client.Connect(sockPath)
+	// Subscriber client
+	c1, err := client.Connect(sockPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer c.Close()
+	defer c1.Close()
 
-	// Connect
-	resp, _ := c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "cli"})
+	// Connect subscriber
+	resp, _ := c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "subscriber"})
 	if !resp.OK {
 		t.Fatalf("connect failed: %s", resp.Error)
 	}
 
 	// Subscribe to task.events
-	resp, _ = c.Send(protocol.Request{
+	resp, _ = c1.Send(protocol.Request{
 		Cmd:   protocol.CmdSubscribe,
 		Topic: "task.events",
 	})
@@ -2446,8 +2448,23 @@ func TestBroker_TaskStaleEvent(t *testing.T) {
 		t.Fatalf("subscribe failed: %s", resp.Error)
 	}
 
-	// Create task (will become stale quickly with default threshold)
-	resp, _ = c.Send(protocol.Request{
+	// Start reading events
+	eventCh, err := c1.ReadStream()
+	if err != nil {
+		t.Fatalf("read stream: %v", err)
+	}
+
+	// Creator client (separate connection to avoid protocol race)
+	c2, err := client.Connect(sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c2.Close()
+
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "creator"})
+
+	// Create task (will become stale after 1 second)
+	resp, _ = c2.Send(protocol.Request{
 		Cmd:     protocol.CmdTaskCreate,
 		Payload: json.RawMessage(`{"desc":"stale task"}`),
 		Type:    "test",
@@ -2456,13 +2473,43 @@ func TestBroker_TaskStaleEvent(t *testing.T) {
 		t.Fatalf("task create failed: %s", resp.Error)
 	}
 
-	// Wait for stale threshold + checker to run
-	// Default stale threshold is 5 minutes, but we need to wait for checker
-	// This test may not fire in reasonable time with default config
-	// For now, we just verify the mechanism exists
-	time.Sleep(2 * time.Second)
+	// Wait for task.stale event with timeout
+	timeout := time.After(5 * time.Second)
+	var staleEvent protocol.Event
+	foundStale := false
 
-	// Note: This test is limited because default stale threshold is 5 minutes
-	// In a real scenario, we'd need to configure a shorter threshold
-	// For now, we just verify the test compiles and runs
+	for !foundStale {
+		select {
+		case evt := <-eventCh:
+			if evt.Event == "task.stale" {
+				staleEvent = evt
+				foundStale = true
+			}
+		case <-timeout:
+			t.Fatal("timeout waiting for task.stale event")
+		}
+	}
+
+	// Verify the stale event
+	if staleEvent.Event != "task.stale" {
+		t.Errorf("expected event=task.stale, got %s", staleEvent.Event)
+	}
+
+	// Parse the event data
+	var data map[string]interface{}
+	if err := json.Unmarshal(staleEvent.Data, &data); err != nil {
+		t.Fatalf("failed to parse event data: %v", err)
+	}
+
+	// Verify stale_count > 0
+	staleCount, ok := data["stale_count"].(float64)
+	if !ok || staleCount <= 0 {
+		t.Errorf("expected stale_count > 0, got %v", data["stale_count"])
+	}
+
+	// Verify oldest_age_seconds > 0
+	oldestAge, ok := data["oldest_age_seconds"].(float64)
+	if !ok || oldestAge <= 0 {
+		t.Errorf("expected oldest_age_seconds > 0, got %v", data["oldest_age_seconds"])
+	}
 }

@@ -26,6 +26,7 @@ type Config struct {
 	LeaseCheckPeriod   time.Duration
 	TTLCheckPeriod     time.Duration
 	TaskTTLCheckPeriod time.Duration
+	TaskStaleThreshold time.Duration
 	IdleTimeout        time.Duration
 }
 
@@ -63,6 +64,7 @@ func New(cfg Config) (*Broker, error) {
 		{"LeaseCheckPeriod", &cfg.LeaseCheckPeriod, config.Defaults.LeaseCheckPeriod},
 		{"TTLCheckPeriod", &cfg.TTLCheckPeriod, config.Defaults.TTLCheckPeriod},
 		{"TaskTTLCheckPeriod", &cfg.TaskTTLCheckPeriod, config.Defaults.TaskTTLCheckPeriod},
+		{"TaskStaleThreshold", &cfg.TaskStaleThreshold, config.Defaults.TaskStaleThreshold},
 		{"IdleTimeout", &cfg.IdleTimeout, config.Defaults.IdleTimeout},
 	} {
 		if *f.val == 0 {
@@ -168,7 +170,7 @@ func (b *Broker) Serve() error {
 	b.wg.Add(1)
 	go func() {
 		defer b.wg.Done()
-		tasks.StartTaskTTLChecker(b.store, b.hub, b.config.TaskTTLCheckPeriod, config.Defaults.TaskStaleThreshold, b.stopCh)
+		tasks.StartTaskTTLChecker(b.store, b.hub, b.config.TaskTTLCheckPeriod, b.config.TaskStaleThreshold, b.stopCh)
 	}()
 
 	// Start idle timeout monitor

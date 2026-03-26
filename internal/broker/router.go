@@ -462,7 +462,7 @@ func handleStatus(s *Session) protocol.Response {
 	}
 
 	// Add queue health
-	health, err := s.broker.store.QueueHealth(config.Defaults.TaskStaleThreshold)
+	health, err := s.broker.store.QueueHealth(s.broker.config.TaskStaleThreshold)
 	if err == nil {
 		status["queue_health"] = health
 	}
