@@ -31,6 +31,7 @@ else
 fi
 
 # 3. Start broker if not running (atomic lock prevents races)
+mkdir -p "${HOME}/.waggle" 2>/dev/null || true
 LOCK_DIR="${HOME}/.waggle/broker-starting"
 
 # Clean up stale lock (>10s old = previous hook crashed)
