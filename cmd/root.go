@@ -121,7 +121,7 @@ func connectToBroker(name string) (*client.Client, error) {
 		name = "cli-" + strconv.Itoa(os.Getpid())
 	}
 
-	c, err := client.Connect(paths.Socket)
+	c, err := client.Connect(paths.Socket, config.Defaults.ConnectTimeout)
 	if err != nil {
 		return nil, err
 	}
