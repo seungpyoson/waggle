@@ -2513,3 +2513,40 @@ func TestBroker_TaskStaleEvent(t *testing.T) {
 		t.Errorf("expected oldest_age_seconds > 0, got %v", data["oldest_age_seconds"])
 	}
 }
+
+func TestBroker_CreateTaskWithInvalidTTL(t *testing.T) {
+	sockPath, _, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c, _ := client.Connect(sockPath)
+	defer c.Close()
+	c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "cli"})
+
+	// Negative TTL
+	resp, _ := c.Send(protocol.Request{
+		Cmd:     protocol.CmdTaskCreate,
+		Payload: json.RawMessage(`{"desc":"neg ttl"}`),
+		Type:    "test",
+		TTL:     -1,
+	})
+	if resp.OK {
+		t.Fatal("expected error for negative TTL")
+	}
+	if resp.Code != protocol.ErrInvalidRequest {
+		t.Errorf("expected code=%s, got %s", protocol.ErrInvalidRequest, resp.Code)
+	}
+
+	// Exceeds max TTL
+	resp, _ = c.Send(protocol.Request{
+		Cmd:     protocol.CmdTaskCreate,
+		Payload: json.RawMessage(`{"desc":"big ttl"}`),
+		Type:    "test",
+		TTL:     config.Defaults.MaxTaskTTL + 1,
+	})
+	if resp.OK {
+		t.Fatal("expected error for TTL exceeding max")
+	}
+	if resp.Code != protocol.ErrInvalidRequest {
+		t.Errorf("expected code=%s, got %s", protocol.ErrInvalidRequest, resp.Code)
+	}
+}

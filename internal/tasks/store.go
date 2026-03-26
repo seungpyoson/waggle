@@ -630,6 +630,7 @@ func (s *Store) CancelExpiredTTL() (int, error) {
 		    failure_reason = 'ttl_expired',
 		    updated_at = ?
 		WHERE state = 'pending'
+		  AND blocked = 0
 		  AND ttl IS NOT NULL
 		  AND CAST(strftime('%s','now') AS INTEGER) >= CAST(strftime('%s', created_at) AS INTEGER) + ttl
 	`, now)

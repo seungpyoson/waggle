@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/seungpyoson/waggle/internal/events"
+	"github.com/seungpyoson/waggle/internal/protocol"
 )
 
 // StartTaskTTLChecker runs a periodic checker that cancels expired-TTL tasks
@@ -36,13 +37,14 @@ func StartTaskTTLChecker(store *Store, hub *events.Hub, period time.Duration, st
 					"stale_count":        health.StaleCount,
 					"oldest_age_seconds": health.OldestPendingAge,
 				})
-				evt, _ := json.Marshal(map[string]any{
-					"topic": "task.events",
-					"event": "task.stale",
-					"data":  json.RawMessage(data),
-					"ts":    time.Now().UTC().Format(time.RFC3339),
-				})
-				hub.Publish("task.events", evt)
+				evt := protocol.Event{
+					Topic: "task.events",
+					Event: "task.stale",
+					Data:  data,
+					TS:    time.Now().UTC().Format(time.RFC3339),
+				}
+				evtBytes, _ := json.Marshal(evt)
+				hub.Publish("task.events", evtBytes)
 			}
 		}
 	}

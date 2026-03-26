@@ -180,6 +180,15 @@ func handleTaskCreate(s *Session, req protocol.Request) protocol.Response {
 		}
 	}
 
+	// Validate TTL
+	if req.TTL < 0 {
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, "ttl must be non-negative")
+	}
+	if req.TTL > config.Defaults.MaxTaskTTL {
+		return protocol.ErrResponse(protocol.ErrInvalidRequest,
+			fmt.Sprintf("ttl exceeds maximum (%d seconds)", config.Defaults.MaxTaskTTL))
+	}
+
 	task, err := s.broker.store.Create(tasks.CreateParams{
 		IdempotencyKey: req.IdempotencyKey,
 		Type:           req.Type,

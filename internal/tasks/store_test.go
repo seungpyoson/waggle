@@ -827,3 +827,119 @@ func TestStore_SchemaVersion(t *testing.T) {
 	}
 }
 
+func TestStore_CancelExpiredTTL_BlockedIgnored(t *testing.T) {
+	store := newTestStore(t)
+
+	// Create parent task (no TTL)
+	parent, err := store.Create(CreateParams{
+		Payload: `{"desc":"parent"}`,
+		Type:    "parent",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create child with TTL=1, depends on parent — will be blocked
+	child, err := store.Create(CreateParams{
+		Payload:   `{"desc":"child"}`,
+		Type:      "child",
+		TTL:       1,
+		DependsOn: []int64{parent.ID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify child is blocked
+	if !child.Blocked {
+		t.Fatal("child should be blocked")
+	}
+
+	// Wait for TTL to expire
+	time.Sleep(2 * time.Second)
+
+	// CancelExpiredTTL should NOT cancel blocked task
+	count, err := store.CancelExpiredTTL()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Errorf("expected 0 canceled, got %d", count)
+	}
+
+	// Verify child is still pending+blocked
+	got, _ := store.Get(child.ID)
+	if got.State != StatePending {
+		t.Errorf("expected state=pending, got %s", got.State)
+	}
+	if !got.Blocked {
+		t.Error("expected blocked=true")
+	}
+}
+
+func TestStore_CancelExpiredTTL_UnblockedAfterDependency(t *testing.T) {
+	store := newTestStore(t)
+
+	// Create parent task
+	parent, err := store.Create(CreateParams{
+		Payload: `{"desc":"parent"}`,
+		Type:    "parent",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create child with TTL=2, depends on parent
+	child, err := store.Create(CreateParams{
+		Payload:   `{"desc":"child"}`,
+		Type:      "child",
+		TTL:       2,
+		DependsOn: []int64{parent.ID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Claim and complete parent (unblocks child)
+	claimed, err := store.Claim("worker", ClaimFilter{})
+	if err != nil || claimed == nil {
+		t.Fatal("failed to claim parent")
+	}
+	err = store.Complete(claimed.ID, claimed.ClaimToken, `{"done":true}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Resolve dependencies (this is what the broker does after Complete)
+	_, err = ResolveDeps(store, claimed.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify child is now unblocked
+	got, _ := store.Get(child.ID)
+	if got.Blocked {
+		t.Fatal("child should be unblocked after parent completes")
+	}
+
+	// Wait for TTL to expire (TTL=2 from creation time, which was ~1s ago)
+	time.Sleep(3 * time.Second)
+
+	// Now CancelExpiredTTL should cancel the unblocked child
+	count, err := store.CancelExpiredTTL()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Errorf("expected 1 canceled, got %d", count)
+	}
+
+	got, _ = store.Get(child.ID)
+	if got.State != StateCanceled {
+		t.Errorf("expected state=canceled, got %s", got.State)
+	}
+	if got.FailureReason != "ttl_expired" {
+		t.Errorf("expected failure_reason=ttl_expired, got %s", got.FailureReason)
+	}
+}
+
