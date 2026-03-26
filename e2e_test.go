@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/seungpyoson/waggle/internal/client"
+	"github.com/seungpyoson/waggle/internal/config"
 	"github.com/seungpyoson/waggle/internal/protocol"
 )
 
@@ -96,7 +97,7 @@ func TestE2E_TaskRoundTrip(t *testing.T) {
 	conn.Close()
 
 	// Connect to broker and create session
-	c, err := client.Connect(socketPath)
+	c, err := client.Connect(socketPath, config.Defaults.ConnectTimeout)
 	if err != nil {
 		t.Fatalf("connect to broker: %v", err)
 	}
@@ -280,7 +281,7 @@ func TestE2E_DirectMessaging(t *testing.T) {
 	}
 
 	// Connect as alice
-	alice, err := client.Connect(socketPath)
+	alice, err := client.Connect(socketPath, config.Defaults.ConnectTimeout)
 	if err != nil {
 		t.Fatalf("alice connect: %v", err)
 	}
@@ -292,7 +293,7 @@ func TestE2E_DirectMessaging(t *testing.T) {
 	}
 
 	// Connect as bob
-	bob, err := client.Connect(socketPath)
+	bob, err := client.Connect(socketPath, config.Defaults.ConnectTimeout)
 	if err != nil {
 		t.Fatalf("bob connect: %v", err)
 	}
@@ -456,7 +457,7 @@ func TestE2E_AckLifecycle(t *testing.T) {
 	}
 
 	// Connect as alice
-	alice, err := client.Connect(socketPath)
+	alice, err := client.Connect(socketPath, config.Defaults.ConnectTimeout)
 	if err != nil {
 		t.Fatalf("alice connect: %v", err)
 	}
@@ -468,7 +469,7 @@ func TestE2E_AckLifecycle(t *testing.T) {
 	}
 
 	// Connect as bob
-	bob, err := client.Connect(socketPath)
+	bob, err := client.Connect(socketPath, config.Defaults.ConnectTimeout)
 	if err != nil {
 		t.Fatalf("bob connect: %v", err)
 	}

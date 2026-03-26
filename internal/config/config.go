@@ -90,6 +90,10 @@ var Defaults = struct {
 	SpawnKillPollInterval time.Duration
 	AgentConfigFile       string
 
+	// Connection timeout defaults
+	ConnectTimeout     time.Duration
+	HealthCheckTimeout time.Duration
+
 	// Task lifecycle defaults
 	TaskTTLCheckPeriod time.Duration
 	TaskStaleThreshold time.Duration
@@ -129,6 +133,9 @@ var Defaults = struct {
 	SpawnStopPollInterval: 100 * time.Millisecond,
 	SpawnKillPollInterval: 50 * time.Millisecond,
 	AgentConfigFile:       "agents.json",
+
+	ConnectTimeout:     5 * time.Second,
+	HealthCheckTimeout: 1 * time.Second,
 
 	TaskTTLCheckPeriod: 30 * time.Second,
 	TaskStaleThreshold: 5 * time.Minute,
