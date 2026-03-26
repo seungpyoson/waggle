@@ -215,6 +215,52 @@ func TestBroker_SessionsEmpty(t *testing.T) {
 	}
 }
 
+// TestBroker_SessionsExcludesEphemeral — D3: ephemeral _discovery-* sessions appear in raw presence
+// but should be filtered by the CLI. At the broker level, they ARE included (correct behavior).
+// This test verifies the broker includes them (so we know the CLI must filter).
+func TestBroker_SessionsExcludesEphemeral(t *testing.T) {
+	sockPath, _, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	// Connect a real agent
+	c1 := connectClient(t, sockPath)
+	defer c1.Close()
+	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+
+	// Connect an ephemeral discovery session
+	c2 := connectClient(t, sockPath)
+	defer c2.Close()
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "_discovery-12345"})
+
+	// Query presence from the discovery session
+	resp, _ := c2.Send(protocol.Request{Cmd: protocol.CmdPresence})
+	if !resp.OK {
+		t.Fatalf("presence: %s", resp.Error)
+	}
+
+	var agents []map[string]string
+	json.Unmarshal(resp.Data, &agents)
+
+	// Broker SHOULD include both (it lists all sessions)
+	hasAlice := false
+	hasDiscovery := false
+	for _, a := range agents {
+		if a["name"] == "alice" {
+			hasAlice = true
+		}
+		if a["name"] == "_discovery-12345" {
+			hasDiscovery = true
+		}
+	}
+
+	if !hasAlice {
+		t.Error("alice should be in presence list")
+	}
+	if !hasDiscovery {
+		t.Error("_discovery-12345 should be in raw presence list (CLI filters, not broker)")
+	}
+}
+
 // Test 1: Full round trip — create, claim, complete
 func TestBroker_FullRoundTrip_CreateClaimComplete(t *testing.T) {
 	sockPath, _, cleanup := startTestBroker(t)

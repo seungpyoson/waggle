@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 
@@ -32,6 +33,18 @@ var sessionsCmd = &cobra.Command{
 		if !resp.OK {
 			printErr(resp.Code, resp.Error)
 			return nil
+		}
+
+		// Filter out ephemeral sessions (names starting with _)
+		var agents []map[string]string
+		if err := json.Unmarshal(resp.Data, &agents); err == nil {
+			filtered := make([]map[string]string, 0, len(agents))
+			for _, a := range agents {
+				if name, ok := a["name"]; ok && len(name) > 0 && name[0] != '_' {
+					filtered = append(filtered, a)
+				}
+			}
+			resp.Data, _ = json.Marshal(filtered)
 		}
 
 		printJSON(resp)
