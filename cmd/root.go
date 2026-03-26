@@ -61,8 +61,15 @@ var (
 					} else {
 						fmt.Fprintf(os.Stderr, "waggle: unresponsive broker detected, starting fresh instance\n")
 					}
-					os.Remove(paths.Socket)
-					os.Remove(paths.PID)
+					// Remove stale files so autoStartBroker can bind a fresh socket.
+					// If removal fails, autoStartBroker will fail with "address in use" —
+					// surface the error now rather than let it cascade.
+					if err := os.Remove(paths.Socket); err != nil && !os.IsNotExist(err) {
+						return fmt.Errorf("removing stale socket: %w", err)
+					}
+					if err := os.Remove(paths.PID); err != nil && !os.IsNotExist(err) {
+						return fmt.Errorf("removing stale PID file: %w", err)
+					}
 					needsStart = true
 				}
 				// else: healthy, skip auto-start
@@ -168,17 +175,28 @@ func isTimeoutError(err error) bool {
 }
 
 // cleanupStaleFiles removes socket and PID files when a connect timeout
-// suggests the broker is zombie. Best-effort, errors ignored.
+// suggests the broker is zombie. Errors are logged to stderr but do not
+// propagate — this is a fallback path where we've already failed to connect.
 func cleanupStaleFiles() {
-	os.Remove(paths.Socket)
-	os.Remove(paths.PID)
+	if err := os.Remove(paths.Socket); err != nil && !os.IsNotExist(err) {
+		fmt.Fprintf(os.Stderr, "waggle: warning: failed to remove stale socket: %v\n", err)
+	}
+	if err := os.Remove(paths.PID); err != nil && !os.IsNotExist(err) {
+		fmt.Fprintf(os.Stderr, "waggle: warning: failed to remove stale PID file: %v\n", err)
+	}
 }
 
 // autoStartBroker cleans up stale files, ensures directories exist, starts the
 // broker daemon, and waits for it to become ready.
 func autoStartBroker() error {
-	// Cleanup stale files (idempotent — ignore errors, files may already be gone)
-	broker.CleanupStale(paths.PID, paths.Socket)
+	// Cleanup stale files. CleanupStale returns error if broker IS running
+	// (its internal IsRunning check). In the zombie recovery path, we already
+	// removed the PID file, so IsRunning returns false. In the normal dead-broker
+	// path, IsRunning also returns false. If it errors, the files may still exist
+	// and StartDaemon will fail with "address in use" — surface it.
+	if err := broker.CleanupStale(paths.PID, paths.Socket); err != nil {
+		return fmt.Errorf("cleaning up stale files: %w", err)
+	}
 
 	socketDir := filepath.Dir(paths.Socket)
 	if err := broker.EnsureDirs(paths.DataDir, socketDir); err != nil {

@@ -75,8 +75,11 @@ func IsResponding(socketPath string, timeout time.Duration) bool {
 	}
 	defer conn.Close()
 
-	// Set deadline for the entire send+read exchange
-	conn.SetDeadline(time.Now().Add(timeout))
+	// Set deadline for the entire send+read exchange.
+	// If this fails, the probe has no deadline and could hang forever on a zombie.
+	if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
+		return false
+	}
 
 	// Send a status request (no session required)
 	req := struct {
