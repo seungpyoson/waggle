@@ -2997,3 +2997,210 @@ func TestBroker_CustomEventEmptyMessage(t *testing.T) {
 		t.Fatal("timeout waiting for event")
 	}
 }
+
+// TestBroker_PushToListenerSession verifies that messages sent to "alice" are also pushed to "alice-push" session (L5)
+func TestBroker_PushToListenerSession(t *testing.T) {
+	sockPath, _, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	// Connect as "alice-push" (the persistent listener)
+	listenerConn, err := client.Connect(sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listenerConn.Close()
+
+	connectReq := protocol.Request{
+		Cmd:  "connect",
+		Name: "alice-push",
+	}
+	if _, err := listenerConn.Send(connectReq); err != nil {
+		t.Fatal(err)
+	}
+
+	// Connect as sender
+	senderConn, err := client.Connect(sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer senderConn.Close()
+
+	connectReq = protocol.Request{
+		Cmd:  "connect",
+		Name: "sender",
+	}
+	if _, err := senderConn.Send(connectReq); err != nil {
+		t.Fatal(err)
+	}
+
+	// Send message to "alice" (not "alice-push")
+	sendReq := protocol.Request{
+		Cmd:     "send",
+		Name:    "alice",
+		Message: "test push to listener",
+	}
+	if _, err := senderConn.Send(sendReq); err != nil {
+		t.Fatal(err)
+	}
+
+	// Listener should receive the push
+	resp, err := listenerConn.Receive()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !resp.OK {
+		t.Fatalf("expected OK response, got error: %s", resp.Error)
+	}
+
+	var data map[string]any
+	if err := json.Unmarshal(resp.Data, &data); err != nil {
+		t.Fatal(err)
+	}
+
+	if data["type"] != "message" {
+		t.Errorf("expected type=message, got %v", data["type"])
+	}
+	if data["from"] != "sender" {
+		t.Errorf("expected from=sender, got %v", data["from"])
+	}
+	if data["body"] != "test push to listener" {
+		t.Errorf("expected body='test push to listener', got %v", data["body"])
+	}
+}
+
+// TestBroker_ListenReceivesPush verifies that waggle listen receives pushed messages (L1)
+func TestBroker_ListenReceivesPush(t *testing.T) {
+	sockPath, _, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	// Connect listener using ReadMessages
+	listenerConn, err := client.Connect(sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listenerConn.Close()
+
+	connectReq := protocol.Request{
+		Cmd:  "connect",
+		Name: "bob-push",
+	}
+	if _, err := listenerConn.Send(connectReq); err != nil {
+		t.Fatal(err)
+	}
+
+	// Start reading messages
+	msgCh, err := listenerConn.ReadMessages()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Connect sender
+	senderConn, err := client.Connect(sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer senderConn.Close()
+
+	connectReq = protocol.Request{
+		Cmd:  "connect",
+		Name: "sender",
+	}
+	if _, err := senderConn.Send(connectReq); err != nil {
+		t.Fatal(err)
+	}
+
+	// Send message to "bob"
+	sendReq := protocol.Request{
+		Cmd:     "send",
+		Name:    "bob",
+		Message: "hello from ReadMessages test",
+	}
+	if _, err := senderConn.Send(sendReq); err != nil {
+		t.Fatal(err)
+	}
+
+	// Wait for message on channel
+	select {
+	case msg := <-msgCh:
+		if msg.From != "sender" {
+			t.Errorf("expected from=sender, got %s", msg.From)
+		}
+		if msg.Body != "hello from ReadMessages test" {
+			t.Errorf("expected body='hello from ReadMessages test', got %s", msg.Body)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for pushed message")
+	}
+}
+
+// TestClient_ReadMessagesFilters verifies that ReadMessages only emits message-type responses (L10)
+func TestClient_ReadMessagesFilters(t *testing.T) {
+	sockPath, _, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	// Connect listener
+	listenerConn, err := client.Connect(sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listenerConn.Close()
+
+	connectReq := protocol.Request{
+		Cmd:  "connect",
+		Name: "filter-test-push",
+	}
+	// Send connect request - this will generate a connect response
+	if _, err := listenerConn.Send(connectReq); err != nil {
+		t.Fatal(err)
+	}
+
+	// Start reading messages (should filter out the connect response)
+	msgCh, err := listenerConn.ReadMessages()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Connect sender
+	senderConn, err := client.Connect(sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer senderConn.Close()
+
+	connectReq = protocol.Request{
+		Cmd:  "connect",
+		Name: "sender",
+	}
+	if _, err := senderConn.Send(connectReq); err != nil {
+		t.Fatal(err)
+	}
+
+	// Send a message to "filter-test"
+	sendReq := protocol.Request{
+		Cmd:     "send",
+		Name:    "filter-test",
+		Message: "only this should appear",
+	}
+	if _, err := senderConn.Send(sendReq); err != nil {
+		t.Fatal(err)
+	}
+
+	// Should receive only the message, not the connect response
+	select {
+	case msg := <-msgCh:
+		if msg.Body != "only this should appear" {
+			t.Errorf("expected body='only this should appear', got %s", msg.Body)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for message")
+	}
+
+	// Verify no other messages arrive (connect response was filtered)
+	select {
+	case msg := <-msgCh:
+		t.Errorf("unexpected message received: %+v", msg)
+	case <-time.After(500 * time.Millisecond):
+		// Good - no extra messages
+	}
+}

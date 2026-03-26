@@ -97,6 +97,49 @@ func (c *Client) ReadStream() (<-chan protocol.Event, error) {
 	return eventChan, nil
 }
 
+// PushedMessage represents a message pushed from the broker.
+type PushedMessage struct {
+	ID     int64  `json:"id"`
+	From   string `json:"from"`
+	Body   string `json:"body"`
+	SentAt string `json:"sent_at"`
+}
+
+// ReadMessages returns a channel that receives pushed messages from the broker.
+// Filters out non-message responses (connect responses, etc).
+func (c *Client) ReadMessages() (<-chan PushedMessage, error) {
+	ch := make(chan PushedMessage)
+	go func() {
+		defer close(ch)
+		for c.scanner.Scan() {
+			var resp protocol.Response
+			if err := json.Unmarshal(c.scanner.Bytes(), &resp); err != nil {
+				continue
+			}
+			if !resp.OK || len(resp.Data) == 0 {
+				continue
+			}
+			var msg struct {
+				Type   string `json:"type"`
+				ID     int64  `json:"id"`
+				From   string `json:"from"`
+				Body   string `json:"body"`
+				SentAt string `json:"sent_at"`
+			}
+			if err := json.Unmarshal(resp.Data, &msg); err != nil || msg.Type != "message" {
+				continue
+			}
+			ch <- PushedMessage{
+				ID:     msg.ID,
+				From:   msg.From,
+				Body:   msg.Body,
+				SentAt: msg.SentAt,
+			}
+		}
+	}()
+	return ch, nil
+}
+
 // SetDeadline sets a deadline on the underlying connection for all future I/O.
 // Returns error if the deadline cannot be set (e.g., connection already broken).
 func (c *Client) SetDeadline(timeout time.Duration) error {
