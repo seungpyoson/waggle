@@ -600,6 +600,32 @@ func handleSend(s *Session, req protocol.Request) protocol.Response {
 		}
 	}
 
+	// Also push to persistent listener (<name>-push) if connected
+	pushName := req.Name + "-push"
+	s.broker.mu.RLock()
+	pushRecipient, pushOnline := s.broker.sessions[pushName]
+	s.broker.mu.RUnlock()
+
+	if pushOnline && pushRecipient != s {
+		pushResp := protocol.Response{
+			OK: true,
+			Data: mustMarshal(map[string]any{
+				"type":    "message",
+				"id":      msg.ID,
+				"from":    msg.From,
+				"body":    msg.Body,
+				"sent_at": msg.CreatedAt,
+			}),
+		}
+		pushRecipient.writeMu.Lock()
+		if err := pushRecipient.enc.Encode(pushResp); err != nil {
+			pushRecipient.writeMu.Unlock()
+			log.Printf("session %s: failed to push message %d to %s: %v", s.name, msg.ID, pushName, err)
+		} else {
+			pushRecipient.writeMu.Unlock()
+		}
+	}
+
 	// Wait for ack if requested
 	if req.AwaitAck {
 		timeout := time.Duration(req.Timeout) * time.Second

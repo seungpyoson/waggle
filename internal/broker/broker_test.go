@@ -2997,3 +2997,189 @@ func TestBroker_CustomEventEmptyMessage(t *testing.T) {
 		t.Fatal("timeout waiting for event")
 	}
 }
+
+// TestBroker_PushToListenerSession verifies that messages sent to "alice" are also pushed to "alice-push" session (L5)
+func TestBroker_PushToListenerSession(t *testing.T) {
+	sockPath, _, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	// Connect as "alice-push" (the persistent listener)
+	listenerConn, err := client.Connect(sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listenerConn.Close()
+
+	connectReq := protocol.Request{
+		Cmd:  "connect",
+		Name: "alice-push",
+	}
+	if _, err := listenerConn.Send(connectReq); err != nil {
+		t.Fatal(err)
+	}
+
+	// Connect as sender
+	senderConn, err := client.Connect(sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer senderConn.Close()
+
+	connectReq = protocol.Request{
+		Cmd:  "connect",
+		Name: "sender",
+	}
+	if _, err := senderConn.Send(connectReq); err != nil {
+		t.Fatal(err)
+	}
+
+	// Send message to "alice" (not "alice-push")
+	sendReq := protocol.Request{
+		Cmd:     "send",
+		Name:    "alice",
+		Message: "test push to listener",
+	}
+	if _, err := senderConn.Send(sendReq); err != nil {
+		t.Fatal(err)
+	}
+
+	// Listener should receive the push
+	resp, err := listenerConn.Receive()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !resp.OK {
+		t.Fatalf("expected OK response, got error: %s", resp.Error)
+	}
+
+	var data map[string]any
+	if err := json.Unmarshal(resp.Data, &data); err != nil {
+		t.Fatal(err)
+	}
+
+	if data["type"] != "message" {
+		t.Errorf("expected type=message, got %v", data["type"])
+	}
+	if data["from"] != "sender" {
+		t.Errorf("expected from=sender, got %v", data["from"])
+	}
+	if data["body"] != "test push to listener" {
+		t.Errorf("expected body='test push to listener', got %v", data["body"])
+	}
+}
+
+// TestBroker_ListenReceivesPush verifies that waggle listen receives pushed messages (L1)
+func TestBroker_ListenReceivesPush(t *testing.T) {
+	sockPath, _, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	// Connect listener using ReadMessages
+	listenerConn, err := client.Connect(sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listenerConn.Close()
+
+	connectReq := protocol.Request{
+		Cmd:  "connect",
+		Name: "bob-push",
+	}
+	if _, err := listenerConn.Send(connectReq); err != nil {
+		t.Fatal(err)
+	}
+
+	// Start reading messages
+	msgCh, err := listenerConn.ReadMessages()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Connect sender
+	senderConn, err := client.Connect(sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer senderConn.Close()
+
+	connectReq = protocol.Request{
+		Cmd:  "connect",
+		Name: "sender",
+	}
+	if _, err := senderConn.Send(connectReq); err != nil {
+		t.Fatal(err)
+	}
+
+	// Send message to "bob"
+	sendReq := protocol.Request{
+		Cmd:     "send",
+		Name:    "bob",
+		Message: "hello from ReadMessages test",
+	}
+	if _, err := senderConn.Send(sendReq); err != nil {
+		t.Fatal(err)
+	}
+
+	// Wait for message on channel
+	select {
+	case msg := <-msgCh:
+		if msg.From != "sender" {
+			t.Errorf("expected from=sender, got %s", msg.From)
+		}
+		if msg.Body != "hello from ReadMessages test" {
+			t.Errorf("expected body='hello from ReadMessages test', got %s", msg.Body)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for pushed message")
+	}
+}
+
+// TestClient_ReadMessagesFilters verifies that ReadMessages only emits message-type responses (L10)
+func TestClient_ReadMessagesFilters(t *testing.T) {
+	sockPath, _, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	// Connect a listener as "filter-test-push"
+	listenerConn := connectClient(t, sockPath)
+	defer listenerConn.Close()
+	listenerConn.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "filter-test-push"})
+
+	// Start ReadMessages — it now owns the scanner
+	msgCh, err := listenerConn.ReadMessages()
+	if err != nil {
+		t.Fatalf("ReadMessages: %v", err)
+	}
+
+	// Connect a sender and send a message to "filter-test"
+	// This will push to "filter-test-push" via the broker's -push logic
+	sender := connectClient(t, sockPath)
+	defer sender.Close()
+	sender.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "sender-filter"})
+	resp, err := sender.Send(protocol.Request{
+		Cmd:     protocol.CmdSend,
+		Name:    "filter-test",
+		Message: "filter test message",
+	})
+	if err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if !resp.OK {
+		t.Fatalf("send failed: %s", resp.Error)
+	}
+
+	// The listener should receive the pushed message
+	select {
+	case msg, ok := <-msgCh:
+		if !ok {
+			t.Fatal("channel closed unexpectedly")
+		}
+		if msg.Body != "filter test message" {
+			t.Errorf("expected body 'filter test message', got '%s'", msg.Body)
+		}
+		if msg.From != "sender-filter" {
+			t.Errorf("expected from 'sender-filter', got '%s'", msg.From)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for pushed message")
+	}
+}

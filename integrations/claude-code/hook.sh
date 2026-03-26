@@ -96,7 +96,16 @@ if [ -n "$SESSIONS" ]; then
     SESSION_COUNT=$(echo "$SESSIONS" | jq -r '[.data[] | select(.name | startswith("_") | not)] | length' 2>/dev/null || echo "0")
 fi
 
-# 9. Output context only if there's something to report
+# 9. Start background listener for push messages
+LISTEN_FILE="/tmp/waggle-${AGENT_NAME}.jsonl"
+# Kill any existing listener for this agent
+pkill -f "waggle listen.*--name ${AGENT_NAME}-push" 2>/dev/null || true
+sleep 0.2
+# Start fresh listener
+waggle listen --name "${AGENT_NAME}-push" --output "$LISTEN_FILE" &
+disown
+
+# 10. Output context only if there's something to report
 if [ "$INBOX_COUNT" != "0" ] || [ "$TASK_COUNT" != "0" ] || [ "$SESSION_COUNT" != "0" ]; then
     echo ""
     echo "## Waggle Agent: ${AGENT_NAME}"
