@@ -55,6 +55,11 @@ var taskCreateCmd = &cobra.Command{
 				return nil
 			}
 			ttlSeconds = int(d.Seconds())
+			// Reject sub-second TTL that would silently become no-TTL
+			if d > 0 && ttlSeconds == 0 {
+				printErr("INVALID_REQUEST", "ttl must be at least 1 second")
+				return nil
+			}
 		}
 
 		req := protocol.Request{
