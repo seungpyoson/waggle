@@ -15,7 +15,7 @@ fi
 command -v waggle >/dev/null 2>&1 || exit 0
 
 # 2. Check if broker is running (waggle status is the cheapest check)
-STATUS=$($TIMEOUT_CMD 2 waggle status 2>/dev/null) || exit 0
+STATUS=$($TIMEOUT_CMD 2 waggle --no-auto-start status 2>/dev/null) || exit 0
 
 # 3. Resolve agent name
 AGENT_NAME="${WAGGLE_AGENT_NAME:-claude-$$}"

@@ -15,8 +15,9 @@ import (
 )
 
 var (
-	paths config.Paths
-	rootCmd = &cobra.Command{
+	noAutoStart bool
+	paths       config.Paths
+	rootCmd     = &cobra.Command{
 		Use:   "waggle",
 		Short: "Agent session coordination broker",
 		Long:  "Waggle coordinates work between independent AI coding agent sessions through task distribution, file locks, and event streaming.",
@@ -41,6 +42,12 @@ var (
 
 			if paths.DataDir == "" {
 				return fmt.Errorf("cannot determine data paths: HOME not set")
+			}
+
+			if noAutoStart {
+				// Still resolve paths (commands need them), but don't start broker
+				// If broker isn't running, commands that need it will fail on connect
+				return nil
 			}
 
 			// Auto-start broker if not running
@@ -72,6 +79,10 @@ var (
 		},
 	}
 )
+
+func init() {
+	rootCmd.PersistentFlags().BoolVar(&noAutoStart, "no-auto-start", false, "Don't auto-start broker")
+}
 
 // Execute runs the root command
 func Execute() {
