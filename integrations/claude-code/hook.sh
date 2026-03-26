@@ -21,7 +21,7 @@ STATUS=$($TIMEOUT_CMD 2 waggle status 2>/dev/null) || exit 0
 AGENT_NAME="${WAGGLE_AGENT_NAME:-claude-$$}"
 
 # 4. Check inbox (2s timeout)
-INBOX=$($TIMEOUT_CMD 2 bash -c "WAGGLE_AGENT_NAME='$AGENT_NAME' waggle inbox" 2>/dev/null) || INBOX=""
+INBOX=$($TIMEOUT_CMD 2 env WAGGLE_AGENT_NAME="$AGENT_NAME" waggle inbox 2>/dev/null) || INBOX=""
 INBOX_COUNT=0
 if [ -n "$INBOX" ]; then
     INBOX_COUNT=$(echo "$INBOX" | jq -r '.data | length' 2>/dev/null || echo "0")

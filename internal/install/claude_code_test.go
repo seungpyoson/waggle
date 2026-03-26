@@ -1,6 +1,7 @@
 package install
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -387,3 +388,76 @@ func TestUninstall_IdempotentNoFiles(t *testing.T) {
 	// Should be no error
 }
 
+func TestEmbeddedFilesMatchSource(t *testing.T) {
+	// The test file is in internal/install/, so ../../integrations/claude-code/ is the source
+	sourceDir := filepath.Join("..", "..", "integrations", "claude-code")
+	embedDir := filepath.Join("claude-code")
+
+	// Check source dir exists
+	if _, err := os.Stat(sourceDir); os.IsNotExist(err) {
+		t.Skip("source directory not found (running outside repo root)")
+	}
+
+	sourceFiles := make(map[string][]byte)
+	err := filepath.WalkDir(sourceDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		rel, _ := filepath.Rel(sourceDir, path)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		sourceFiles[rel] = data
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking source dir: %v", err)
+	}
+
+	embedFiles := make(map[string][]byte)
+	err = filepath.WalkDir(embedDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		rel, _ := filepath.Rel(embedDir, path)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		embedFiles[rel] = data
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking embed dir: %v", err)
+	}
+
+	// Check all source files exist in embed dir with same content
+	for name, sourceData := range sourceFiles {
+		embedData, ok := embedFiles[name]
+		if !ok {
+			t.Errorf("file %s exists in integrations/claude-code/ but not in internal/install/claude-code/", name)
+			continue
+		}
+		if !bytes.Equal(sourceData, embedData) {
+			t.Errorf("embedded copy diverged from source: %s — run 'cp integrations/claude-code/%s internal/install/claude-code/%s' to sync", name, name, name)
+		}
+	}
+
+	// Check no extra files in embed dir
+	for name := range embedFiles {
+		if _, ok := sourceFiles[name]; !ok {
+			t.Errorf("file %s exists in internal/install/claude-code/ but not in integrations/claude-code/", name)
+		}
+	}
+
+	if len(sourceFiles) != len(embedFiles) {
+		t.Errorf("file count mismatch: source=%d, embed=%d", len(sourceFiles), len(embedFiles))
+	}
+}

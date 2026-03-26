@@ -41,13 +41,19 @@ func installClaudeCode(homeDir string) error {
 	if err := os.MkdirAll(hookDir, 0755); err != nil {
 		return fmt.Errorf("creating hooks dir: %w", err)
 	}
-	hookData, _ := claudeCodeFiles.ReadFile("claude-code/hook.sh")
+	hookData, err := claudeCodeFiles.ReadFile("claude-code/hook.sh")
+	if err != nil {
+		return fmt.Errorf("reading embedded hook.sh: %w", err)
+	}
 	if err := os.WriteFile(filepath.Join(hookDir, "waggle-connect.sh"), hookData, 0755); err != nil {
 		return fmt.Errorf("writing hook: %w", err)
 	}
 
 	// 2. Copy heartbeat script
-	heartbeatData, _ := claudeCodeFiles.ReadFile("claude-code/heartbeat.sh")
+	heartbeatData, err := claudeCodeFiles.ReadFile("claude-code/heartbeat.sh")
+	if err != nil {
+		return fmt.Errorf("reading embedded heartbeat.sh: %w", err)
+	}
 	if err := os.WriteFile(filepath.Join(hookDir, "waggle-heartbeat.sh"), heartbeatData, 0755); err != nil {
 		return fmt.Errorf("writing heartbeat: %w", err)
 	}
@@ -59,7 +65,10 @@ func installClaudeCode(homeDir string) error {
 	}
 	skillFiles := []string{"waggle.md", "send.md", "inbox.md", "ack.md", "status.md", "claim.md", "done.md", "presence.md"}
 	for _, name := range skillFiles {
-		data, _ := claudeCodeFiles.ReadFile("claude-code/skills/" + name)
+		data, err := claudeCodeFiles.ReadFile("claude-code/skills/" + name)
+		if err != nil {
+			return fmt.Errorf("reading embedded skill %s: %w", name, err)
+		}
 		if err := os.WriteFile(filepath.Join(skillDir, name), data, 0644); err != nil {
 			return fmt.Errorf("writing skill %s: %w", name, err)
 		}
