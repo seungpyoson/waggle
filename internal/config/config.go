@@ -54,24 +54,27 @@ func ValidateDefaults() error {
 }
 
 var Defaults = struct {
-	DirName    string
-	DBFile     string
-	ConfigFile string
-	PIDFile    string
-	LockFile   string
-	LogFile    string
+	DirName           string
+	DBFile            string
+	ConfigFile        string
+	PIDFile           string
+	LockFile          string
+	LogFile           string
+	RuntimeDirName    string
+	RuntimeStateFile  string
+	RuntimeSocketFile string
 
-	ShutdownTimeout     time.Duration
-	PollInterval        time.Duration
-	MaxLogSize          int64
-	MaxMessageSize      int64
-	LeaseDuration       time.Duration
-	IdleTimeout         time.Duration
-	BusyTimeout         time.Duration
-	LeaseCheckPeriod    time.Duration
-	IdleCheckInterval   time.Duration
-	StartupPollInterval  time.Duration
-	StartupTimeout       time.Duration
+	ShutdownTimeout        time.Duration
+	PollInterval           time.Duration
+	MaxLogSize             int64
+	MaxMessageSize         int64
+	LeaseDuration          time.Duration
+	IdleTimeout            time.Duration
+	BusyTimeout            time.Duration
+	LeaseCheckPeriod       time.Duration
+	IdleCheckInterval      time.Duration
+	StartupPollInterval    time.Duration
+	StartupTimeout         time.Duration
 	DisconnectTimeout      time.Duration
 	MaxRetries             int
 	MaxPriority            int
@@ -99,24 +102,27 @@ var Defaults = struct {
 	TaskStaleThreshold time.Duration
 	MaxTaskTTL         int
 }{
-	DirName:    ".waggle",
-	DBFile:     "state.db",
-	ConfigFile: "config.json",
-	PIDFile:    "waggle.pid",
-	LockFile:   "waggle.lock",
-	LogFile:    "waggle.log",
+	DirName:           ".waggle",
+	DBFile:            "state.db",
+	ConfigFile:        "config.json",
+	PIDFile:           "waggle.pid",
+	LockFile:          "waggle.lock",
+	LogFile:           "waggle.log",
+	RuntimeDirName:    "runtime",
+	RuntimeStateFile:  "state.json",
+	RuntimeSocketFile: "runtime.sock",
 
-	ShutdownTimeout:     5 * time.Second,
-	PollInterval:        500 * time.Millisecond,
-	MaxLogSize:          10 * 1024 * 1024,
-	MaxMessageSize:      1024 * 1024, // 1MB buffer for large AI agent payloads
-	LeaseDuration:       5 * time.Minute,
-	IdleTimeout:         5 * time.Minute,
-	BusyTimeout:         5 * time.Second,
-	LeaseCheckPeriod:    30 * time.Second,
-	IdleCheckInterval:   1 * time.Second,
-	StartupPollInterval:  100 * time.Millisecond,
-	StartupTimeout:       2 * time.Second,
+	ShutdownTimeout:        5 * time.Second,
+	PollInterval:           500 * time.Millisecond,
+	MaxLogSize:             10 * 1024 * 1024,
+	MaxMessageSize:         1024 * 1024, // 1MB buffer for large AI agent payloads
+	LeaseDuration:          5 * time.Minute,
+	IdleTimeout:            5 * time.Minute,
+	BusyTimeout:            5 * time.Second,
+	LeaseCheckPeriod:       30 * time.Second,
+	IdleCheckInterval:      1 * time.Second,
+	StartupPollInterval:    100 * time.Millisecond,
+	StartupTimeout:         2 * time.Second,
 	DisconnectTimeout:      2 * time.Second,
 	MaxRetries:             3,
 	MaxPriority:            100,
@@ -143,13 +149,16 @@ var Defaults = struct {
 }
 
 type Paths struct {
-	ProjectID string
-	DataDir   string
-	DB        string
-	PID       string
-	Lock      string
-	Log       string
-	Socket    string
+	ProjectID     string
+	DataDir       string
+	RuntimeDir    string
+	RuntimeState  string
+	RuntimeSocket string
+	DB            string
+	PID           string
+	Lock          string
+	Log           string
+	Socket        string
 }
 
 // NewPaths computes all derived paths from a project ID. All state paths live
@@ -167,15 +176,19 @@ func NewPaths(projectID string) Paths {
 
 	dataDir := filepath.Join(home, Defaults.DirName, "data", hash)
 	socketDir := filepath.Join(home, Defaults.DirName, "sockets", hash)
+	runtimeDir := filepath.Join(home, Defaults.DirName, Defaults.RuntimeDirName, hash)
 
 	return Paths{
-		ProjectID: projectID,
-		DataDir:   dataDir,
-		DB:        filepath.Join(dataDir, Defaults.DBFile),
-		PID:       filepath.Join(dataDir, Defaults.PIDFile),
-		Lock:      filepath.Join(dataDir, Defaults.LockFile),
-		Log:       filepath.Join(dataDir, Defaults.LogFile),
-		Socket:    filepath.Join(socketDir, "broker.sock"),
+		ProjectID:     projectID,
+		DataDir:       dataDir,
+		RuntimeDir:    runtimeDir,
+		RuntimeState:  filepath.Join(runtimeDir, Defaults.RuntimeStateFile),
+		RuntimeSocket: filepath.Join(runtimeDir, Defaults.RuntimeSocketFile),
+		DB:            filepath.Join(dataDir, Defaults.DBFile),
+		PID:           filepath.Join(dataDir, Defaults.PIDFile),
+		Lock:          filepath.Join(dataDir, Defaults.LockFile),
+		Log:           filepath.Join(dataDir, Defaults.LogFile),
+		Socket:        filepath.Join(socketDir, "broker.sock"),
 	}
 }
 

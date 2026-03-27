@@ -276,6 +276,73 @@ func TestPaths_SocketHashLength(t *testing.T) {
 	}
 }
 
+func TestNewPaths_IncludesRuntimePaths(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	p := NewPaths("test-project")
+	for name, val := range map[string]string{
+		"RuntimeDir":    p.RuntimeDir,
+		"RuntimeState":  p.RuntimeState,
+		"RuntimeSocket": p.RuntimeSocket,
+	} {
+		if val == "" {
+			t.Fatalf("%s is empty", name)
+		}
+		if !filepath.IsAbs(val) {
+			t.Fatalf("%s not absolute: %q", name, val)
+		}
+	}
+
+	if got := filepath.Base(p.RuntimeState); got != Defaults.RuntimeStateFile {
+		t.Fatalf("RuntimeState filename = %q, want %q", got, Defaults.RuntimeStateFile)
+	}
+	if got := filepath.Base(p.RuntimeSocket); got != Defaults.RuntimeSocketFile {
+		t.Fatalf("RuntimeSocket filename = %q, want %q", got, Defaults.RuntimeSocketFile)
+	}
+	if got, want := filepath.Dir(p.RuntimeState), p.RuntimeDir; got != want {
+		t.Fatalf("RuntimeState dir = %q, want %q", got, want)
+	}
+	if got, want := filepath.Dir(p.RuntimeSocket), p.RuntimeDir; got != want {
+		t.Fatalf("RuntimeSocket dir = %q, want %q", got, want)
+	}
+
+	brokerHash := filepath.Base(filepath.Dir(p.Socket))
+	runtimeHash := filepath.Base(p.RuntimeDir)
+	if runtimeHash != brokerHash {
+		t.Fatalf("runtime hash = %q, want broker hash %q", runtimeHash, brokerHash)
+	}
+}
+
+func TestResolveProjectID_UnchangedForRuntime(t *testing.T) {
+	t.Setenv("WAGGLE_PROJECT_ID", "")
+	t.Setenv("WAGGLE_ROOT", "")
+
+	repo := createGitRepo(t)
+	chdir(t, repo)
+
+	id, err := ResolveProjectID()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	p := NewPaths(id)
+	if p.ProjectID != id {
+		t.Fatalf("ProjectID = %q, want %q", p.ProjectID, id)
+	}
+
+	if p.RuntimeDir == "" || p.RuntimeState == "" || p.RuntimeSocket == "" {
+		t.Fatalf("runtime paths should be populated for a resolved project: %#v", p)
+	}
+
+	id2, err := ResolveProjectID()
+	if err != nil {
+		t.Fatalf("unexpected error on second call: %v", err)
+	}
+	if id2 != id {
+		t.Fatalf("ResolveProjectID changed after NewPaths: got %q, want %q", id2, id)
+	}
+}
+
 // LeaseDuration is set to 5 minutes for task claims
 func TestDefaults_LeaseDuration(t *testing.T) {
 	if Defaults.LeaseDuration != 5*time.Minute {
@@ -387,7 +454,6 @@ func TestValidateDefaults_DeterministicErrorOrder(t *testing.T) {
 		}
 	}
 }
-
 
 func TestResolveProjectID_EnvOverride(t *testing.T) {
 	t.Setenv("WAGGLE_PROJECT_ID", "custom-id-123")
@@ -564,8 +630,9 @@ func TestNewPaths_AllEmptyWithoutHome(t *testing.T) {
 	t.Setenv("HOME", "")
 	p := NewPaths("test-id")
 	for name, val := range map[string]string{
-		"DataDir": p.DataDir, "DB": p.DB, "PID": p.PID,
-		"Lock": p.Lock, "Log": p.Log, "Socket": p.Socket,
+		"DataDir": p.DataDir, "RuntimeDir": p.RuntimeDir,
+		"RuntimeState": p.RuntimeState, "RuntimeSocket": p.RuntimeSocket,
+		"DB": p.DB, "PID": p.PID, "Lock": p.Lock, "Log": p.Log, "Socket": p.Socket,
 	} {
 		if val != "" {
 			t.Errorf("expected empty %s without HOME, got %q", name, val)
