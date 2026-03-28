@@ -1,9 +1,6 @@
 package cmd
 
-import (
-	rt "github.com/seungpyoson/waggle/internal/runtime"
-	"github.com/spf13/cobra"
-)
+import "github.com/spf13/cobra"
 
 var runtimePullProjectID string
 
@@ -44,8 +41,4 @@ var runtimePullCmd = &cobra.Command{
 		})
 		return nil
 	},
-}
-
-func unreadRecordsForAgent(store *rt.Store, projectID, agentName string) ([]rt.DeliveryRecord, error) {
-	return store.Unread(projectID, agentName)
 }

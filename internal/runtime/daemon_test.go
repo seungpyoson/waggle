@@ -2,10 +2,12 @@ package runtime
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/seungpyoson/waggle/internal/broker"
 	"github.com/seungpyoson/waggle/internal/config"
 )
 
@@ -71,5 +73,88 @@ func TestSaveState_UsesMachineRuntimeStatePath(t *testing.T) {
 	}
 	if got, want := pathsA.RuntimeState, filepath.Join(home, ".waggle", config.Defaults.RuntimeDirName, config.Defaults.RuntimeStateFile); got != want {
 		t.Fatalf("runtime state path = %q, want %q", got, want)
+	}
+}
+
+func TestAcquireStartLock_IsExclusive(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	paths := config.NewPaths("")
+	release, err := AcquireStartLock(paths, config.Defaults.RuntimeStartLockStaleThreshold)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = release()
+	})
+
+	if _, err := AcquireStartLock(paths, config.Defaults.RuntimeStartLockStaleThreshold); err == nil {
+		t.Fatal("expected second lock acquisition to fail")
+	}
+}
+
+func TestAcquireStartLock_RecoversStaleLock(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	paths := config.NewPaths("")
+	if err := os.MkdirAll(paths.RuntimeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(paths.RuntimeStartLockDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-2 * config.Defaults.RuntimeStartLockStaleThreshold)
+	if err := os.Chtimes(paths.RuntimeStartLockDir, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	release, err := AcquireStartLock(paths, config.Defaults.RuntimeStartLockStaleThreshold)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if release == nil {
+		t.Fatal("expected release func")
+	}
+	if err := release(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestIsRunningRequiresMatchingState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	paths := config.NewPaths("")
+	if err := os.MkdirAll(paths.RuntimeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := broker.WritePID(paths.RuntimePID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Remove(paths.RuntimePID)
+	})
+
+	if err := SaveState(paths, State{
+		PID:     os.Getpid(),
+		Running: false,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if IsRunning(paths) {
+		t.Fatal("expected mismatched state to report not running")
+	}
+
+	if err := SaveState(paths, State{
+		PID:       os.Getpid(),
+		Running:   true,
+		StartedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !IsRunning(paths) {
+		t.Fatal("expected matching pid/state to report running")
 	}
 }

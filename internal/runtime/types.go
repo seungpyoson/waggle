@@ -4,9 +4,10 @@ import "time"
 
 // Watch describes a runtime watch registration scoped to a project and agent.
 type Watch struct {
-	ProjectID string `json:"project_id"`
-	AgentName string `json:"agent_name"`
-	Source    string `json:"source"`
+	ProjectID string    `json:"project_id"`
+	AgentName string    `json:"agent_name"`
+	Source    string    `json:"source"`
+	ExpiresAt time.Time `json:"expires_at,omitempty"`
 }
 
 // DeliveryRecord captures the lifecycle of a runtime delivery.

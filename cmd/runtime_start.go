@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"syscall"
 	"time"
 
@@ -41,7 +42,9 @@ var runtimeStartCmd = &cobra.Command{
 			defer store.Close()
 
 			manager := rt.NewManager(store, rt.NewBrokerListenerFactory(), rt.NewCommandNotifier())
-			return rt.RunDaemon(context.Background(), runtimePaths, manager)
+			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+			return rt.RunDaemon(ctx, runtimePaths, manager)
 		}
 
 		if rt.IsRunning(runtimePaths) {
@@ -58,6 +61,14 @@ var runtimeStartCmd = &cobra.Command{
 		if err := rt.CleanupStale(runtimePaths); err != nil {
 			return err
 		}
+
+		releaseLock, err := rt.AcquireStartLock(runtimePaths, config.Defaults.RuntimeStartLockStaleThreshold)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			_ = releaseLock()
+		}()
 
 		daemonArgs := []string{os.Args[0], "runtime", "start", "--foreground"}
 		if err := rt.StartDaemon(runtimePaths, daemonArgs); err != nil {

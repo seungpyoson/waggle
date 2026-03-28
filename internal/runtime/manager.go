@@ -58,8 +58,14 @@ type Manager struct {
 	wg              sync.WaitGroup
 	started         bool
 	inflight        map[deliveryKey]struct{}
+	retries         map[deliveryKey]notificationRetry
 	lastDeliveryErr error
 	workers         map[watchKey]*watchWorker
+}
+
+type notificationRetry struct {
+	attempts int
+	nextTry  time.Time
 }
 
 func NewManager(store *Store, factory ListenerFactory, notifier Notifier) *Manager {
@@ -69,6 +75,7 @@ func NewManager(store *Store, factory ListenerFactory, notifier Notifier) *Manag
 		notifier: notifier,
 		ctx:      context.Background(),
 		inflight: make(map[deliveryKey]struct{}),
+		retries:  make(map[deliveryKey]notificationRetry),
 		workers:  make(map[watchKey]*watchWorker),
 	}
 }
@@ -95,6 +102,12 @@ func (m *Manager) Start(ctx context.Context) error {
 	go func() {
 		defer m.wg.Done()
 		m.runReconcileLoop(runCtx)
+	}()
+
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		m.runMaintenanceLoop(runCtx)
 	}()
 
 	return nil
@@ -249,6 +262,7 @@ func (m *Manager) runWatch(ctx context.Context, w Watch) {
 	watchWG.Add(1)
 	go func() {
 		defer watchWG.Done()
+		backoff := config.Defaults.PollInterval
 		for {
 			if err := ctx.Err(); err != nil {
 				return
@@ -256,9 +270,10 @@ func (m *Manager) runWatch(ctx context.Context, w Watch) {
 			listener, err := m.factory.NewListener(w)
 			if err != nil {
 				m.captureDeliveryError(fmt.Errorf("create listener for %s/%s: %w", w.ProjectID, w.AgentName, err))
-				if !sleepWithContext(ctx, config.Defaults.PollInterval) {
+				if !sleepWithContext(ctx, backoff) {
 					return
 				}
+				backoff = nextReconnectBackoff(backoff)
 				continue
 			}
 
@@ -270,7 +285,13 @@ func (m *Manager) runWatch(ctx context.Context, w Watch) {
 			}
 			if err != nil {
 				m.captureDeliveryError(fmt.Errorf("listen for %s/%s: %w", w.ProjectID, w.AgentName, err))
+				if !sleepWithContext(ctx, backoff) {
+					return
+				}
+				backoff = nextReconnectBackoff(backoff)
+				continue
 			}
+			backoff = config.Defaults.PollInterval
 			if !sleepWithContext(ctx, config.Defaults.PollInterval) {
 				return
 			}
@@ -311,10 +332,17 @@ func (m *Manager) handleDelivery(w Watch, d Delivery) error {
 			return err
 		}
 		if !existing.NotifiedAt.IsZero() {
+			m.clearRetry(key)
 			return nil
 		}
 	}
-	return m.notifyRecord(w.ProjectID, w.AgentName, d.MessageID, notificationTitle(d), d.Body)
+	if err := m.notifyRecord(w.ProjectID, w.AgentName, d.MessageID, notificationTitle(d), d.Body); err != nil {
+		m.recordRetry(key)
+		m.captureDeliveryError(fmt.Errorf("notify %s/%s/%d: %w", w.ProjectID, w.AgentName, d.MessageID, err))
+		return nil
+	}
+	m.clearRetry(key)
+	return nil
 }
 
 func (m *Manager) retryPendingNotifications(w Watch) error {
@@ -333,10 +361,17 @@ func (m *Manager) retryPendingNotifications(w Watch) error {
 		if !ok {
 			continue
 		}
+		if !m.shouldRetry(key) {
+			release()
+			continue
+		}
 		if err := m.notifyRecord(rec.ProjectID, rec.AgentName, rec.MessageID, notificationTitle(Delivery{FromName: rec.FromName}), rec.Body); err != nil {
+			m.recordRetry(key)
 			if firstErr == nil {
 				firstErr = err
 			}
+		} else {
+			m.clearRetry(key)
 		}
 		release()
 	}
@@ -356,7 +391,9 @@ func (m *Manager) runPendingRetryLoop(ctx context.Context, w Watch) {
 
 func (m *Manager) notifyRecord(projectID, agentName string, messageID int64, title, body string) error {
 	if m.notifier != nil {
-		if err := m.notifier.Notify(m.ctx, title, body); err != nil {
+		notifyCtx, cancel := context.WithTimeout(m.ctx, config.Defaults.RuntimeNotificationTimeout)
+		defer cancel()
+		if err := m.notifier.Notify(notifyCtx, title, body); err != nil {
 			return err
 		}
 	}
@@ -372,6 +409,8 @@ func (m *Manager) reset() {
 	m.cancel = nil
 	m.ctx = context.Background()
 	m.started = false
+	m.inflight = make(map[deliveryKey]struct{})
+	m.retries = make(map[deliveryKey]notificationRetry)
 	m.workers = make(map[watchKey]*watchWorker)
 }
 
@@ -411,6 +450,88 @@ func (m *Manager) beginInflight(key deliveryKey) (func(), bool) {
 		defer m.mu.Unlock()
 		delete(m.inflight, key)
 	}, true
+}
+
+func (m *Manager) shouldRetry(key deliveryKey) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	state, ok := m.retries[key]
+	if !ok {
+		return true
+	}
+	if state.attempts >= config.Defaults.RuntimeNotificationRetryLimit {
+		return false
+	}
+	return time.Now().UTC().After(state.nextTry) || time.Now().UTC().Equal(state.nextTry)
+}
+
+func (m *Manager) recordRetry(key deliveryKey) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	state := m.retries[key]
+	state.attempts++
+	state.nextTry = time.Now().UTC().Add(retryDelayForAttempt(state.attempts))
+	m.retries[key] = state
+}
+
+func (m *Manager) clearRetry(key deliveryKey) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.retries, key)
+}
+
+func retryDelayForAttempt(attempt int) time.Duration {
+	if attempt <= 0 {
+		return config.Defaults.PollInterval
+	}
+
+	delay := config.Defaults.PollInterval
+	for i := 1; i < attempt; i++ {
+		if delay >= 32*config.Defaults.PollInterval {
+			return 32 * config.Defaults.PollInterval
+		}
+		delay *= 2
+	}
+	if delay > 32*config.Defaults.PollInterval {
+		return 32 * config.Defaults.PollInterval
+	}
+	return delay
+}
+
+func nextReconnectBackoff(current time.Duration) time.Duration {
+	if current <= 0 {
+		return config.Defaults.PollInterval
+	}
+	if current >= config.Defaults.RuntimeReconnectMaxBackoff {
+		return config.Defaults.RuntimeReconnectMaxBackoff
+	}
+	next := current * 2
+	if next > config.Defaults.RuntimeReconnectMaxBackoff {
+		return config.Defaults.RuntimeReconnectMaxBackoff
+	}
+	return next
+}
+
+func (m *Manager) runMaintenanceLoop(ctx context.Context) {
+	ticker := time.NewTicker(config.Defaults.TTLCheckPeriod)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			now := time.Now().UTC()
+			if _, err := m.store.PruneExpiredWatches(now); err != nil {
+				m.captureDeliveryError(fmt.Errorf("prune expired watches: %w", err))
+			}
+			if _, err := m.store.PruneDeliveryRecords(now.Add(-config.Defaults.RuntimeDeliveryRetention)); err != nil {
+				m.captureDeliveryError(fmt.Errorf("prune delivery records: %w", err))
+			}
+		}
+	}
 }
 
 func sleepWithContext(ctx context.Context, d time.Duration) bool {

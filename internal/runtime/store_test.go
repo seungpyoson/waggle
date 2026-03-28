@@ -1,7 +1,9 @@
 package runtime
 
 import (
+	"errors"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -60,8 +62,14 @@ func TestStore_WatchPersistenceAndDeduplication(t *testing.T) {
 	if watches[0].ProjectID != "proj-a" || watches[0].AgentName != "agent-1" || watches[0].Source != "hook" {
 		t.Fatalf("first watch = %+v, want updated watch for proj-a/agent-1", watches[0])
 	}
+	if watches[0].ExpiresAt.IsZero() {
+		t.Fatal("expected hook watch to receive expiration")
+	}
 	if watches[1].ProjectID != "proj-b" || watches[1].AgentName != "agent-2" || watches[1].Source != "cli" {
 		t.Fatalf("second watch = %+v, want proj-b/agent-2", watches[1])
+	}
+	if watches[1].ExpiresAt.IsZero() {
+		t.Fatal("expected cli watch to receive expiration")
 	}
 }
 
@@ -81,6 +89,41 @@ func TestStore_RemoveWatch(t *testing.T) {
 	}
 	if len(watches) != 0 {
 		t.Fatalf("watch count = %d, want 0", len(watches))
+	}
+}
+
+func TestStore_ExplicitWatchIsDurableWhileSessionWatchesExpire(t *testing.T) {
+	store := newTestStore(t)
+
+	if err := store.UpsertWatch(Watch{ProjectID: "proj-a", AgentName: "agent-1", Source: "explicit"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertWatch(Watch{
+		ProjectID: "proj-a",
+		AgentName: "agent-2",
+		Source:    "claude-session-start",
+		ExpiresAt: time.Now().UTC().Add(-time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	pruned, err := store.PruneExpiredWatches(time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pruned != 1 {
+		t.Fatalf("pruned watches = %d, want 1", pruned)
+	}
+
+	watches, err := store.ListWatches()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(watches) != 1 {
+		t.Fatalf("watch count = %d, want 1", len(watches))
+	}
+	if watches[0].AgentName != "agent-1" || !watches[0].ExpiresAt.IsZero() {
+		t.Fatalf("remaining watch = %+v, want durable explicit watch", watches[0])
 	}
 }
 
@@ -269,5 +312,215 @@ func TestStore_DismissedRecordsStayDismissedAndUnreadExcludesThem(t *testing.T) 
 	}
 	if len(unread) != 0 {
 		t.Fatalf("unread count = %d, want 0 after duplicate upsert", len(unread))
+	}
+}
+
+func TestStore_AddRecordAllowsPendingNotifications(t *testing.T) {
+	store := newTestStore(t)
+
+	rec := DeliveryRecord{
+		ProjectID:  "proj-a",
+		AgentName:  "agent-1",
+		MessageID:  88,
+		FromName:   "orchestrator",
+		Body:       "pending",
+		SentAt:     time.Unix(1, 0).UTC(),
+		ReceivedAt: time.Unix(2, 0).UTC(),
+	}
+	if err := store.AddRecord(rec); err != nil {
+		t.Fatal(err)
+	}
+
+	pending, err := store.PendingNotifications("proj-a", "agent-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("pending count = %d, want 1", len(pending))
+	}
+	if pending[0].MessageID != 88 {
+		t.Fatalf("pending message id = %d, want 88", pending[0].MessageID)
+	}
+}
+
+func TestStore_AddRecordUpsertPreservesLifecycleTimestamps(t *testing.T) {
+	store := newTestStore(t)
+
+	base := DeliveryRecord{
+		ProjectID:   "proj-a",
+		AgentName:   "agent-1",
+		MessageID:   99,
+		FromName:    "orchestrator",
+		Body:        "base",
+		SentAt:      time.Unix(1, 0).UTC(),
+		ReceivedAt:  time.Unix(2, 0).UTC(),
+		NotifiedAt:  time.Unix(3, 0).UTC(),
+		SurfacedAt:  time.Unix(4, 0).UTC(),
+		DismissedAt: time.Unix(5, 0).UTC(),
+	}
+	if err := store.AddRecord(base); err != nil {
+		t.Fatal(err)
+	}
+
+	updated := base
+	updated.Body = "updated"
+	updated.NotifiedAt = time.Time{}
+	updated.SurfacedAt = time.Time{}
+	updated.DismissedAt = time.Time{}
+	if err := store.AddRecord(updated); err != nil {
+		t.Fatal(err)
+	}
+
+	rec, err := store.GetRecord("proj-a", "agent-1", 99)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.Body != "updated" {
+		t.Fatalf("body = %q, want updated", rec.Body)
+	}
+	if rec.NotifiedAt.IsZero() {
+		t.Fatal("notified_at was cleared by duplicate upsert")
+	}
+	if rec.SurfacedAt.IsZero() {
+		t.Fatal("surfaced_at was cleared by duplicate upsert")
+	}
+	if rec.DismissedAt.IsZero() {
+		t.Fatal("dismissed_at was cleared by duplicate upsert")
+	}
+}
+
+func TestStore_ConcurrentConnectionsShareState(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "runtime.db")
+
+	writer, err := NewStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+
+	reader, err := NewStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, 8)
+	start := make(chan struct{})
+
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		for i := 0; i < 10; i++ {
+			if err := writer.UpsertWatch(Watch{
+				ProjectID: "proj-a",
+				AgentName: "agent-1",
+				Source:    "writer",
+			}); err != nil {
+				errCh <- err
+				return
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		for i := 0; i < 10; i++ {
+			if err := reader.UpsertWatch(Watch{
+				ProjectID: "proj-b",
+				AgentName: "agent-2",
+				Source:    "reader",
+			}); err != nil {
+				errCh <- err
+				return
+			}
+		}
+	}()
+
+	close(start)
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	watches, err := writer.ListWatches()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(watches) != 2 {
+		t.Fatalf("watch count = %d, want 2", len(watches))
+	}
+
+	rec := DeliveryRecord{
+		ProjectID:  "proj-a",
+		AgentName:  "agent-1",
+		MessageID:  1,
+		FromName:   "orchestrator",
+		Body:       "concurrent",
+		SentAt:     time.Unix(10, 0).UTC(),
+		ReceivedAt: time.Unix(11, 0).UTC(),
+	}
+	if err := writer.AddRecord(rec); err != nil {
+		t.Fatal(err)
+	}
+
+	pending, err := reader.PendingNotifications("proj-a", "agent-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("pending count = %d, want 1", len(pending))
+	}
+}
+
+func TestStore_PruneDeliveryRecordsRetainsUnresolvedRecords(t *testing.T) {
+	store := newTestStore(t)
+
+	oldResolved := DeliveryRecord{
+		ProjectID:   "proj-a",
+		AgentName:   "agent-1",
+		MessageID:   1,
+		FromName:    "orchestrator",
+		Body:        "resolved",
+		SentAt:      time.Unix(1, 0).UTC(),
+		ReceivedAt:  time.Now().UTC().Add(-40 * 24 * time.Hour),
+		NotifiedAt:  time.Unix(3, 0).UTC(),
+		SurfacedAt:  time.Unix(4, 0).UTC(),
+		DismissedAt: time.Unix(5, 0).UTC(),
+	}
+	oldUnresolved := DeliveryRecord{
+		ProjectID:  "proj-a",
+		AgentName:  "agent-1",
+		MessageID:  2,
+		FromName:   "orchestrator",
+		Body:       "unresolved",
+		SentAt:     time.Unix(1, 0).UTC(),
+		ReceivedAt: time.Now().UTC().Add(-40 * 24 * time.Hour),
+	}
+	if err := store.AddRecord(oldResolved); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AddRecord(oldUnresolved); err != nil {
+		t.Fatal(err)
+	}
+
+	pruned, err := store.PruneDeliveryRecords(time.Now().UTC().Add(-30 * 24 * time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pruned != 1 {
+		t.Fatalf("pruned delivery records = %d, want 1", pruned)
+	}
+
+	if _, err := store.GetRecord("proj-a", "agent-1", 1); !errors.Is(err, ErrRecordNotFound) {
+		t.Fatalf("resolved record err = %v, want ErrRecordNotFound", err)
+	}
+	if _, err := store.GetRecord("proj-a", "agent-1", 2); err != nil {
+		t.Fatalf("unresolved record should remain, got %v", err)
 	}
 }

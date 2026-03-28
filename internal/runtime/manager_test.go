@@ -115,11 +115,17 @@ func TestManager_HandleDeliveryRetriesNotifyAfterFailure(t *testing.T) {
 		ReceivedAt: time.Unix(31, 0).UTC(),
 	}
 
-	if err := manager.handleDelivery(watch, delivery); err == nil {
-		t.Fatal("expected notifier failure")
+	if err := manager.handleDelivery(watch, delivery); err != nil {
+		t.Fatalf("handleDelivery should preserve listener on notify failure: %v", err)
 	}
 
-	if err := manager.handleDelivery(watch, delivery); err != nil {
+	manager.mu.Lock()
+	retry := manager.retries[deliveryKey{projectID: "proj-a", agentName: "agent-1", messageID: 8}]
+	retry.nextTry = time.Now().UTC().Add(-time.Millisecond)
+	manager.retries[deliveryKey{projectID: "proj-a", agentName: "agent-1", messageID: 8}] = retry
+	manager.mu.Unlock()
+
+	if err := manager.retryPendingNotifications(watch); err != nil {
 		t.Fatal(err)
 	}
 
@@ -285,12 +291,9 @@ func TestManager_RetriesPendingNotificationAfterRestart(t *testing.T) {
 		Body:       "retry after reconnect",
 		SentAt:     time.Unix(50, 0).UTC(),
 		ReceivedAt: time.Unix(51, 0).UTC(),
-	}); err == nil {
-		t.Fatal("expected first emit to return listener error after failed notify")
+	}); err != nil {
+		t.Fatalf("emit should not tear down listener on notify failure: %v", err)
 	}
-	first.fail(errors.New("restart after failed notify"))
-
-	_ = factory.waitForCreated(t, 2)
 
 	waitFor(t, "pending notification retry", func() bool {
 		rec, err := store.GetRecord("proj-a", "agent-1", 123)
@@ -451,17 +454,11 @@ func TestManager_StartContinuesAfterDeliveryHandlerError(t *testing.T) {
 		ReceivedAt: time.Unix(43, 0).UTC(),
 	}
 
-	if err := listener.emit(first); err == nil {
-		t.Fatal("expected first delivery to fail and trigger restart")
-	}
-	listener.fail(errors.New("restart after first delivery failure"))
-
-	restarted := factory.waitForCreated(t, 2)
-	if restarted == listener {
-		t.Fatal("expected watch to restart with a new listener")
+	if err := listener.emit(first); err != nil {
+		t.Fatalf("listener should stay alive after notification failure: %v", err)
 	}
 
-	if err := restarted.emit(second); err != nil {
+	if err := listener.emit(second); err != nil {
 		t.Fatal(err)
 	}
 
@@ -479,6 +476,100 @@ func TestManager_StartContinuesAfterDeliveryHandlerError(t *testing.T) {
 	if unread[1].MessageID != 101 {
 		t.Fatalf("second unread message = %d, want 101", unread[1].MessageID)
 	}
+}
+
+func TestManager_RetryBackoffDefersImmediateSecondRetry(t *testing.T) {
+	store := newTestStore(t)
+	manager := NewManager(store, newFakeListenerFactory(), &fakeNotifier{
+		errs: []error{errors.New("notify failed"), nil},
+	})
+
+	key := deliveryKey{projectID: "proj-a", agentName: "agent-1", messageID: 1}
+	manager.recordRetry(key)
+	if manager.shouldRetry(key) {
+		t.Fatal("expected retry to be deferred immediately after failure")
+	}
+
+	manager.mu.Lock()
+	state := manager.retries[key]
+	state.nextTry = time.Now().UTC().Add(-time.Millisecond)
+	manager.retries[key] = state
+	manager.mu.Unlock()
+
+	if !manager.shouldRetry(key) {
+		t.Fatal("expected retry to become eligible after backoff window")
+	}
+}
+
+func TestManager_ShouldRetryStopsAfterConfiguredLimit(t *testing.T) {
+	store := newTestStore(t)
+	manager := NewManager(store, newFakeListenerFactory(), &fakeNotifier{})
+
+	key := deliveryKey{projectID: "proj-a", agentName: "agent-1", messageID: 1}
+	for i := 0; i < config.Defaults.RuntimeNotificationRetryLimit; i++ {
+		manager.recordRetry(key)
+	}
+	if manager.shouldRetry(key) {
+		t.Fatal("expected retries to stop after configured limit")
+	}
+}
+
+func TestManager_MaintenancePrunesExpiredWatchesAndResolvedRecords(t *testing.T) {
+	store := newTestStore(t)
+	if err := store.UpsertWatch(Watch{
+		ProjectID: "proj-a",
+		AgentName: "agent-ephemeral",
+		Source:    "spawn",
+		ExpiresAt: time.Now().UTC().Add(-time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertWatch(Watch{
+		ProjectID: "proj-a",
+		AgentName: "agent-durable",
+		Source:    "explicit",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AddRecord(DeliveryRecord{
+		ProjectID:   "proj-a",
+		AgentName:   "agent-durable",
+		MessageID:   1,
+		FromName:    "planner",
+		Body:        "old resolved",
+		SentAt:      time.Unix(1, 0).UTC(),
+		ReceivedAt:  time.Now().UTC().Add(-40 * 24 * time.Hour),
+		NotifiedAt:  time.Unix(2, 0).UTC(),
+		SurfacedAt:  time.Unix(3, 0).UTC(),
+		DismissedAt: time.Unix(4, 0).UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	origTTL := config.Defaults.TTLCheckPeriod
+	config.Defaults.TTLCheckPeriod = 10 * time.Millisecond
+	defer func() { config.Defaults.TTLCheckPeriod = origTTL }()
+
+	manager := NewManager(store, newFakeListenerFactory(), &fakeNotifier{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := manager.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Stop()
+
+	waitFor(t, "maintenance prune", func() bool {
+		watches, err := store.ListWatches()
+		if err != nil {
+			return false
+		}
+		if len(watches) != 1 || watches[0].AgentName != "agent-durable" {
+			return false
+		}
+		_, err = store.GetRecord("proj-a", "agent-durable", 1)
+		return errors.Is(err, ErrRecordNotFound)
+	})
 }
 
 func TestBrokerListenerFactory_NewListenerUsesWatchProjectID(t *testing.T) {
@@ -584,13 +675,13 @@ func (n *fakeNotifier) last() (string, string) {
 
 type fakeListenerFactory struct {
 	mu        sync.Mutex
-	listeners map[Watch]*fakeListener
+	listeners map[watchKey]*fakeListener
 	created   chan Watch
 }
 
 func newFakeListenerFactory() *fakeListenerFactory {
 	return &fakeListenerFactory{
-		listeners: make(map[Watch]*fakeListener),
+		listeners: make(map[watchKey]*fakeListener),
 		created:   make(chan Watch, 16),
 	}
 }
@@ -599,7 +690,7 @@ func (f *fakeListenerFactory) NewListener(w Watch) (Listener, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	listener := &fakeListener{done: make(chan struct{})}
-	f.listeners[w] = listener
+	f.listeners[watchKey{projectID: w.ProjectID, agentName: w.AgentName}] = listener
 	f.created <- w
 	return listener, nil
 }
@@ -610,7 +701,7 @@ func (f *fakeListenerFactory) waitForListener(t *testing.T, watch Watch) *fakeLi
 	deadline := time.After(2 * time.Second)
 	for {
 		f.mu.Lock()
-		listener := f.listeners[watch]
+		listener := f.listeners[watchKey{projectID: watch.ProjectID, agentName: watch.AgentName}]
 		f.mu.Unlock()
 		if listener != nil {
 			return listener
@@ -760,6 +851,12 @@ func (l *restartableListener) Listen(ctx context.Context, handler DeliveryHandle
 func (l *restartableListener) emit(delivery Delivery) error {
 	select {
 	case <-l.readyCh:
+		defer func() {
+			select {
+			case l.readyCh <- struct{}{}:
+			default:
+			}
+		}()
 	case <-time.After(2 * time.Second):
 		return errors.New("restartable listener not ready")
 	}

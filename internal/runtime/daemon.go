@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -53,8 +54,40 @@ func SaveState(paths config.Paths, state State) error {
 	if err != nil {
 		return fmt.Errorf("marshal runtime state: %w", err)
 	}
-	if err := os.WriteFile(paths.RuntimeState, data, 0o644); err != nil {
+	if err := writeFileAtomic(paths.RuntimeState, data, 0o644); err != nil {
 		return fmt.Errorf("write runtime state: %w", err)
+	}
+	return nil
+}
+
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	base := filepath.Base(path)
+
+	tmp, err := os.CreateTemp(dir, base+".*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+	}()
+
+	if err := tmp.Chmod(perm); err != nil {
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return err
 	}
 	return nil
 }
@@ -93,10 +126,6 @@ func StartDaemon(paths config.Paths, args []string) error {
 	return nil
 }
 
-func IsRunning(paths config.Paths) bool {
-	return broker.IsRunning(paths.RuntimePID)
-}
-
 func WaitForReady(paths config.Paths, timeout, interval time.Duration) error {
 	if timeout <= 0 {
 		return fmt.Errorf("WaitForReady: timeout must be positive, got %v", timeout)
@@ -107,9 +136,8 @@ func WaitForReady(paths config.Paths, timeout, interval time.Duration) error {
 
 	deadline := time.Now().Add(timeout)
 	for {
-		if IsRunning(paths) {
-			state, err := LoadState(paths)
-			if err == nil && state.Running {
+		if state, err := currentState(paths); err == nil && state.Running {
+			if pid, err := broker.ReadPID(paths.RuntimePID); err == nil && state.PID == pid {
 				return nil
 			}
 		}
@@ -138,6 +166,47 @@ func CleanupStale(paths config.Paths) error {
 	return nil
 }
 
+func AcquireStartLock(paths config.Paths, staleAfter time.Duration) (func() error, error) {
+	if paths.RuntimeStartLockDir == "" {
+		return nil, fmt.Errorf("runtime start lock path required")
+	}
+	if staleAfter <= 0 {
+		return nil, fmt.Errorf("staleAfter must be positive, got %v", staleAfter)
+	}
+	if err := os.MkdirAll(paths.RuntimeDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create runtime directory: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(paths.RuntimeStartLockDir), 0o755); err != nil {
+		return nil, fmt.Errorf("create runtime start lock parent: %w", err)
+	}
+
+	if err := os.Mkdir(paths.RuntimeStartLockDir, 0o755); err == nil {
+		return func() error {
+			if err := os.Remove(paths.RuntimeStartLockDir); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("release runtime start lock: %w", err)
+			}
+			return nil
+		}, nil
+	} else if !os.IsExist(err) {
+		return nil, fmt.Errorf("acquire runtime start lock: %w", err)
+	}
+
+	info, err := os.Stat(paths.RuntimeStartLockDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return AcquireStartLock(paths, staleAfter)
+		}
+		return nil, fmt.Errorf("stat runtime start lock: %w", err)
+	}
+	if time.Since(info.ModTime()) > staleAfter {
+		if err := os.RemoveAll(paths.RuntimeStartLockDir); err != nil {
+			return nil, fmt.Errorf("remove stale runtime start lock: %w", err)
+		}
+		return AcquireStartLock(paths, staleAfter)
+	}
+	return nil, fmt.Errorf("runtime start already in progress")
+}
+
 func RunDaemon(ctx context.Context, paths config.Paths, manager *Manager) error {
 	if paths.RuntimeDir == "" || paths.RuntimePID == "" {
 		return fmt.Errorf("runtime paths required")
@@ -154,11 +223,12 @@ func RunDaemon(ctx context.Context, paths config.Paths, manager *Manager) error 
 	defer stop()
 
 	startedAt := time.Now().UTC()
-	if err := SaveState(paths, State{
+	current := State{
 		PID:       os.Getpid(),
 		Running:   false,
 		StartedAt: startedAt,
-	}); err != nil {
+	}
+	if err := SaveState(paths, current); err != nil {
 		return err
 	}
 
@@ -174,6 +244,13 @@ func RunDaemon(ctx context.Context, paths config.Paths, manager *Manager) error 
 	}
 	defer manager.Stop()
 
+	current.Running = true
+	current.WatchCount = manager.WatchCount()
+	if err := SaveState(paths, current); err != nil {
+		return err
+	}
+	lastSaved := current
+
 	ticker := time.NewTicker(config.Defaults.PollInterval)
 	defer ticker.Stop()
 
@@ -182,27 +259,73 @@ func RunDaemon(ctx context.Context, paths config.Paths, manager *Manager) error 
 		if err := manager.LastDeliveryError(); err != nil {
 			lastErr = err.Error()
 		}
-		if err := SaveState(paths, State{
+		current = State{
 			PID:        os.Getpid(),
 			Running:    true,
 			StartedAt:  startedAt,
 			WatchCount: manager.WatchCount(),
 			LastError:  lastErr,
-		}); err != nil {
-			return err
+		}
+		if !sameState(lastSaved, current) {
+			if err := SaveState(paths, current); err != nil {
+				return err
+			}
+			lastSaved = current
 		}
 
 		select {
 		case <-signalCtx.Done():
-			return SaveState(paths, State{
+			current = State{
 				PID:        os.Getpid(),
 				Running:    false,
 				StartedAt:  startedAt,
 				StoppedAt:  time.Now().UTC(),
 				WatchCount: manager.WatchCount(),
 				LastError:  lastErr,
-			})
+			}
+			if !sameState(lastSaved, current) {
+				if err := SaveState(paths, current); err != nil {
+					return err
+				}
+			}
+			return nil
 		case <-ticker.C:
 		}
 	}
+}
+
+func currentState(paths config.Paths) (State, error) {
+	state, err := LoadState(paths)
+	if err != nil {
+		return State{}, err
+	}
+	return state, nil
+}
+
+func sameState(a, b State) bool {
+	return a.PID == b.PID &&
+		a.Running == b.Running &&
+		a.StartedAt.Equal(b.StartedAt) &&
+		a.StoppedAt.Equal(b.StoppedAt) &&
+		a.WatchCount == b.WatchCount &&
+		a.LastError == b.LastError
+}
+
+func IsRunning(paths config.Paths) bool {
+	pid, err := broker.ReadPID(paths.RuntimePID)
+	if err != nil {
+		return false
+	}
+	state, err := currentState(paths)
+	if err != nil {
+		return false
+	}
+	if !state.Running || state.PID != pid {
+		return false
+	}
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	return process.Signal(syscall.Signal(0)) == nil
 }

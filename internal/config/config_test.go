@@ -281,12 +281,12 @@ func TestNewPaths_IncludesRuntimePaths(t *testing.T) {
 
 	p := NewPaths("test-project")
 	for name, val := range map[string]string{
-		"RuntimeDir":    p.RuntimeDir,
-		"RuntimeDB":     p.RuntimeDB,
-		"RuntimePID":    p.RuntimePID,
-		"RuntimeLog":    p.RuntimeLog,
-		"RuntimeState":  p.RuntimeState,
-		"RuntimeSocket": p.RuntimeSocket,
+		"RuntimeDir":          p.RuntimeDir,
+		"RuntimeDB":           p.RuntimeDB,
+		"RuntimePID":          p.RuntimePID,
+		"RuntimeLog":          p.RuntimeLog,
+		"RuntimeState":        p.RuntimeState,
+		"RuntimeStartLockDir": p.RuntimeStartLockDir,
 	} {
 		if val == "" {
 			t.Fatalf("%s is empty", name)
@@ -308,8 +308,8 @@ func TestNewPaths_IncludesRuntimePaths(t *testing.T) {
 	if got := filepath.Base(p.RuntimeState); got != Defaults.RuntimeStateFile {
 		t.Fatalf("RuntimeState filename = %q, want %q", got, Defaults.RuntimeStateFile)
 	}
-	if got := filepath.Base(p.RuntimeSocket); got != Defaults.RuntimeSocketFile {
-		t.Fatalf("RuntimeSocket filename = %q, want %q", got, Defaults.RuntimeSocketFile)
+	if got := filepath.Base(p.RuntimeStartLockDir); got != Defaults.RuntimeStartLockDirName {
+		t.Fatalf("RuntimeStartLockDir filename = %q, want %q", got, Defaults.RuntimeStartLockDirName)
 	}
 	if got, want := filepath.Dir(p.RuntimeDB), p.RuntimeDir; got != want {
 		t.Fatalf("RuntimeDB dir = %q, want %q", got, want)
@@ -323,8 +323,8 @@ func TestNewPaths_IncludesRuntimePaths(t *testing.T) {
 	if got, want := filepath.Dir(p.RuntimeState), p.RuntimeDir; got != want {
 		t.Fatalf("RuntimeState dir = %q, want %q", got, want)
 	}
-	if got, want := filepath.Dir(p.RuntimeSocket), p.RuntimeDir; got != want {
-		t.Fatalf("RuntimeSocket dir = %q, want %q", got, want)
+	if got, want := filepath.Dir(p.RuntimeStartLockDir), p.RuntimeDir; got != want {
+		t.Fatalf("RuntimeStartLockDir dir = %q, want %q", got, want)
 	}
 	if got := filepath.Base(p.RuntimeDir); got != Defaults.RuntimeDirName {
 		t.Fatalf("RuntimeDir basename = %q, want %q", got, Defaults.RuntimeDirName)
@@ -365,7 +365,7 @@ func TestResolveProjectID_UnchangedForRuntime(t *testing.T) {
 		t.Fatalf("ProjectID = %q, want %q", p.ProjectID, id)
 	}
 
-	if p.RuntimeDir == "" || p.RuntimeDB == "" || p.RuntimePID == "" || p.RuntimeLog == "" || p.RuntimeState == "" || p.RuntimeSocket == "" {
+	if p.RuntimeDir == "" || p.RuntimeDB == "" || p.RuntimePID == "" || p.RuntimeLog == "" || p.RuntimeState == "" || p.RuntimeStartLockDir == "" {
 		t.Fatalf("runtime paths should be populated for a resolved project: %#v", p)
 	}
 
@@ -420,6 +420,12 @@ func TestDefaults_StartupPollInterval(t *testing.T) {
 func TestDefaults_StartupTimeout(t *testing.T) {
 	if Defaults.StartupTimeout != 2*time.Second {
 		t.Fatalf("StartupTimeout = %v, want 2s", Defaults.StartupTimeout)
+	}
+}
+
+func TestDefaults_RuntimeStartLockStaleThreshold(t *testing.T) {
+	if Defaults.RuntimeStartLockStaleThreshold != 10*time.Second {
+		t.Fatalf("RuntimeStartLockStaleThreshold = %v, want 10s", Defaults.RuntimeStartLockStaleThreshold)
 	}
 }
 
@@ -667,7 +673,7 @@ func TestNewPaths_AllEmptyWithoutHome(t *testing.T) {
 	for name, val := range map[string]string{
 		"DataDir": p.DataDir, "RuntimeDir": p.RuntimeDir,
 		"RuntimeDB": p.RuntimeDB, "RuntimePID": p.RuntimePID, "RuntimeLog": p.RuntimeLog,
-		"RuntimeState": p.RuntimeState, "RuntimeSocket": p.RuntimeSocket,
+		"RuntimeState": p.RuntimeState, "RuntimeStartLockDir": p.RuntimeStartLockDir,
 		"DB": p.DB, "PID": p.PID, "Lock": p.Lock, "Log": p.Log, "Socket": p.Socket,
 	} {
 		if val != "" {

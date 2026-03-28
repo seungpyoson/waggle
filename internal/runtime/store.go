@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/seungpyoson/waggle/internal/config"
@@ -66,6 +67,7 @@ func migrate(db *sql.DB) error {
 		project_id TEXT NOT NULL,
 		agent_name TEXT NOT NULL,
 		source TEXT NOT NULL,
+		expires_at TEXT,
 		created_at TEXT NOT NULL,
 		updated_at TEXT NOT NULL,
 		PRIMARY KEY (project_id, agent_name)
@@ -92,6 +94,9 @@ func migrate(db *sql.DB) error {
 	if _, err := db.Exec(schema); err != nil {
 		return fmt.Errorf("create runtime schema: %w", err)
 	}
+	if _, err := db.Exec(`ALTER TABLE watches ADD COLUMN expires_at TEXT`); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+		return fmt.Errorf("add watches.expires_at column: %w", err)
+	}
 	return nil
 }
 
@@ -104,14 +109,16 @@ func (s *Store) UpsertWatch(w Watch) error {
 		return fmt.Errorf("source required")
 	}
 
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := time.Now().UTC()
+	w = normalizedWatch(w, now)
 	_, err := s.db.Exec(`
-		INSERT INTO watches (project_id, agent_name, source, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?)
+		INSERT INTO watches (project_id, agent_name, source, expires_at, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?)
 		ON CONFLICT(project_id, agent_name) DO UPDATE SET
 			source = excluded.source,
+			expires_at = excluded.expires_at,
 			updated_at = excluded.updated_at
-	`, w.ProjectID, w.AgentName, w.Source, now, now)
+	`, w.ProjectID, w.AgentName, w.Source, timeValue(w.ExpiresAt), now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
 	if err != nil {
 		return fmt.Errorf("upserting watch: %w", err)
 	}
@@ -135,7 +142,7 @@ func (s *Store) RemoveWatch(projectID, agentName string) error {
 // ListWatches returns all persisted watches in a stable order.
 func (s *Store) ListWatches() ([]Watch, error) {
 	rows, err := s.db.Query(`
-		SELECT project_id, agent_name, source
+		SELECT project_id, agent_name, source, expires_at
 		FROM watches
 		ORDER BY project_id ASC, agent_name ASC
 	`)
@@ -147,15 +154,32 @@ func (s *Store) ListWatches() ([]Watch, error) {
 	var watches []Watch
 	for rows.Next() {
 		var w Watch
-		if err := rows.Scan(&w.ProjectID, &w.AgentName, &w.Source); err != nil {
+		var expiresAt sql.NullString
+		if err := rows.Scan(&w.ProjectID, &w.AgentName, &w.Source, &expiresAt); err != nil {
 			return nil, fmt.Errorf("scanning watch: %w", err)
 		}
+		w.ExpiresAt = parseTime(expiresAt)
 		watches = append(watches, w)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterating watches: %w", err)
 	}
 	return watches, nil
+}
+
+func (s *Store) PruneExpiredWatches(now time.Time) (int64, error) {
+	result, err := s.db.Exec(`
+		DELETE FROM watches
+		WHERE expires_at IS NOT NULL AND expires_at != '' AND expires_at <= ?
+	`, now.UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return 0, fmt.Errorf("pruning expired watches: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("counting pruned watches: %w", err)
+	}
+	return rowsAffected, nil
 }
 
 // AddRecord persists a delivery record for later surfacing.
@@ -172,8 +196,8 @@ func (s *Store) AddRecord(rec DeliveryRecord) error {
 	if rec.Body == "" {
 		return fmt.Errorf("body required")
 	}
-	if rec.SentAt.IsZero() || rec.ReceivedAt.IsZero() || rec.NotifiedAt.IsZero() {
-		return fmt.Errorf("sent_at, received_at, and notified_at required")
+	if rec.SentAt.IsZero() || rec.ReceivedAt.IsZero() {
+		return fmt.Errorf("sent_at and received_at required")
 	}
 
 	_, err := s.db.Exec(`
@@ -186,10 +210,11 @@ func (s *Store) AddRecord(rec DeliveryRecord) error {
 			body = excluded.body,
 			sent_at = excluded.sent_at,
 			received_at = excluded.received_at,
-			notified_at = excluded.notified_at,
+			notified_at = COALESCE(NULLIF(excluded.notified_at, ''), delivery_records.notified_at),
+			surfaced_at = COALESCE(excluded.surfaced_at, delivery_records.surfaced_at),
 			dismissed_at = COALESCE(excluded.dismissed_at, delivery_records.dismissed_at)
 	`, rec.ProjectID, rec.AgentName, rec.MessageID, rec.FromName, rec.Body,
-		timeValue(rec.SentAt), timeValue(rec.ReceivedAt), timeValue(rec.NotifiedAt),
+		timeValue(rec.SentAt), timeValue(rec.ReceivedAt), textTimeValue(rec.NotifiedAt),
 		timeValue(rec.SurfacedAt), timeValue(rec.DismissedAt))
 	if err != nil {
 		return fmt.Errorf("adding delivery record: %w", err)
@@ -222,7 +247,7 @@ func (s *Store) AddRecordIfAbsent(rec DeliveryRecord) (bool, error) {
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(project_id, agent_name, message_id) DO NOTHING
 	`, rec.ProjectID, rec.AgentName, rec.MessageID, rec.FromName, rec.Body,
-		timeValue(rec.SentAt), timeValue(rec.ReceivedAt), notifiedValue(rec.NotifiedAt),
+		timeValue(rec.SentAt), timeValue(rec.ReceivedAt), textTimeValue(rec.NotifiedAt),
 		timeValue(rec.SurfacedAt), timeValue(rec.DismissedAt))
 	if err != nil {
 		return false, fmt.Errorf("adding delivery record if absent: %w", err)
@@ -252,7 +277,7 @@ func (s *Store) GetRecord(projectID, agentName string, messageID int64) (Deliver
 	`, projectID, agentName, messageID)
 
 	rec, err := scanDeliveryRecord(row)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return DeliveryRecord{}, ErrRecordNotFound
 	}
 	if err != nil {
@@ -277,7 +302,7 @@ func (s *Store) MarkNotified(projectID, agentName string, messageID int64, notif
 		UPDATE delivery_records
 		SET notified_at = ?
 		WHERE project_id = ? AND agent_name = ? AND message_id = ?
-	`, notifiedValue(notifiedAt), projectID, agentName, messageID)
+	`, textTimeValue(notifiedAt), projectID, agentName, messageID)
 	if err != nil {
 		return fmt.Errorf("marking notified: %w", err)
 	}
@@ -302,7 +327,7 @@ func (s *Store) PendingNotifications(projectID, agentName string) ([]DeliveryRec
 		SELECT project_id, agent_name, message_id, from_name, body,
 		       sent_at, received_at, notified_at, surfaced_at, dismissed_at
 		FROM delivery_records
-		WHERE project_id = ? AND agent_name = ? AND notified_at = '' AND dismissed_at IS NULL
+		WHERE project_id = ? AND agent_name = ? AND COALESCE(notified_at, '') = '' AND dismissed_at IS NULL
 		ORDER BY received_at ASC, message_id ASC
 	`, projectID, agentName)
 	if err != nil {
@@ -397,6 +422,26 @@ func (s *Store) MarkSurfaced(projectID, agentName string, messageID int64) error
 	return nil
 }
 
+func (s *Store) PruneDeliveryRecords(before time.Time) (int64, error) {
+	result, err := s.db.Exec(`
+		DELETE FROM delivery_records
+		WHERE received_at < ?
+		  AND (
+			dismissed_at IS NOT NULL
+			OR surfaced_at IS NOT NULL
+			OR COALESCE(notified_at, '') != ''
+		  )
+	`, before.UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return 0, fmt.Errorf("pruning delivery records: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("counting pruned delivery records: %w", err)
+	}
+	return rowsAffected, nil
+}
+
 func timeValue(t time.Time) interface{} {
 	if t.IsZero() {
 		return nil
@@ -404,7 +449,20 @@ func timeValue(t time.Time) interface{} {
 	return t.UTC().Format(time.RFC3339Nano)
 }
 
-func notifiedValue(t time.Time) string {
+func normalizedWatch(w Watch, now time.Time) Watch {
+	if w.Source == "explicit" {
+		w.ExpiresAt = time.Time{}
+		return w
+	}
+	if w.ExpiresAt.IsZero() {
+		w.ExpiresAt = now.UTC().Add(config.Defaults.RuntimeEphemeralWatchTTL)
+		return w
+	}
+	w.ExpiresAt = w.ExpiresAt.UTC()
+	return w
+}
+
+func textTimeValue(t time.Time) string {
 	if t.IsZero() {
 		return ""
 	}

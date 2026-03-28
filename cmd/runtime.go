@@ -19,7 +19,7 @@ var runtimeCmd = &cobra.Command{
 
 func resolveRuntimePaths() (config.Paths, error) {
 	paths := config.NewPaths("")
-	if paths.RuntimeDir == "" || paths.RuntimeDB == "" || paths.RuntimePID == "" || paths.RuntimeLog == "" || paths.RuntimeState == "" {
+	if paths.RuntimeDir == "" || paths.RuntimeDB == "" || paths.RuntimePID == "" || paths.RuntimeLog == "" || paths.RuntimeState == "" || paths.RuntimeStartLockDir == "" {
 		return config.Paths{}, fmt.Errorf("cannot determine runtime paths: HOME not set")
 	}
 	return paths, nil
