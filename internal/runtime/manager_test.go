@@ -165,6 +165,62 @@ func TestManager_StopCancelsListeners(t *testing.T) {
 	}
 }
 
+func TestManager_StartReconcilesWatchesAddedAfterStartup(t *testing.T) {
+	store := newTestStore(t)
+	factory := newFakeListenerFactory()
+	manager := NewManager(store, factory, &fakeNotifier{})
+
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Stop()
+
+	if err := store.UpsertWatch(Watch{ProjectID: "proj-b", AgentName: "agent-2", Source: "hook"}); err != nil {
+		t.Fatal(err)
+	}
+
+	listener := factory.waitForListener(t, Watch{ProjectID: "proj-b", AgentName: "agent-2", Source: "hook"})
+	if listener == nil {
+		t.Fatal("expected listener for dynamically added watch")
+	}
+
+	waitFor(t, "watch count after add", func() bool {
+		return manager.WatchCount() == 1
+	})
+}
+
+func TestManager_StartReconcilesWatchesRemovedAfterStartup(t *testing.T) {
+	store := newTestStore(t)
+	watch := Watch{ProjectID: "proj-a", AgentName: "agent-1", Source: "hook"}
+	if err := store.UpsertWatch(watch); err != nil {
+		t.Fatal(err)
+	}
+
+	factory := newFakeListenerFactory()
+	manager := NewManager(store, factory, &fakeNotifier{})
+
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Stop()
+
+	listener := factory.waitForListener(t, watch)
+
+	if err := store.RemoveWatch(watch.ProjectID, watch.AgentName); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case <-listener.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("listener was not canceled after watch removal")
+	}
+
+	waitFor(t, "watch count after remove", func() bool {
+		return manager.WatchCount() == 0
+	})
+}
+
 func TestManager_RestartsWatchAfterListenerError(t *testing.T) {
 	store := newTestStore(t)
 	if err := store.UpsertWatch(Watch{ProjectID: "proj-a", AgentName: "agent-1", Source: "hook"}); err != nil {

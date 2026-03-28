@@ -24,14 +24,7 @@ var (
 		Short: "Agent session coordination broker",
 		Long:  "Waggle coordinates work between independent AI coding agent sessions through task distribution, file locks, and event streaming.",
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			// Skip auto-start for commands that don't need broker
-			brokerIndependent := map[string]bool{
-				"start":   true,
-				"install": true,
-				"help":    true,
-				"version": true,
-			}
-			if brokerIndependent[cmd.Name()] {
+			if isBrokerIndependentCommand(cmd) {
 				return nil
 			}
 
@@ -106,7 +99,7 @@ func printJSON(v any) {
 		printErr("INTERNAL_ERROR", fmt.Sprintf("marshaling response: %v", err))
 		return
 	}
-	fmt.Println(string(data))
+	fmt.Fprintln(rootCmd.OutOrStdout(), string(data))
 }
 
 // printErr prints an error response and exits with code 1
@@ -117,8 +110,18 @@ func printErr(code, message string) {
 		"error": message,
 	}
 	data, _ := json.MarshalIndent(resp, "", "  ")
-	fmt.Fprintln(os.Stderr, string(data))
+	fmt.Fprintln(rootCmd.ErrOrStderr(), string(data))
 	os.Exit(1)
+}
+
+func isBrokerIndependentCommand(cmd *cobra.Command) bool {
+	for current := cmd; current != nil; current = current.Parent() {
+		switch current.Name() {
+		case "start", "install", "help", "version", "runtime":
+			return true
+		}
+	}
+	return false
 }
 
 // connectToBroker establishes a connection with session handshake.
@@ -233,4 +236,3 @@ func disconnectAndClose(c *client.Client) {
 	// If SetDeadline failed, connection is already broken — skip Send, just close.
 	c.Close()
 }
-

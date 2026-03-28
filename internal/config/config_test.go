@@ -282,6 +282,9 @@ func TestNewPaths_IncludesRuntimePaths(t *testing.T) {
 	p := NewPaths("test-project")
 	for name, val := range map[string]string{
 		"RuntimeDir":    p.RuntimeDir,
+		"RuntimeDB":     p.RuntimeDB,
+		"RuntimePID":    p.RuntimePID,
+		"RuntimeLog":    p.RuntimeLog,
 		"RuntimeState":  p.RuntimeState,
 		"RuntimeSocket": p.RuntimeSocket,
 	} {
@@ -293,11 +296,29 @@ func TestNewPaths_IncludesRuntimePaths(t *testing.T) {
 		}
 	}
 
+	if got := filepath.Base(p.RuntimeDB); got != Defaults.RuntimeDBFile {
+		t.Fatalf("RuntimeDB filename = %q, want %q", got, Defaults.RuntimeDBFile)
+	}
+	if got := filepath.Base(p.RuntimePID); got != Defaults.RuntimePIDFile {
+		t.Fatalf("RuntimePID filename = %q, want %q", got, Defaults.RuntimePIDFile)
+	}
+	if got := filepath.Base(p.RuntimeLog); got != Defaults.RuntimeLogFile {
+		t.Fatalf("RuntimeLog filename = %q, want %q", got, Defaults.RuntimeLogFile)
+	}
 	if got := filepath.Base(p.RuntimeState); got != Defaults.RuntimeStateFile {
 		t.Fatalf("RuntimeState filename = %q, want %q", got, Defaults.RuntimeStateFile)
 	}
 	if got := filepath.Base(p.RuntimeSocket); got != Defaults.RuntimeSocketFile {
 		t.Fatalf("RuntimeSocket filename = %q, want %q", got, Defaults.RuntimeSocketFile)
+	}
+	if got, want := filepath.Dir(p.RuntimeDB), p.RuntimeDir; got != want {
+		t.Fatalf("RuntimeDB dir = %q, want %q", got, want)
+	}
+	if got, want := filepath.Dir(p.RuntimePID), p.RuntimeDir; got != want {
+		t.Fatalf("RuntimePID dir = %q, want %q", got, want)
+	}
+	if got, want := filepath.Dir(p.RuntimeLog), p.RuntimeDir; got != want {
+		t.Fatalf("RuntimeLog dir = %q, want %q", got, want)
 	}
 	if got, want := filepath.Dir(p.RuntimeState), p.RuntimeDir; got != want {
 		t.Fatalf("RuntimeState dir = %q, want %q", got, want)
@@ -305,11 +326,25 @@ func TestNewPaths_IncludesRuntimePaths(t *testing.T) {
 	if got, want := filepath.Dir(p.RuntimeSocket), p.RuntimeDir; got != want {
 		t.Fatalf("RuntimeSocket dir = %q, want %q", got, want)
 	}
+	if got := filepath.Base(p.RuntimeDir); got != Defaults.RuntimeDirName {
+		t.Fatalf("RuntimeDir basename = %q, want %q", got, Defaults.RuntimeDirName)
+	}
+}
 
-	brokerHash := filepath.Base(filepath.Dir(p.Socket))
-	runtimeHash := filepath.Base(p.RuntimeDir)
-	if runtimeHash != brokerHash {
-		t.Fatalf("runtime hash = %q, want broker hash %q", runtimeHash, brokerHash)
+func TestNewPaths_RuntimePathsSharedAcrossProjects(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	a := NewPaths("project-a")
+	b := NewPaths("project-b")
+
+	if a.RuntimeDir != b.RuntimeDir {
+		t.Fatalf("RuntimeDir should be machine-local: %q vs %q", a.RuntimeDir, b.RuntimeDir)
+	}
+	if a.RuntimeDB != b.RuntimeDB {
+		t.Fatalf("RuntimeDB should be machine-local: %q vs %q", a.RuntimeDB, b.RuntimeDB)
+	}
+	if a.RuntimePID != b.RuntimePID {
+		t.Fatalf("RuntimePID should be machine-local: %q vs %q", a.RuntimePID, b.RuntimePID)
 	}
 }
 
@@ -330,7 +365,7 @@ func TestResolveProjectID_UnchangedForRuntime(t *testing.T) {
 		t.Fatalf("ProjectID = %q, want %q", p.ProjectID, id)
 	}
 
-	if p.RuntimeDir == "" || p.RuntimeState == "" || p.RuntimeSocket == "" {
+	if p.RuntimeDir == "" || p.RuntimeDB == "" || p.RuntimePID == "" || p.RuntimeLog == "" || p.RuntimeState == "" || p.RuntimeSocket == "" {
 		t.Fatalf("runtime paths should be populated for a resolved project: %#v", p)
 	}
 
@@ -631,6 +666,7 @@ func TestNewPaths_AllEmptyWithoutHome(t *testing.T) {
 	p := NewPaths("test-id")
 	for name, val := range map[string]string{
 		"DataDir": p.DataDir, "RuntimeDir": p.RuntimeDir,
+		"RuntimeDB": p.RuntimeDB, "RuntimePID": p.RuntimePID, "RuntimeLog": p.RuntimeLog,
 		"RuntimeState": p.RuntimeState, "RuntimeSocket": p.RuntimeSocket,
 		"DB": p.DB, "PID": p.PID, "Lock": p.Lock, "Log": p.Log, "Socket": p.Socket,
 	} {

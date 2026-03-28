@@ -61,6 +61,9 @@ var Defaults = struct {
 	LockFile          string
 	LogFile           string
 	RuntimeDirName    string
+	RuntimeDBFile     string
+	RuntimePIDFile    string
+	RuntimeLogFile    string
 	RuntimeStateFile  string
 	RuntimeSocketFile string
 
@@ -109,6 +112,9 @@ var Defaults = struct {
 	LockFile:          "waggle.lock",
 	LogFile:           "waggle.log",
 	RuntimeDirName:    "runtime",
+	RuntimeDBFile:     "runtime.db",
+	RuntimePIDFile:    "runtime.pid",
+	RuntimeLogFile:    "runtime.log",
 	RuntimeStateFile:  "state.json",
 	RuntimeSocketFile: "runtime.sock",
 
@@ -152,6 +158,9 @@ type Paths struct {
 	ProjectID     string
 	DataDir       string
 	RuntimeDir    string
+	RuntimeDB     string
+	RuntimePID    string
+	RuntimeLog    string
 	RuntimeState  string
 	RuntimeSocket string
 	DB            string
@@ -161,9 +170,11 @@ type Paths struct {
 	Socket        string
 }
 
-// NewPaths computes all derived paths from a project ID. All state paths live
-// under ~/.waggle/data/<hash>/ and ~/.waggle/sockets/<hash>/. If os.UserHomeDir
-// fails (no HOME set), all paths will be empty — callers must check before use.
+// NewPaths computes all derived paths from a project ID. Broker state lives
+// under ~/.waggle/data/<hash>/ and ~/.waggle/sockets/<hash>/. Machine-runtime
+// state is machine-local and shared across projects under ~/.waggle/runtime/.
+// If os.UserHomeDir fails (no HOME set), all paths will be empty — callers must
+// check before use.
 func NewPaths(projectID string) Paths {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -176,12 +187,15 @@ func NewPaths(projectID string) Paths {
 
 	dataDir := filepath.Join(home, Defaults.DirName, "data", hash)
 	socketDir := filepath.Join(home, Defaults.DirName, "sockets", hash)
-	runtimeDir := filepath.Join(home, Defaults.DirName, Defaults.RuntimeDirName, hash)
+	runtimeDir := filepath.Join(home, Defaults.DirName, Defaults.RuntimeDirName)
 
 	return Paths{
 		ProjectID:     projectID,
 		DataDir:       dataDir,
 		RuntimeDir:    runtimeDir,
+		RuntimeDB:     filepath.Join(runtimeDir, Defaults.RuntimeDBFile),
+		RuntimePID:    filepath.Join(runtimeDir, Defaults.RuntimePIDFile),
+		RuntimeLog:    filepath.Join(runtimeDir, Defaults.RuntimeLogFile),
 		RuntimeState:  filepath.Join(runtimeDir, Defaults.RuntimeStateFile),
 		RuntimeSocket: filepath.Join(runtimeDir, Defaults.RuntimeSocketFile),
 		DB:            filepath.Join(dataDir, Defaults.DBFile),
