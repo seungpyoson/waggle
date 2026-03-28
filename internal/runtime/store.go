@@ -197,6 +197,133 @@ func (s *Store) AddRecord(rec DeliveryRecord) error {
 	return nil
 }
 
+// AddRecordIfAbsent inserts a delivery record once and reports whether it was created.
+func (s *Store) AddRecordIfAbsent(rec DeliveryRecord) (bool, error) {
+	if rec.ProjectID == "" || rec.AgentName == "" {
+		return false, fmt.Errorf("project_id and agent_name required")
+	}
+	if rec.MessageID == 0 {
+		return false, fmt.Errorf("message_id required")
+	}
+	if rec.FromName == "" {
+		return false, fmt.Errorf("from_name required")
+	}
+	if rec.Body == "" {
+		return false, fmt.Errorf("body required")
+	}
+	if rec.SentAt.IsZero() || rec.ReceivedAt.IsZero() {
+		return false, fmt.Errorf("sent_at and received_at required")
+	}
+
+	result, err := s.db.Exec(`
+		INSERT INTO delivery_records (
+			project_id, agent_name, message_id, from_name, body,
+			sent_at, received_at, notified_at, surfaced_at, dismissed_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(project_id, agent_name, message_id) DO NOTHING
+	`, rec.ProjectID, rec.AgentName, rec.MessageID, rec.FromName, rec.Body,
+		timeValue(rec.SentAt), timeValue(rec.ReceivedAt), notifiedValue(rec.NotifiedAt),
+		timeValue(rec.SurfacedAt), timeValue(rec.DismissedAt))
+	if err != nil {
+		return false, fmt.Errorf("adding delivery record if absent: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("counting inserted delivery records: %w", err)
+	}
+	return rowsAffected > 0, nil
+}
+
+// GetRecord returns one delivery record by its deduplication key.
+func (s *Store) GetRecord(projectID, agentName string, messageID int64) (DeliveryRecord, error) {
+	if projectID == "" || agentName == "" {
+		return DeliveryRecord{}, fmt.Errorf("project_id and agent_name required")
+	}
+	if messageID == 0 {
+		return DeliveryRecord{}, fmt.Errorf("message_id required")
+	}
+
+	row := s.db.QueryRow(`
+		SELECT project_id, agent_name, message_id, from_name, body,
+		       sent_at, received_at, notified_at, surfaced_at, dismissed_at
+		FROM delivery_records
+		WHERE project_id = ? AND agent_name = ? AND message_id = ?
+	`, projectID, agentName, messageID)
+
+	rec, err := scanDeliveryRecord(row)
+	if err == sql.ErrNoRows {
+		return DeliveryRecord{}, ErrRecordNotFound
+	}
+	if err != nil {
+		return DeliveryRecord{}, err
+	}
+	return rec, nil
+}
+
+// MarkNotified records successful notification delivery.
+func (s *Store) MarkNotified(projectID, agentName string, messageID int64, notifiedAt time.Time) error {
+	if projectID == "" || agentName == "" {
+		return fmt.Errorf("project_id and agent_name required")
+	}
+	if messageID == 0 {
+		return fmt.Errorf("message_id required")
+	}
+	if notifiedAt.IsZero() {
+		return fmt.Errorf("notified_at required")
+	}
+
+	result, err := s.db.Exec(`
+		UPDATE delivery_records
+		SET notified_at = ?
+		WHERE project_id = ? AND agent_name = ? AND message_id = ?
+	`, notifiedValue(notifiedAt), projectID, agentName, messageID)
+	if err != nil {
+		return fmt.Errorf("marking notified: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("counting notified rows: %w", err)
+	}
+	if rowsAffected == 0 {
+		return ErrRecordNotFound
+	}
+	return nil
+}
+
+// PendingNotifications returns delivery records that still need local notification.
+func (s *Store) PendingNotifications(projectID, agentName string) ([]DeliveryRecord, error) {
+	if projectID == "" || agentName == "" {
+		return nil, fmt.Errorf("project_id and agent_name required")
+	}
+
+	rows, err := s.db.Query(`
+		SELECT project_id, agent_name, message_id, from_name, body,
+		       sent_at, received_at, notified_at, surfaced_at, dismissed_at
+		FROM delivery_records
+		WHERE project_id = ? AND agent_name = ? AND notified_at = '' AND dismissed_at IS NULL
+		ORDER BY received_at ASC, message_id ASC
+	`, projectID, agentName)
+	if err != nil {
+		return nil, fmt.Errorf("query pending notifications: %w", err)
+	}
+	defer rows.Close()
+
+	var records []DeliveryRecord
+	for rows.Next() {
+		rec, err := scanDeliveryRecord(rows)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, rec)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate pending notifications: %w", err)
+	}
+	return records, nil
+}
+
 // Unread returns records that have not yet been surfaced to the agent.
 func (s *Store) Unread(projectID, agentName string) ([]DeliveryRecord, error) {
 	if projectID == "" || agentName == "" {
@@ -273,6 +400,13 @@ func (s *Store) MarkSurfaced(projectID, agentName string, messageID int64) error
 func timeValue(t time.Time) interface{} {
 	if t.IsZero() {
 		return nil
+	}
+	return t.UTC().Format(time.RFC3339Nano)
+}
+
+func notifiedValue(t time.Time) string {
+	if t.IsZero() {
+		return ""
 	}
 	return t.UTC().Format(time.RFC3339Nano)
 }
