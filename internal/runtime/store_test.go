@@ -260,6 +260,108 @@ func TestStore_MarkSurfacedIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestStore_MarkSurfacedBatchMarksOnlyRequestedRecords(t *testing.T) {
+	store := newTestStore(t)
+
+	for _, rec := range []DeliveryRecord{
+		{
+			ProjectID:  "proj-a",
+			AgentName:  "agent-1",
+			MessageID:  41,
+			FromName:   "orchestrator",
+			Body:       "first",
+			SentAt:     time.Unix(1, 0).UTC(),
+			ReceivedAt: time.Unix(2, 0).UTC(),
+			NotifiedAt: time.Unix(3, 0).UTC(),
+		},
+		{
+			ProjectID:  "proj-a",
+			AgentName:  "agent-1",
+			MessageID:  42,
+			FromName:   "orchestrator",
+			Body:       "second",
+			SentAt:     time.Unix(4, 0).UTC(),
+			ReceivedAt: time.Unix(5, 0).UTC(),
+			NotifiedAt: time.Unix(6, 0).UTC(),
+		},
+		{
+			ProjectID:  "proj-a",
+			AgentName:  "agent-1",
+			MessageID:  43,
+			FromName:   "orchestrator",
+			Body:       "third",
+			SentAt:     time.Unix(7, 0).UTC(),
+			ReceivedAt: time.Unix(8, 0).UTC(),
+			NotifiedAt: time.Unix(9, 0).UTC(),
+		},
+	} {
+		if err := store.AddRecord(rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := store.MarkSurfacedBatch("proj-a", "agent-1", []int64{41, 43}); err != nil {
+		t.Fatal(err)
+	}
+
+	unread, err := store.Unread("proj-a", "agent-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(unread) != 1 {
+		t.Fatalf("unread count = %d, want 1", len(unread))
+	}
+	if unread[0].MessageID != 42 {
+		t.Fatalf("remaining unread message = %d, want 42", unread[0].MessageID)
+	}
+}
+
+func TestStore_MarkSurfacedBatchIsIdempotent(t *testing.T) {
+	store := newTestStore(t)
+
+	for _, rec := range []DeliveryRecord{
+		{
+			ProjectID:  "proj-a",
+			AgentName:  "agent-1",
+			MessageID:  41,
+			FromName:   "orchestrator",
+			Body:       "first",
+			SentAt:     time.Unix(1, 0).UTC(),
+			ReceivedAt: time.Unix(2, 0).UTC(),
+			NotifiedAt: time.Unix(3, 0).UTC(),
+		},
+		{
+			ProjectID:  "proj-a",
+			AgentName:  "agent-1",
+			MessageID:  42,
+			FromName:   "orchestrator",
+			Body:       "second",
+			SentAt:     time.Unix(4, 0).UTC(),
+			ReceivedAt: time.Unix(5, 0).UTC(),
+			NotifiedAt: time.Unix(6, 0).UTC(),
+		},
+	} {
+		if err := store.AddRecord(rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := store.MarkSurfacedBatch("proj-a", "agent-1", []int64{41, 42}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkSurfacedBatch("proj-a", "agent-1", []int64{41, 42}); err != nil {
+		t.Fatal(err)
+	}
+
+	unread, err := store.Unread("proj-a", "agent-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(unread) != 0 {
+		t.Fatalf("unread count = %d, want 0", len(unread))
+	}
+}
+
 func TestStore_DismissedRecordsStayDismissedAndUnreadExcludesThem(t *testing.T) {
 	store := newTestStore(t)
 

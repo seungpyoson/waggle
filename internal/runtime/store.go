@@ -428,6 +428,89 @@ func (s *Store) MarkSurfaced(projectID, agentName string, messageID int64) error
 	return nil
 }
 
+// MarkSurfacedBatch marks multiple delivery records as surfaced atomically.
+func (s *Store) MarkSurfacedBatch(projectID, agentName string, messageIDs []int64) error {
+	if projectID == "" || agentName == "" {
+		return fmt.Errorf("project_id and agent_name required")
+	}
+	if len(messageIDs) == 0 {
+		return nil
+	}
+
+	ids := uniquePositiveMessageIDs(messageIDs)
+	if len(ids) != len(messageIDs) {
+		return fmt.Errorf("message_id required")
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin surfaced batch: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	args := make([]any, 0, 2+len(ids))
+	args = append(args, projectID, agentName)
+	for _, id := range ids {
+		args = append(args, id)
+	}
+
+	var matched int
+	if err := tx.QueryRow(fmt.Sprintf(`
+		SELECT COUNT(*)
+		FROM delivery_records
+		WHERE project_id = ? AND agent_name = ? AND message_id IN (%s)
+	`, sqlPlaceholders(len(ids))), args...).Scan(&matched); err != nil {
+		return fmt.Errorf("count surfaced batch rows: %w", err)
+	}
+	if matched != len(ids) {
+		return ErrRecordNotFound
+	}
+
+	updateArgs := make([]any, 0, 3+len(ids))
+	updateArgs = append(updateArgs, time.Now().UTC().Format(time.RFC3339Nano), projectID, agentName)
+	for _, id := range ids {
+		updateArgs = append(updateArgs, id)
+	}
+	if _, err := tx.Exec(fmt.Sprintf(`
+		UPDATE delivery_records
+		SET surfaced_at = COALESCE(surfaced_at, ?)
+		WHERE project_id = ? AND agent_name = ? AND message_id IN (%s)
+	`, sqlPlaceholders(len(ids))), updateArgs...); err != nil {
+		return fmt.Errorf("marking surfaced batch: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit surfaced batch: %w", err)
+	}
+	return nil
+}
+
+func uniquePositiveMessageIDs(messageIDs []int64) []int64 {
+	seen := make(map[int64]struct{}, len(messageIDs))
+	out := make([]int64, 0, len(messageIDs))
+	for _, id := range messageIDs {
+		if id <= 0 {
+			return nil
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
+}
+
+func sqlPlaceholders(count int) string {
+	parts := make([]string, count)
+	for i := 0; i < count; i++ {
+		parts[i] = "?"
+	}
+	return strings.Join(parts, ", ")
+}
+
 func (s *Store) PruneDeliveryRecords(before time.Time) (int64, error) {
 	result, err := s.db.Exec(`
 		DELETE FROM delivery_records

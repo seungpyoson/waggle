@@ -151,11 +151,32 @@ func TestRuntimeStatusReportsStoppedWhenStateMissing(t *testing.T) {
 	}
 }
 
+func TestExecuteRootCommandForTestDoesNotLeakInstallUninstallFlag(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	stdout, stderr := executeRootCommandForTest(t, "install", "codex", "--uninstall")
+	if stderr != "" {
+		t.Fatalf("install uninstall stderr = %q, want empty", stderr)
+	}
+	if !strings.Contains(stdout, `"Codex integration removed"`) {
+		t.Fatalf("install uninstall stdout = %q, want removal message", stdout)
+	}
+
+	stdout, stderr = executeRootCommandForTest(t, "install", "codex")
+	if stderr != "" {
+		t.Fatalf("install stderr = %q, want empty", stderr)
+	}
+	if !strings.Contains(stdout, `"Codex integration installed. Restart Codex to activate."`) {
+		t.Fatalf("install stdout = %q, want install message", stdout)
+	}
+}
+
 func executeRootCommandForTest(t *testing.T, args ...string) (string, string) {
 	t.Helper()
 
 	originalNoAutoStart := noAutoStart
 	originalPaths := paths
+	originalInstallUninstall := installUninstall
 	originalAdapterBootstrapTool := adapterBootstrapTool
 	originalAdapterBootstrapAgent := adapterBootstrapAgent
 	originalAdapterBootstrapProjectID := adapterBootstrapProjectID
@@ -164,6 +185,7 @@ func executeRootCommandForTest(t *testing.T, args ...string) (string, string) {
 	defer func() {
 		noAutoStart = originalNoAutoStart
 		paths = originalPaths
+		installUninstall = originalInstallUninstall
 		adapterBootstrapTool = originalAdapterBootstrapTool
 		adapterBootstrapAgent = originalAdapterBootstrapAgent
 		adapterBootstrapProjectID = originalAdapterBootstrapProjectID

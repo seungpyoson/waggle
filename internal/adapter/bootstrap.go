@@ -61,7 +61,13 @@ func Bootstrap(input BootstrapInput) (BootstrapResult, error) {
 		}
 	}
 
-	if err := rt.RegisterWatch(runtimePaths, rt.Watch{
+	store, err := rt.OpenStore(runtimePaths)
+	if err != nil {
+		return BootstrapResult{}, err
+	}
+	defer store.Close()
+
+	if err := store.UpsertWatch(rt.Watch{
 		ProjectID: projectID,
 		AgentName: agentName,
 		Source:    source,
@@ -69,20 +75,17 @@ func Bootstrap(input BootstrapInput) (BootstrapResult, error) {
 		return BootstrapResult{}, err
 	}
 
-	store, err := rt.OpenStore(runtimePaths)
-	if err != nil {
-		return BootstrapResult{}, err
-	}
-	defer store.Close()
-
 	records, err := store.Unread(projectID, agentName)
 	if err != nil {
 		return BootstrapResult{}, err
 	}
+
+	messageIDs := make([]int64, 0, len(records))
 	for _, rec := range records {
-		if err := store.MarkSurfaced(projectID, agentName, rec.MessageID); err != nil {
-			return BootstrapResult{}, err
-		}
+		messageIDs = append(messageIDs, rec.MessageID)
+	}
+	if err := store.MarkSurfacedBatch(projectID, agentName, messageIDs); err != nil {
+		return BootstrapResult{}, err
 	}
 
 	return BootstrapResult{
