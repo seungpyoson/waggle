@@ -149,7 +149,7 @@ func (m *Manager) LastDeliveryError() error {
 }
 
 func (m *Manager) runReconcileLoop(ctx context.Context) {
-	ticker := time.NewTicker(config.Defaults.PollInterval)
+	ticker := time.NewTicker(config.Defaults.RuntimeReconcileInterval)
 	defer ticker.Stop()
 
 	for {

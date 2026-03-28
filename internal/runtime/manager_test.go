@@ -249,6 +249,7 @@ func TestManager_StartReconcilesWatchesAddedAfterStartup(t *testing.T) {
 	store := newTestStore(t)
 	factory := newFakeListenerFactory()
 	manager := NewManager(store, factory, &fakeNotifier{})
+	setRuntimeReconcileIntervalForTest(t, 10*time.Millisecond)
 
 	if err := manager.Start(context.Background()); err != nil {
 		t.Fatal(err)
@@ -269,6 +270,38 @@ func TestManager_StartReconcilesWatchesAddedAfterStartup(t *testing.T) {
 	})
 }
 
+func TestManager_UsesRuntimeReconcileIntervalForWatchReconciliation(t *testing.T) {
+	store := newTestStore(t)
+	factory := newFakeListenerFactory()
+	manager := NewManager(store, factory, &fakeNotifier{})
+
+	origPoll := config.Defaults.PollInterval
+	config.Defaults.PollInterval = 5 * time.Second
+	setRuntimeReconcileIntervalForTest(t, 10*time.Millisecond)
+	defer func() {
+		config.Defaults.PollInterval = origPoll
+	}()
+
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Stop()
+
+	watch := Watch{ProjectID: "proj-c", AgentName: "agent-3", Source: "hook"}
+	if err := store.UpsertWatch(watch); err != nil {
+		t.Fatal(err)
+	}
+
+	listener := factory.waitForListener(t, watch)
+	if listener == nil {
+		t.Fatal("expected listener for runtime reconcile interval test")
+	}
+
+	waitFor(t, "watch count after runtime-specific reconcile", func() bool {
+		return manager.WatchCount() == 1
+	})
+}
+
 func TestManager_StartReconcilesWatchesRemovedAfterStartup(t *testing.T) {
 	store := newTestStore(t)
 	watch := Watch{ProjectID: "proj-a", AgentName: "agent-1", Source: "hook"}
@@ -278,6 +311,7 @@ func TestManager_StartReconcilesWatchesRemovedAfterStartup(t *testing.T) {
 
 	factory := newFakeListenerFactory()
 	manager := NewManager(store, factory, &fakeNotifier{})
+	setRuntimeReconcileIntervalForTest(t, 10*time.Millisecond)
 
 	if err := manager.Start(context.Background()); err != nil {
 		t.Fatal(err)
@@ -968,4 +1002,14 @@ func waitFor(t *testing.T, name string, fn func() bool) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("timeout waiting for %s", name)
+}
+
+func setRuntimeReconcileIntervalForTest(t *testing.T, d time.Duration) {
+	t.Helper()
+
+	orig := config.Defaults.RuntimeReconcileInterval
+	config.Defaults.RuntimeReconcileInterval = d
+	t.Cleanup(func() {
+		config.Defaults.RuntimeReconcileInterval = orig
+	})
 }
