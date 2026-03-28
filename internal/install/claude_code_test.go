@@ -28,6 +28,32 @@ func TestInstall_HookCreated(t *testing.T) {
 	}
 }
 
+func TestInstall_HookUsesRuntimeBridgeNotBackgroundListener(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	if err := installClaudeCode(tmpHome); err != nil {
+		t.Fatalf("install failed: %v", err)
+	}
+
+	hookPath := filepath.Join(tmpHome, ".claude", "hooks", "waggle-connect.sh")
+	data, err := os.ReadFile(hookPath)
+	if err != nil {
+		t.Fatalf("read hook: %v", err)
+	}
+
+	content := string(data)
+	for _, forbidden := range []string{"waggle listen", "pkill -f", "disown"} {
+		if strings.Contains(content, forbidden) {
+			t.Fatalf("hook should not contain %q", forbidden)
+		}
+	}
+	for _, required := range []string{"waggle runtime start", "waggle runtime watch", "waggle runtime pull"} {
+		if !strings.Contains(content, required) {
+			t.Fatalf("hook should contain %q", required)
+		}
+	}
+}
+
 func TestInstall_SkillsCreated(t *testing.T) {
 	tmpHome := t.TempDir()
 
