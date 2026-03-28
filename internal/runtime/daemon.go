@@ -98,7 +98,32 @@ func IsRunning(paths config.Paths) bool {
 }
 
 func WaitForReady(paths config.Paths, timeout, interval time.Duration) error {
-	return broker.WaitForReady(paths.RuntimePID, timeout, interval)
+	if timeout <= 0 {
+		return fmt.Errorf("WaitForReady: timeout must be positive, got %v", timeout)
+	}
+	if interval <= 0 {
+		return fmt.Errorf("WaitForReady: interval must be positive, got %v", interval)
+	}
+
+	deadline := time.Now().Add(timeout)
+	for {
+		if IsRunning(paths) {
+			state, err := LoadState(paths)
+			if err == nil && state.Running {
+				return nil
+			}
+		}
+
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return fmt.Errorf("runtime failed to become ready within %v", timeout)
+		}
+		sleep := interval
+		if remaining < sleep {
+			sleep = remaining
+		}
+		time.Sleep(sleep)
+	}
 }
 
 func CleanupStale(paths config.Paths) error {
@@ -131,7 +156,7 @@ func RunDaemon(ctx context.Context, paths config.Paths, manager *Manager) error 
 	startedAt := time.Now().UTC()
 	if err := SaveState(paths, State{
 		PID:       os.Getpid(),
-		Running:   true,
+		Running:   false,
 		StartedAt: startedAt,
 	}); err != nil {
 		return err
