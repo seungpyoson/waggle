@@ -355,6 +355,34 @@ func (s *Store) PendingNotifications(projectID, agentName string) ([]DeliveryRec
 	return records, nil
 }
 
+// PendingNotificationsAll returns pending notification records across all watches in stable order.
+func (s *Store) PendingNotificationsAll() ([]DeliveryRecord, error) {
+	rows, err := s.db.Query(`
+		SELECT project_id, agent_name, message_id, from_name, body,
+		       sent_at, received_at, notified_at, surfaced_at, dismissed_at
+		FROM delivery_records
+		WHERE notified_at = '' AND dismissed_at IS NULL
+		ORDER BY project_id ASC, agent_name ASC, message_id ASC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("query pending notifications: %w", err)
+	}
+	defer rows.Close()
+
+	var records []DeliveryRecord
+	for rows.Next() {
+		rec, err := scanDeliveryRecord(rows)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, rec)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate pending notifications: %w", err)
+	}
+	return records, nil
+}
+
 // Unread returns records that have not yet been surfaced to the agent.
 func (s *Store) Unread(projectID, agentName string) ([]DeliveryRecord, error) {
 	if projectID == "" || agentName == "" {

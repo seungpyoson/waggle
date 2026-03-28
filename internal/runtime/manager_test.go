@@ -125,7 +125,7 @@ func TestManager_HandleDeliveryRetriesNotifyAfterFailure(t *testing.T) {
 	manager.retries[deliveryKey{projectID: "proj-a", agentName: "agent-1", messageID: 8}] = retry
 	manager.mu.Unlock()
 
-	if err := manager.retryPendingNotifications(watch); err != nil {
+	if err := manager.retryPendingNotifications(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -142,6 +142,80 @@ func TestManager_HandleDeliveryRetriesNotifyAfterFailure(t *testing.T) {
 	}
 	if unread[0].NotifiedAt.IsZero() {
 		t.Fatal("expected record to be marked notified after retry success")
+	}
+}
+
+func TestManager_GlobalRetrySweepRetriesPendingNotificationsAcrossMultipleWatches(t *testing.T) {
+	store := newTestStore(t)
+	manager := NewManager(store, newFakeListenerFactory(), &fakeNotifier{
+		errs: []error{
+			errors.New("first watch retry failed"),
+			errors.New("second watch retry failed"),
+			nil,
+			nil,
+		},
+	})
+
+	records := []DeliveryRecord{
+		{
+			ProjectID:  "proj-a",
+			AgentName:  "agent-1",
+			MessageID:  1,
+			FromName:   "planner",
+			Body:       "first",
+			SentAt:     time.Unix(80, 0).UTC(),
+			ReceivedAt: time.Unix(81, 0).UTC(),
+		},
+		{
+			ProjectID:  "proj-b",
+			AgentName:  "agent-2",
+			MessageID:  2,
+			FromName:   "planner",
+			Body:       "second",
+			SentAt:     time.Unix(82, 0).UTC(),
+			ReceivedAt: time.Unix(83, 0).UTC(),
+		},
+	}
+	for _, rec := range records {
+		if _, err := store.AddRecordIfAbsent(rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := manager.retryPendingNotifications(); err == nil {
+		t.Fatal("expected first retry sweep to report notification failure")
+	}
+
+	manager.mu.Lock()
+	for _, key := range []deliveryKey{
+		{projectID: "proj-a", agentName: "agent-1", messageID: 1},
+		{projectID: "proj-b", agentName: "agent-2", messageID: 2},
+	} {
+		state := manager.retries[key]
+		state.nextTry = time.Now().UTC().Add(-time.Millisecond)
+		manager.retries[key] = state
+	}
+	manager.mu.Unlock()
+
+	if err := manager.retryPendingNotifications(); err != nil {
+		t.Fatalf("second retry sweep returned error: %v", err)
+	}
+
+	for _, tc := range []struct {
+		projectID string
+		agentName string
+		messageID int64
+	}{
+		{projectID: "proj-a", agentName: "agent-1", messageID: 1},
+		{projectID: "proj-b", agentName: "agent-2", messageID: 2},
+	} {
+		rec, err := store.GetRecord(tc.projectID, tc.agentName, tc.messageID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rec.NotifiedAt.IsZero() {
+			t.Fatalf("record %s/%s/%d not marked notified", tc.projectID, tc.agentName, tc.messageID)
+		}
 	}
 }
 
@@ -332,7 +406,7 @@ func TestManager_RetryPendingNotificationsContinuesPastFailedRecord(t *testing.T
 		t.Fatal(err)
 	}
 
-	err := manager.retryPendingNotifications(Watch{ProjectID: "proj-a", AgentName: "agent-1"})
+	err := manager.retryPendingNotifications()
 	if err == nil {
 		t.Fatal("expected first notification error to be returned")
 	}
@@ -376,7 +450,7 @@ func TestManager_PendingRetryAndLiveDeliveryDoNotDoubleNotifySameRecord(t *testi
 
 	done := make(chan error, 1)
 	go func() {
-		done <- manager.retryPendingNotifications(Watch{ProjectID: "proj-a", AgentName: "agent-1"})
+		done <- manager.retryPendingNotifications()
 	}()
 
 	<-notifier.started
