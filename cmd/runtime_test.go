@@ -156,13 +156,23 @@ func executeRootCommandForTest(t *testing.T, args ...string) (string, string) {
 
 	originalNoAutoStart := noAutoStart
 	originalPaths := paths
-	t.Cleanup(func() {
+	originalAdapterBootstrapTool := adapterBootstrapTool
+	originalAdapterBootstrapAgent := adapterBootstrapAgent
+	originalAdapterBootstrapProjectID := adapterBootstrapProjectID
+	originalAdapterBootstrapSource := adapterBootstrapSource
+	originalAdapterBootstrapFormat := adapterBootstrapFormat
+	defer func() {
 		noAutoStart = originalNoAutoStart
 		paths = originalPaths
+		adapterBootstrapTool = originalAdapterBootstrapTool
+		adapterBootstrapAgent = originalAdapterBootstrapAgent
+		adapterBootstrapProjectID = originalAdapterBootstrapProjectID
+		adapterBootstrapSource = originalAdapterBootstrapSource
+		adapterBootstrapFormat = originalAdapterBootstrapFormat
 		rootCmd.SetOut(os.Stdout)
 		rootCmd.SetErr(os.Stderr)
 		rootCmd.SetArgs(nil)
-	})
+	}()
 
 	noAutoStart = false
 	paths = config.Paths{}
