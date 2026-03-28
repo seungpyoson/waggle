@@ -28,11 +28,10 @@ var runtimeWatchCmd = &cobra.Command{
 	Short: "Register a machine-runtime watch for an agent",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		store, _, err := openRuntimeStore()
+		runtimePaths, err := resolveRuntimePaths()
 		if err != nil {
 			return err
 		}
-		defer store.Close()
 
 		projectID, err := resolveRuntimeProjectID(runtimeWatchProjectID)
 		if err != nil {
@@ -44,7 +43,7 @@ var runtimeWatchCmd = &cobra.Command{
 			AgentName: args[0],
 			Source:    runtimeWatchSource,
 		}
-		if err := store.UpsertWatch(watch); err != nil {
+		if err := rt.RegisterWatch(runtimePaths, watch); err != nil {
 			return err
 		}
 
@@ -61,18 +60,17 @@ var runtimeUnwatchCmd = &cobra.Command{
 	Short: "Remove a machine-runtime watch for an agent",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		store, _, err := openRuntimeStore()
+		runtimePaths, err := resolveRuntimePaths()
 		if err != nil {
 			return err
 		}
-		defer store.Close()
 
 		projectID, err := resolveRuntimeProjectID(runtimeUnwatchProjectID)
 		if err != nil {
 			return err
 		}
 
-		if err := store.RemoveWatch(projectID, args[0]); err != nil {
+		if err := rt.UnregisterWatch(runtimePaths, projectID, args[0]); err != nil {
 			return err
 		}
 

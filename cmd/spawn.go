@@ -8,6 +8,7 @@ import (
 
 	"github.com/seungpyoson/waggle/internal/config"
 	"github.com/seungpyoson/waggle/internal/protocol"
+	rt "github.com/seungpyoson/waggle/internal/runtime"
 	"github.com/seungpyoson/waggle/internal/spawn"
 	"github.com/spf13/cobra"
 )
@@ -79,6 +80,8 @@ var spawnCmd = &cobra.Command{
 			agentType = agentCfg.Default
 		}
 
+		runtimeWatchRegistered, runtimeWatchErr := registerSpawnRuntimeWatch(projectID, spawnName)
+
 		// 7. Register with broker FIRST (PID=0, will update after tab opens)
 		spawnData, _ := json.Marshal(map[string]any{
 			"pid":  0,
@@ -121,13 +124,35 @@ var spawnCmd = &cobra.Command{
 
 		// 10. Print success
 		printJSON(map[string]any{
-			"ok":      true,
-			"message": fmt.Sprintf("spawned %s (%s) in new tab — PID %d", spawnName, agentType, pid),
-			"name":    spawnName,
-			"type":    agentType,
-			"pid":     pid,
+			"ok":                       true,
+			"message":                  fmt.Sprintf("spawned %s (%s) in new tab — PID %d", spawnName, agentType, pid),
+			"name":                     spawnName,
+			"type":                     agentType,
+			"pid":                      pid,
+			"runtime_watch_registered": runtimeWatchRegistered,
+			"runtime_watch_error":      runtimeWatchErr,
 		})
 		return nil
 	},
 }
 
+func registerSpawnRuntimeWatch(projectID, agentName string) (bool, string) {
+	if projectID == "" || agentName == "" {
+		return false, ""
+	}
+
+	paths := config.NewPaths(projectID)
+	if paths.RuntimeDB == "" {
+		return false, "runtime database path unavailable"
+	}
+
+	err := rt.RegisterWatch(paths, rt.Watch{
+		ProjectID: projectID,
+		AgentName: agentName,
+		Source:    "spawn",
+	})
+	if err != nil {
+		return false, err.Error()
+	}
+	return true, ""
+}

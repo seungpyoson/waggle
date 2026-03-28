@@ -38,7 +38,7 @@ func openRuntimeStore() (*rt.Store, config.Paths, error) {
 		return nil, config.Paths{}, err
 	}
 
-	store, err := rt.NewStore(runtimePaths.RuntimeDB)
+	store, err := rt.OpenStore(runtimePaths)
 	if err != nil {
 		return nil, config.Paths{}, err
 	}

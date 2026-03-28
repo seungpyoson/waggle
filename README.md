@@ -13,8 +13,16 @@ Waggle fixes this. It's a lightweight messaging protocol that any agent speaks t
   │ Code     │        │ CLI     │        │         │
   └────┬─────┘        └────┬────┘        └────┬────┘
        │                   │                   │
-       │    waggle cmd     │    waggle cmd     │    waggle cmd
-       ▼                   ▼                   ▼
+       │    safe surface    │    safe surface    │    safe surface
+       ▼                    ▼                    ▼
+  ┌──────────────────────────────────────────────────┐
+  │         waggle machine runtime                    │
+  │   notifications · unread cache · watch set       │
+  │   (one per machine, thin tool adapters)          │
+  └──────────────────────────────────────────────────┘
+                         │
+                         │ broker transport
+                         ▼
   ┌──────────────────────────────────────────────────┐
   │              waggle broker                        │
   │   tasks · events · locks · sessions              │
@@ -100,7 +108,9 @@ Think of it like HTTP for the web, but for AI agents working on code. The protoc
 
 ## How It Works
 
-**Shared broker, zero config.** Waggle identifies your project by the git repo (root commit hash). All agents in the same repo — even in different clones, worktrees, or sandboxes — automatically share one broker. The broker starts on first command.
+**Per-project broker, machine-local runtime.** Waggle identifies your project by the git repo (root commit hash). All agents in the same repo — even in different clones, worktrees, or sandboxes — automatically share one broker. Automatic delivery runs through a separate machine-local runtime that watches `(project_id, agent_name)` pairs, stores unread local records, and emits OS notifications.
+
+**Hooks stay thin.** Claude Code and other adapters do not launch persistent listeners themselves. They register watch intent with `waggle runtime watch`, then read unread local records with `waggle runtime pull` at safe interaction boundaries.
 
 **Four communication primitives:**
 
@@ -180,6 +190,16 @@ waggle stop
 waggle status                 # Sessions, tasks, locks
 ```
 
+### Runtime
+
+```bash
+waggle runtime start                    # Start machine-local runtime daemon
+waggle runtime status
+waggle runtime watch claude-main        # Reliable explicit fallback
+waggle runtime watches
+waggle runtime pull claude-main         # Adapter-safe unread surfacing
+```
+
 ---
 
 ## Communication Patterns
@@ -246,8 +266,9 @@ No setup needed. It just works.
 
 ```
 waggle (single binary)
-├── CLI client          — parses commands, talks to broker
-└── Broker daemon       — manages state, auto-started per project
+├── CLI client          — parses commands, talks to broker/runtime
+├── Broker daemon       — per-project transport and state
+└── Runtime daemon      — machine-local watches, notifications, unread cache
 
 Broker internals:
 ├── Events module       — in-memory pub/sub, fire-and-forget
@@ -258,6 +279,8 @@ Broker internals:
 **Design principles:**
 - **Zero config** — auto-detects project, auto-starts broker
 - **Broker is dumb, agents are smart** — broker routes messages, agents decide what work means
+- **One watch model** — manual registration, spawn, and tool hooks all feed the same runtime watch set
+- **Safe automatic delivery** — Claude Code no longer starts `waggle listen` from `SessionStart`
 - **Roles are fluid** — any session can create tasks, claim tasks, or both
 - **Fail loud** — errors are JSON with codes, never silent
 
