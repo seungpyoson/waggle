@@ -110,7 +110,7 @@ Think of it like HTTP for the web, but for AI agents working on code. The protoc
 
 **Per-project broker, machine-local runtime.** Waggle identifies your project by the git repo (root commit hash). All agents in the same repo — even in different clones, worktrees, or sandboxes — automatically share one broker. Automatic delivery runs through a separate machine-local runtime that watches `(project_id, agent_name)` pairs, stores unread local records, and emits OS notifications.
 
-**Hooks stay thin.** Claude Code and other adapters do not launch persistent listeners themselves. They register watch intent with `waggle runtime watch`, then read unread local records with `waggle runtime pull` at safe interaction boundaries.
+**Hooks stay thin.** The shipped Claude Code adapter does not launch a persistent listener itself. It registers watch intent with `waggle runtime watch`, then reads unread local records with `waggle runtime pull` at safe interaction boundaries. Other tool adapters can follow the same pattern.
 
 **Four communication primitives:**
 

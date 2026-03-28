@@ -1,4 +1,7 @@
 #!/bin/bash
+# Canonical Claude Code hook source lives in integrations/claude-code/.
+# The identical copy under internal/install/claude-code/ exists only so go:embed
+# can package the integration assets for `waggle install claude-code`.
 # waggle-connect.sh — safe SessionStart hook for Claude Code
 # Registers the Claude session with the machine runtime and surfaces unread
 # runtime records. Silent exit (<2s best effort) if waggle is unavailable.
