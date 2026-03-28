@@ -67,32 +67,34 @@ var Defaults = struct {
 	RuntimeLogFile          string
 	RuntimeStateFile        string
 
-	ShutdownTimeout                time.Duration
-	RuntimeNotificationTimeout     time.Duration
-	RuntimeReconnectMaxBackoff     time.Duration
-	RuntimeEphemeralWatchTTL       time.Duration
-	RuntimeDeliveryRetention       time.Duration
-	RuntimeStartLockStaleThreshold time.Duration
-	PollInterval                   time.Duration
-	MaxLogSize                     int64
-	MaxMessageSize                 int64
-	LeaseDuration                  time.Duration
-	IdleTimeout                    time.Duration
-	BusyTimeout                    time.Duration
-	LeaseCheckPeriod               time.Duration
-	IdleCheckInterval              time.Duration
-	StartupPollInterval            time.Duration
-	StartupTimeout                 time.Duration
-	DisconnectTimeout              time.Duration
-	RuntimeNotificationRetryLimit  int
-	MaxRetries                     int
-	MaxPriority                    int
-	MaxFieldLength                 int
-	TTLCheckPeriod                 time.Duration
-	AwaitAckDefaultTimeout         time.Duration
-	MaxTTL                         int
-	DefaultMsgPriority             string
-	ValidMsgPriorities             []string
+	ShutdownTimeout                       time.Duration
+	RuntimeNotificationTimeout            time.Duration
+	RuntimeReconnectMaxBackoff            time.Duration
+	RuntimeEphemeralWatchTTL              time.Duration
+	RuntimeDeliveryRetention              time.Duration
+	RuntimeStartLockStaleThreshold        time.Duration
+	RuntimeReconcileInterval              time.Duration
+	RuntimeNotificationRetrySweepInterval time.Duration
+	PollInterval                          time.Duration
+	MaxLogSize                            int64
+	MaxMessageSize                        int64
+	LeaseDuration                         time.Duration
+	IdleTimeout                           time.Duration
+	BusyTimeout                           time.Duration
+	LeaseCheckPeriod                      time.Duration
+	IdleCheckInterval                     time.Duration
+	StartupPollInterval                   time.Duration
+	StartupTimeout                        time.Duration
+	DisconnectTimeout                     time.Duration
+	RuntimeNotificationRetryLimit         int
+	MaxRetries                            int
+	MaxPriority                           int
+	MaxFieldLength                        int
+	TTLCheckPeriod                        time.Duration
+	AwaitAckDefaultTimeout                time.Duration
+	MaxTTL                                int
+	DefaultMsgPriority                    string
+	ValidMsgPriorities                    []string
 
 	// Spawn-related defaults
 	SpawnPIDTimeout       time.Duration
@@ -124,32 +126,34 @@ var Defaults = struct {
 	RuntimeLogFile:          "runtime.log",
 	RuntimeStateFile:        "state.json",
 
-	ShutdownTimeout:                5 * time.Second,
-	RuntimeNotificationTimeout:     2 * time.Second,
-	RuntimeReconnectMaxBackoff:     30 * time.Second,
-	RuntimeEphemeralWatchTTL:       24 * time.Hour,
-	RuntimeDeliveryRetention:       30 * 24 * time.Hour,
-	RuntimeStartLockStaleThreshold: 10 * time.Second,
-	PollInterval:                   500 * time.Millisecond,
-	MaxLogSize:                     10 * 1024 * 1024,
-	MaxMessageSize:                 1024 * 1024, // 1MB buffer for large AI agent payloads
-	LeaseDuration:                  5 * time.Minute,
-	IdleTimeout:                    5 * time.Minute,
-	BusyTimeout:                    5 * time.Second,
-	LeaseCheckPeriod:               30 * time.Second,
-	IdleCheckInterval:              1 * time.Second,
-	StartupPollInterval:            100 * time.Millisecond,
-	StartupTimeout:                 2 * time.Second,
-	DisconnectTimeout:              2 * time.Second,
-	RuntimeNotificationRetryLimit:  5,
-	MaxRetries:                     3,
-	MaxPriority:                    100,
-	MaxFieldLength:                 256,
-	TTLCheckPeriod:                 30 * time.Second,
-	AwaitAckDefaultTimeout:         30 * time.Second,
-	MaxTTL:                         86400,
-	DefaultMsgPriority:             "normal",
-	ValidMsgPriorities:             []string{"critical", "normal", "bulk"},
+	ShutdownTimeout:                       5 * time.Second,
+	RuntimeNotificationTimeout:            2 * time.Second,
+	RuntimeReconnectMaxBackoff:            30 * time.Second,
+	RuntimeEphemeralWatchTTL:              24 * time.Hour,
+	RuntimeDeliveryRetention:              30 * 24 * time.Hour,
+	RuntimeStartLockStaleThreshold:        10 * time.Second,
+	RuntimeReconcileInterval:              2 * time.Second,
+	RuntimeNotificationRetrySweepInterval: 1 * time.Second,
+	PollInterval:                          500 * time.Millisecond,
+	MaxLogSize:                            10 * 1024 * 1024,
+	MaxMessageSize:                        1024 * 1024, // 1MB buffer for large AI agent payloads
+	LeaseDuration:                         5 * time.Minute,
+	IdleTimeout:                           5 * time.Minute,
+	BusyTimeout:                           5 * time.Second,
+	LeaseCheckPeriod:                      30 * time.Second,
+	IdleCheckInterval:                     1 * time.Second,
+	StartupPollInterval:                   100 * time.Millisecond,
+	StartupTimeout:                        2 * time.Second,
+	DisconnectTimeout:                     2 * time.Second,
+	RuntimeNotificationRetryLimit:         5,
+	MaxRetries:                            3,
+	MaxPriority:                           100,
+	MaxFieldLength:                        256,
+	TTLCheckPeriod:                        30 * time.Second,
+	AwaitAckDefaultTimeout:                30 * time.Second,
+	MaxTTL:                                86400,
+	DefaultMsgPriority:                    "normal",
+	ValidMsgPriorities:                    []string{"critical", "normal", "bulk"},
 
 	SpawnPIDTimeout:       3 * time.Second,
 	SpawnPIDPollInterval:  200 * time.Millisecond,

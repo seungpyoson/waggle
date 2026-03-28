@@ -429,6 +429,18 @@ func TestDefaults_RuntimeStartLockStaleThreshold(t *testing.T) {
 	}
 }
 
+func TestDefaults_RuntimeReconcileInterval(t *testing.T) {
+	if Defaults.RuntimeReconcileInterval != 2*time.Second {
+		t.Fatalf("RuntimeReconcileInterval = %v, want 2s", Defaults.RuntimeReconcileInterval)
+	}
+}
+
+func TestDefaults_RuntimeNotificationRetrySweepInterval(t *testing.T) {
+	if Defaults.RuntimeNotificationRetrySweepInterval != time.Second {
+		t.Fatalf("RuntimeNotificationRetrySweepInterval = %v, want 1s", Defaults.RuntimeNotificationRetrySweepInterval)
+	}
+}
+
 func TestValidateDefaults_PassesWithDefaults(t *testing.T) {
 	if err := ValidateDefaults(); err != nil {
 		t.Fatalf("ValidateDefaults() failed on stock defaults: %v", err)
