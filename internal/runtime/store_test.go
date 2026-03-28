@@ -1,11 +1,14 @@
 package runtime
 
 import (
+	"database/sql"
 	"errors"
 	"path/filepath"
 	"sync"
 	"testing"
 	"time"
+
+	_ "modernc.org/sqlite"
 )
 
 func newTestStore(t *testing.T) *Store {
@@ -522,5 +525,61 @@ func TestStore_PruneDeliveryRecordsRetainsUnresolvedRecords(t *testing.T) {
 	}
 	if _, err := store.GetRecord("proj-a", "agent-1", 2); err != nil {
 		t.Fatalf("unresolved record should remain, got %v", err)
+	}
+}
+
+func TestStore_MigrateNormalizesLegacyNullNotifiedAt(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "runtime.db")
+
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	_, err = db.Exec(`
+		CREATE TABLE delivery_records (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			project_id TEXT NOT NULL,
+			agent_name TEXT NOT NULL,
+			message_id INTEGER NOT NULL,
+			from_name TEXT NOT NULL,
+			body TEXT NOT NULL,
+			sent_at TEXT NOT NULL,
+			received_at TEXT NOT NULL,
+			notified_at TEXT,
+			surfaced_at TEXT,
+			dismissed_at TEXT,
+			UNIQUE (project_id, agent_name, message_id)
+		);
+		INSERT INTO delivery_records (
+			project_id, agent_name, message_id, from_name, body, sent_at, received_at, notified_at
+		) VALUES ('proj-a', 'agent-1', 1, 'planner', 'legacy', ?, ?, NULL);
+	`, time.Unix(1, 0).UTC().Format(time.RFC3339Nano), time.Unix(2, 0).UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = db.Close()
+
+	store, err := NewStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	pending, err := store.PendingNotifications("proj-a", "agent-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("pending count = %d, want 1", len(pending))
+	}
+
+	var notifiedAt string
+	if err := store.db.QueryRow(`SELECT notified_at FROM delivery_records WHERE project_id = ? AND agent_name = ? AND message_id = ?`, "proj-a", "agent-1", 1).Scan(&notifiedAt); err != nil {
+		t.Fatal(err)
+	}
+	if notifiedAt != "" {
+		t.Fatalf("notified_at = %q, want canonical empty string", notifiedAt)
 	}
 }

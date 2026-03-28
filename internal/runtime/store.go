@@ -97,6 +97,9 @@ func migrate(db *sql.DB) error {
 	if _, err := db.Exec(`ALTER TABLE watches ADD COLUMN expires_at TEXT`); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
 		return fmt.Errorf("add watches.expires_at column: %w", err)
 	}
+	if _, err := db.Exec(`UPDATE delivery_records SET notified_at = '' WHERE notified_at IS NULL`); err != nil {
+		return fmt.Errorf("normalize delivery_records.notified_at: %w", err)
+	}
 	return nil
 }
 
@@ -210,7 +213,10 @@ func (s *Store) AddRecord(rec DeliveryRecord) error {
 			body = excluded.body,
 			sent_at = excluded.sent_at,
 			received_at = excluded.received_at,
-			notified_at = COALESCE(NULLIF(excluded.notified_at, ''), delivery_records.notified_at),
+			notified_at = CASE
+				WHEN excluded.notified_at = '' THEN delivery_records.notified_at
+				ELSE excluded.notified_at
+			END,
 			surfaced_at = COALESCE(excluded.surfaced_at, delivery_records.surfaced_at),
 			dismissed_at = COALESCE(excluded.dismissed_at, delivery_records.dismissed_at)
 	`, rec.ProjectID, rec.AgentName, rec.MessageID, rec.FromName, rec.Body,
@@ -327,7 +333,7 @@ func (s *Store) PendingNotifications(projectID, agentName string) ([]DeliveryRec
 		SELECT project_id, agent_name, message_id, from_name, body,
 		       sent_at, received_at, notified_at, surfaced_at, dismissed_at
 		FROM delivery_records
-		WHERE project_id = ? AND agent_name = ? AND COALESCE(notified_at, '') = '' AND dismissed_at IS NULL
+		WHERE project_id = ? AND agent_name = ? AND notified_at = '' AND dismissed_at IS NULL
 		ORDER BY received_at ASC, message_id ASC
 	`, projectID, agentName)
 	if err != nil {
