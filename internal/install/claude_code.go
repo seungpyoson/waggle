@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 )
 
+// The canonical Claude Code integration assets live in integrations/claude-code/.
+// This mirrored copy exists in-package so go:embed can bundle them for install.
 //go:embed all:claude-code
 var claudeCodeFiles embed.FS
 
@@ -225,4 +227,3 @@ func deregisterSessionStartHook(claudeDir string) error {
 
 	return os.WriteFile(settingsPath, out, 0644)
 }
-

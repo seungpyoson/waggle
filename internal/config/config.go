@@ -54,33 +54,45 @@ func ValidateDefaults() error {
 }
 
 var Defaults = struct {
-	DirName    string
-	DBFile     string
-	ConfigFile string
-	PIDFile    string
-	LockFile   string
-	LogFile    string
+	DirName                 string
+	DBFile                  string
+	ConfigFile              string
+	PIDFile                 string
+	LockFile                string
+	LogFile                 string
+	RuntimeDirName          string
+	RuntimeStartLockDirName string
+	RuntimeDBFile           string
+	RuntimePIDFile          string
+	RuntimeLogFile          string
+	RuntimeStateFile        string
 
-	ShutdownTimeout     time.Duration
-	PollInterval        time.Duration
-	MaxLogSize          int64
-	MaxMessageSize      int64
-	LeaseDuration       time.Duration
-	IdleTimeout         time.Duration
-	BusyTimeout         time.Duration
-	LeaseCheckPeriod    time.Duration
-	IdleCheckInterval   time.Duration
-	StartupPollInterval  time.Duration
-	StartupTimeout       time.Duration
-	DisconnectTimeout      time.Duration
-	MaxRetries             int
-	MaxPriority            int
-	MaxFieldLength         int
-	TTLCheckPeriod         time.Duration
-	AwaitAckDefaultTimeout time.Duration
-	MaxTTL                 int
-	DefaultMsgPriority     string
-	ValidMsgPriorities     []string
+	ShutdownTimeout                time.Duration
+	RuntimeNotificationTimeout     time.Duration
+	RuntimeReconnectMaxBackoff     time.Duration
+	RuntimeEphemeralWatchTTL       time.Duration
+	RuntimeDeliveryRetention       time.Duration
+	RuntimeStartLockStaleThreshold time.Duration
+	PollInterval                   time.Duration
+	MaxLogSize                     int64
+	MaxMessageSize                 int64
+	LeaseDuration                  time.Duration
+	IdleTimeout                    time.Duration
+	BusyTimeout                    time.Duration
+	LeaseCheckPeriod               time.Duration
+	IdleCheckInterval              time.Duration
+	StartupPollInterval            time.Duration
+	StartupTimeout                 time.Duration
+	DisconnectTimeout              time.Duration
+	RuntimeNotificationRetryLimit  int
+	MaxRetries                     int
+	MaxPriority                    int
+	MaxFieldLength                 int
+	TTLCheckPeriod                 time.Duration
+	AwaitAckDefaultTimeout         time.Duration
+	MaxTTL                         int
+	DefaultMsgPriority             string
+	ValidMsgPriorities             []string
 
 	// Spawn-related defaults
 	SpawnPIDTimeout       time.Duration
@@ -99,33 +111,45 @@ var Defaults = struct {
 	TaskStaleThreshold time.Duration
 	MaxTaskTTL         int
 }{
-	DirName:    ".waggle",
-	DBFile:     "state.db",
-	ConfigFile: "config.json",
-	PIDFile:    "waggle.pid",
-	LockFile:   "waggle.lock",
-	LogFile:    "waggle.log",
+	DirName:                 ".waggle",
+	DBFile:                  "state.db",
+	ConfigFile:              "config.json",
+	PIDFile:                 "waggle.pid",
+	LockFile:                "waggle.lock",
+	LogFile:                 "waggle.log",
+	RuntimeDirName:          "runtime",
+	RuntimeStartLockDirName: "runtime-start.lock",
+	RuntimeDBFile:           "runtime.db",
+	RuntimePIDFile:          "runtime.pid",
+	RuntimeLogFile:          "runtime.log",
+	RuntimeStateFile:        "state.json",
 
-	ShutdownTimeout:     5 * time.Second,
-	PollInterval:        500 * time.Millisecond,
-	MaxLogSize:          10 * 1024 * 1024,
-	MaxMessageSize:      1024 * 1024, // 1MB buffer for large AI agent payloads
-	LeaseDuration:       5 * time.Minute,
-	IdleTimeout:         5 * time.Minute,
-	BusyTimeout:         5 * time.Second,
-	LeaseCheckPeriod:    30 * time.Second,
-	IdleCheckInterval:   1 * time.Second,
-	StartupPollInterval:  100 * time.Millisecond,
-	StartupTimeout:       2 * time.Second,
-	DisconnectTimeout:      2 * time.Second,
-	MaxRetries:             3,
-	MaxPriority:            100,
-	MaxFieldLength:         256,
-	TTLCheckPeriod:         30 * time.Second,
-	AwaitAckDefaultTimeout: 30 * time.Second,
-	MaxTTL:                 86400,
-	DefaultMsgPriority:     "normal",
-	ValidMsgPriorities:     []string{"critical", "normal", "bulk"},
+	ShutdownTimeout:                5 * time.Second,
+	RuntimeNotificationTimeout:     2 * time.Second,
+	RuntimeReconnectMaxBackoff:     30 * time.Second,
+	RuntimeEphemeralWatchTTL:       24 * time.Hour,
+	RuntimeDeliveryRetention:       30 * 24 * time.Hour,
+	RuntimeStartLockStaleThreshold: 10 * time.Second,
+	PollInterval:                   500 * time.Millisecond,
+	MaxLogSize:                     10 * 1024 * 1024,
+	MaxMessageSize:                 1024 * 1024, // 1MB buffer for large AI agent payloads
+	LeaseDuration:                  5 * time.Minute,
+	IdleTimeout:                    5 * time.Minute,
+	BusyTimeout:                    5 * time.Second,
+	LeaseCheckPeriod:               30 * time.Second,
+	IdleCheckInterval:              1 * time.Second,
+	StartupPollInterval:            100 * time.Millisecond,
+	StartupTimeout:                 2 * time.Second,
+	DisconnectTimeout:              2 * time.Second,
+	RuntimeNotificationRetryLimit:  5,
+	MaxRetries:                     3,
+	MaxPriority:                    100,
+	MaxFieldLength:                 256,
+	TTLCheckPeriod:                 30 * time.Second,
+	AwaitAckDefaultTimeout:         30 * time.Second,
+	MaxTTL:                         86400,
+	DefaultMsgPriority:             "normal",
+	ValidMsgPriorities:             []string{"critical", "normal", "bulk"},
 
 	SpawnPIDTimeout:       3 * time.Second,
 	SpawnPIDPollInterval:  200 * time.Millisecond,
@@ -143,18 +167,26 @@ var Defaults = struct {
 }
 
 type Paths struct {
-	ProjectID string
-	DataDir   string
-	DB        string
-	PID       string
-	Lock      string
-	Log       string
-	Socket    string
+	ProjectID           string
+	DataDir             string
+	RuntimeDir          string
+	RuntimeDB           string
+	RuntimePID          string
+	RuntimeLog          string
+	RuntimeState        string
+	RuntimeStartLockDir string
+	DB                  string
+	PID                 string
+	Lock                string
+	Log                 string
+	Socket              string
 }
 
-// NewPaths computes all derived paths from a project ID. All state paths live
-// under ~/.waggle/data/<hash>/ and ~/.waggle/sockets/<hash>/. If os.UserHomeDir
-// fails (no HOME set), all paths will be empty — callers must check before use.
+// NewPaths computes all derived paths from a project ID. Broker state lives
+// under ~/.waggle/data/<hash>/ and ~/.waggle/sockets/<hash>/. Machine-runtime
+// state is machine-local and shared across projects under ~/.waggle/runtime/.
+// If os.UserHomeDir fails (no HOME set), all paths will be empty — callers must
+// check before use.
 func NewPaths(projectID string) Paths {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -167,15 +199,22 @@ func NewPaths(projectID string) Paths {
 
 	dataDir := filepath.Join(home, Defaults.DirName, "data", hash)
 	socketDir := filepath.Join(home, Defaults.DirName, "sockets", hash)
+	runtimeDir := filepath.Join(home, Defaults.DirName, Defaults.RuntimeDirName)
 
 	return Paths{
-		ProjectID: projectID,
-		DataDir:   dataDir,
-		DB:        filepath.Join(dataDir, Defaults.DBFile),
-		PID:       filepath.Join(dataDir, Defaults.PIDFile),
-		Lock:      filepath.Join(dataDir, Defaults.LockFile),
-		Log:       filepath.Join(dataDir, Defaults.LogFile),
-		Socket:    filepath.Join(socketDir, "broker.sock"),
+		ProjectID:           projectID,
+		DataDir:             dataDir,
+		RuntimeDir:          runtimeDir,
+		RuntimeDB:           filepath.Join(runtimeDir, Defaults.RuntimeDBFile),
+		RuntimePID:          filepath.Join(runtimeDir, Defaults.RuntimePIDFile),
+		RuntimeLog:          filepath.Join(runtimeDir, Defaults.RuntimeLogFile),
+		RuntimeState:        filepath.Join(runtimeDir, Defaults.RuntimeStateFile),
+		RuntimeStartLockDir: filepath.Join(runtimeDir, Defaults.RuntimeStartLockDirName),
+		DB:                  filepath.Join(dataDir, Defaults.DBFile),
+		PID:                 filepath.Join(dataDir, Defaults.PIDFile),
+		Lock:                filepath.Join(dataDir, Defaults.LockFile),
+		Log:                 filepath.Join(dataDir, Defaults.LogFile),
+		Socket:              filepath.Join(socketDir, "broker.sock"),
 	}
 }
 

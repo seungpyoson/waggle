@@ -276,6 +276,108 @@ func TestPaths_SocketHashLength(t *testing.T) {
 	}
 }
 
+func TestNewPaths_IncludesRuntimePaths(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	p := NewPaths("test-project")
+	for name, val := range map[string]string{
+		"RuntimeDir":          p.RuntimeDir,
+		"RuntimeDB":           p.RuntimeDB,
+		"RuntimePID":          p.RuntimePID,
+		"RuntimeLog":          p.RuntimeLog,
+		"RuntimeState":        p.RuntimeState,
+		"RuntimeStartLockDir": p.RuntimeStartLockDir,
+	} {
+		if val == "" {
+			t.Fatalf("%s is empty", name)
+		}
+		if !filepath.IsAbs(val) {
+			t.Fatalf("%s not absolute: %q", name, val)
+		}
+	}
+
+	if got := filepath.Base(p.RuntimeDB); got != Defaults.RuntimeDBFile {
+		t.Fatalf("RuntimeDB filename = %q, want %q", got, Defaults.RuntimeDBFile)
+	}
+	if got := filepath.Base(p.RuntimePID); got != Defaults.RuntimePIDFile {
+		t.Fatalf("RuntimePID filename = %q, want %q", got, Defaults.RuntimePIDFile)
+	}
+	if got := filepath.Base(p.RuntimeLog); got != Defaults.RuntimeLogFile {
+		t.Fatalf("RuntimeLog filename = %q, want %q", got, Defaults.RuntimeLogFile)
+	}
+	if got := filepath.Base(p.RuntimeState); got != Defaults.RuntimeStateFile {
+		t.Fatalf("RuntimeState filename = %q, want %q", got, Defaults.RuntimeStateFile)
+	}
+	if got := filepath.Base(p.RuntimeStartLockDir); got != Defaults.RuntimeStartLockDirName {
+		t.Fatalf("RuntimeStartLockDir filename = %q, want %q", got, Defaults.RuntimeStartLockDirName)
+	}
+	if got, want := filepath.Dir(p.RuntimeDB), p.RuntimeDir; got != want {
+		t.Fatalf("RuntimeDB dir = %q, want %q", got, want)
+	}
+	if got, want := filepath.Dir(p.RuntimePID), p.RuntimeDir; got != want {
+		t.Fatalf("RuntimePID dir = %q, want %q", got, want)
+	}
+	if got, want := filepath.Dir(p.RuntimeLog), p.RuntimeDir; got != want {
+		t.Fatalf("RuntimeLog dir = %q, want %q", got, want)
+	}
+	if got, want := filepath.Dir(p.RuntimeState), p.RuntimeDir; got != want {
+		t.Fatalf("RuntimeState dir = %q, want %q", got, want)
+	}
+	if got, want := filepath.Dir(p.RuntimeStartLockDir), p.RuntimeDir; got != want {
+		t.Fatalf("RuntimeStartLockDir dir = %q, want %q", got, want)
+	}
+	if got := filepath.Base(p.RuntimeDir); got != Defaults.RuntimeDirName {
+		t.Fatalf("RuntimeDir basename = %q, want %q", got, Defaults.RuntimeDirName)
+	}
+}
+
+func TestNewPaths_RuntimePathsSharedAcrossProjects(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	a := NewPaths("project-a")
+	b := NewPaths("project-b")
+
+	if a.RuntimeDir != b.RuntimeDir {
+		t.Fatalf("RuntimeDir should be machine-local: %q vs %q", a.RuntimeDir, b.RuntimeDir)
+	}
+	if a.RuntimeDB != b.RuntimeDB {
+		t.Fatalf("RuntimeDB should be machine-local: %q vs %q", a.RuntimeDB, b.RuntimeDB)
+	}
+	if a.RuntimePID != b.RuntimePID {
+		t.Fatalf("RuntimePID should be machine-local: %q vs %q", a.RuntimePID, b.RuntimePID)
+	}
+}
+
+func TestResolveProjectID_UnchangedForRuntime(t *testing.T) {
+	t.Setenv("WAGGLE_PROJECT_ID", "")
+	t.Setenv("WAGGLE_ROOT", "")
+
+	repo := createGitRepo(t)
+	chdir(t, repo)
+
+	id, err := ResolveProjectID()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	p := NewPaths(id)
+	if p.ProjectID != id {
+		t.Fatalf("ProjectID = %q, want %q", p.ProjectID, id)
+	}
+
+	if p.RuntimeDir == "" || p.RuntimeDB == "" || p.RuntimePID == "" || p.RuntimeLog == "" || p.RuntimeState == "" || p.RuntimeStartLockDir == "" {
+		t.Fatalf("runtime paths should be populated for a resolved project: %#v", p)
+	}
+
+	id2, err := ResolveProjectID()
+	if err != nil {
+		t.Fatalf("unexpected error on second call: %v", err)
+	}
+	if id2 != id {
+		t.Fatalf("ResolveProjectID changed after NewPaths: got %q, want %q", id2, id)
+	}
+}
+
 // LeaseDuration is set to 5 minutes for task claims
 func TestDefaults_LeaseDuration(t *testing.T) {
 	if Defaults.LeaseDuration != 5*time.Minute {
@@ -318,6 +420,12 @@ func TestDefaults_StartupPollInterval(t *testing.T) {
 func TestDefaults_StartupTimeout(t *testing.T) {
 	if Defaults.StartupTimeout != 2*time.Second {
 		t.Fatalf("StartupTimeout = %v, want 2s", Defaults.StartupTimeout)
+	}
+}
+
+func TestDefaults_RuntimeStartLockStaleThreshold(t *testing.T) {
+	if Defaults.RuntimeStartLockStaleThreshold != 10*time.Second {
+		t.Fatalf("RuntimeStartLockStaleThreshold = %v, want 10s", Defaults.RuntimeStartLockStaleThreshold)
 	}
 }
 
@@ -387,7 +495,6 @@ func TestValidateDefaults_DeterministicErrorOrder(t *testing.T) {
 		}
 	}
 }
-
 
 func TestResolveProjectID_EnvOverride(t *testing.T) {
 	t.Setenv("WAGGLE_PROJECT_ID", "custom-id-123")
@@ -564,8 +671,10 @@ func TestNewPaths_AllEmptyWithoutHome(t *testing.T) {
 	t.Setenv("HOME", "")
 	p := NewPaths("test-id")
 	for name, val := range map[string]string{
-		"DataDir": p.DataDir, "DB": p.DB, "PID": p.PID,
-		"Lock": p.Lock, "Log": p.Log, "Socket": p.Socket,
+		"DataDir": p.DataDir, "RuntimeDir": p.RuntimeDir,
+		"RuntimeDB": p.RuntimeDB, "RuntimePID": p.RuntimePID, "RuntimeLog": p.RuntimeLog,
+		"RuntimeState": p.RuntimeState, "RuntimeStartLockDir": p.RuntimeStartLockDir,
+		"DB": p.DB, "PID": p.PID, "Lock": p.Lock, "Log": p.Log, "Socket": p.Socket,
 	} {
 		if val != "" {
 			t.Errorf("expected empty %s without HOME, got %q", name, val)
