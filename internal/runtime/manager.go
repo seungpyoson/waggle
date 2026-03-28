@@ -239,6 +239,7 @@ func (m *Manager) stopWatch(key watchKey) {
 	}
 	worker.cancel()
 	<-worker.stopped
+	m.clearDeliveryStateForWatch(key)
 }
 
 func (m *Manager) stopAllWorkers() {
@@ -254,6 +255,11 @@ func (m *Manager) stopAllWorkers() {
 		worker.cancel()
 		<-worker.stopped
 	}
+
+	m.mu.Lock()
+	m.inflight = make(map[deliveryKey]struct{})
+	m.retries = make(map[deliveryKey]notificationRetry)
+	m.mu.Unlock()
 }
 
 func (m *Manager) runWatch(ctx context.Context, w Watch) {
@@ -338,7 +344,7 @@ func (m *Manager) handleDelivery(w Watch, d Delivery) error {
 }
 
 func (m *Manager) retryPendingNotifications() error {
-	records, err := m.store.PendingNotificationsAll()
+	records, err := m.store.PendingNotificationsBatch(config.Defaults.RuntimeNotificationRetryBatchSize)
 	if err != nil {
 		return err
 	}
@@ -477,6 +483,22 @@ func (m *Manager) clearRetry(key deliveryKey) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.retries, key)
+}
+
+func (m *Manager) clearDeliveryStateForWatch(key watchKey) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for deliveryKey := range m.inflight {
+		if deliveryKey.projectID == key.projectID && deliveryKey.agentName == key.agentName {
+			delete(m.inflight, deliveryKey)
+		}
+	}
+	for deliveryKey := range m.retries {
+		if deliveryKey.projectID == key.projectID && deliveryKey.agentName == key.agentName {
+			delete(m.retries, deliveryKey)
+		}
+	}
 }
 
 func retryDelayForAttempt(attempt int) time.Duration {

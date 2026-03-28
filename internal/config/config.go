@@ -75,7 +75,9 @@ var Defaults = struct {
 	RuntimeStartLockStaleThreshold        time.Duration
 	RuntimeReconcileInterval              time.Duration
 	RuntimeNotificationRetrySweepInterval time.Duration
+	RuntimeStateRefreshInterval           time.Duration
 	PollInterval                          time.Duration
+	RuntimeNotificationRetryBatchSize     int
 	MaxLogSize                            int64
 	MaxMessageSize                        int64
 	LeaseDuration                         time.Duration
@@ -134,7 +136,9 @@ var Defaults = struct {
 	RuntimeStartLockStaleThreshold:        10 * time.Second,
 	RuntimeReconcileInterval:              2 * time.Second,
 	RuntimeNotificationRetrySweepInterval: 1 * time.Second,
+	RuntimeStateRefreshInterval:           2 * time.Second,
 	PollInterval:                          500 * time.Millisecond,
+	RuntimeNotificationRetryBatchSize:     128,
 	MaxLogSize:                            10 * 1024 * 1024,
 	MaxMessageSize:                        1024 * 1024, // 1MB buffer for large AI agent payloads
 	LeaseDuration:                         5 * time.Minute,

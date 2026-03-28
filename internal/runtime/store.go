@@ -357,13 +357,29 @@ func (s *Store) PendingNotifications(projectID, agentName string) ([]DeliveryRec
 
 // PendingNotificationsAll returns pending notification records across all watches in stable order.
 func (s *Store) PendingNotificationsAll() ([]DeliveryRecord, error) {
-	rows, err := s.db.Query(`
+	return s.PendingNotificationsBatch(0)
+}
+
+// PendingNotificationsBatch returns up to limit pending notification records across all watches in stable order.
+// A non-positive limit means no explicit limit.
+func (s *Store) PendingNotificationsBatch(limit int) ([]DeliveryRecord, error) {
+	query := `
 		SELECT project_id, agent_name, message_id, from_name, body,
 		       sent_at, received_at, notified_at, surfaced_at, dismissed_at
 		FROM delivery_records
 		WHERE notified_at = '' AND dismissed_at IS NULL
 		ORDER BY project_id ASC, agent_name ASC, message_id ASC
-	`)
+	`
+
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if limit > 0 {
+		rows, err = s.db.Query(query+` LIMIT ?`, limit)
+	} else {
+		rows, err = s.db.Query(query)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("query pending notifications: %w", err)
 	}

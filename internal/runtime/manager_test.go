@@ -335,6 +335,43 @@ func TestManager_StartReconcilesWatchesRemovedAfterStartup(t *testing.T) {
 	})
 }
 
+func TestManager_StopWatchClearsRetryAndInflightState(t *testing.T) {
+	store := newTestStore(t)
+	watch := Watch{ProjectID: "proj-a", AgentName: "agent-1", Source: "hook"}
+	if err := store.UpsertWatch(watch); err != nil {
+		t.Fatal(err)
+	}
+
+	factory := newFakeListenerFactory()
+	manager := NewManager(store, factory, &fakeNotifier{})
+	setRuntimeReconcileIntervalForTest(t, 10*time.Millisecond)
+
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Stop()
+
+	_ = factory.waitForListener(t, watch)
+
+	key := deliveryKey{projectID: "proj-a", agentName: "agent-1", messageID: 99}
+	manager.mu.Lock()
+	manager.inflight[key] = struct{}{}
+	manager.retries[key] = notificationRetry{attempts: 1, nextTry: time.Now().UTC()}
+	manager.mu.Unlock()
+
+	if err := store.RemoveWatch(watch.ProjectID, watch.AgentName); err != nil {
+		t.Fatal(err)
+	}
+
+	waitFor(t, "watch removal cleanup", func() bool {
+		manager.mu.Lock()
+		defer manager.mu.Unlock()
+		_, inflightExists := manager.inflight[key]
+		_, retryExists := manager.retries[key]
+		return len(manager.workers) == 0 && !inflightExists && !retryExists
+	})
+}
+
 func TestManager_RestartsWatchAfterListenerError(t *testing.T) {
 	store := newTestStore(t)
 	if err := store.UpsertWatch(Watch{ProjectID: "proj-a", AgentName: "agent-1", Source: "hook"}); err != nil {
@@ -405,6 +442,46 @@ func TestManager_RetriesPendingNotificationAfterRestart(t *testing.T) {
 
 	waitFor(t, "pending notification retry", func() bool {
 		rec, err := store.GetRecord("proj-a", "agent-1", 123)
+		return err == nil && !rec.NotifiedAt.IsZero() && notifier.callCount() >= 2
+	})
+}
+
+func TestManager_UsesRuntimeRetrySweepInterval(t *testing.T) {
+	store := newTestStore(t)
+	notifier := &fakeNotifier{errs: []error{errors.New("notify failed"), nil}}
+	manager := NewManager(store, newFakeListenerFactory(), notifier)
+
+	origPoll := config.Defaults.PollInterval
+	config.Defaults.PollInterval = 5 * time.Second
+	setRuntimeRetrySweepIntervalForTest(t, 10*time.Millisecond)
+	defer func() {
+		config.Defaults.PollInterval = origPoll
+	}()
+
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Stop()
+
+	if err := manager.handleDelivery(Watch{ProjectID: "proj-a", AgentName: "agent-1", Source: "hook"}, Delivery{
+		MessageID:  222,
+		FromName:   "planner",
+		Body:       "retry on timer",
+		SentAt:     time.Unix(90, 0).UTC(),
+		ReceivedAt: time.Unix(91, 0).UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	manager.mu.Lock()
+	key := deliveryKey{projectID: "proj-a", agentName: "agent-1", messageID: 222}
+	state := manager.retries[key]
+	state.nextTry = time.Now().UTC().Add(-time.Millisecond)
+	manager.retries[key] = state
+	manager.mu.Unlock()
+
+	waitFor(t, "retry sweep interval", func() bool {
+		rec, err := store.GetRecord("proj-a", "agent-1", 222)
 		return err == nil && !rec.NotifiedAt.IsZero() && notifier.callCount() >= 2
 	})
 }
@@ -1011,5 +1088,15 @@ func setRuntimeReconcileIntervalForTest(t *testing.T, d time.Duration) {
 	config.Defaults.RuntimeReconcileInterval = d
 	t.Cleanup(func() {
 		config.Defaults.RuntimeReconcileInterval = orig
+	})
+}
+
+func setRuntimeRetrySweepIntervalForTest(t *testing.T, d time.Duration) {
+	t.Helper()
+
+	orig := config.Defaults.RuntimeNotificationRetrySweepInterval
+	config.Defaults.RuntimeNotificationRetrySweepInterval = d
+	t.Cleanup(func() {
+		config.Defaults.RuntimeNotificationRetrySweepInterval = orig
 	})
 }

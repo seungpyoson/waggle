@@ -441,6 +441,18 @@ func TestDefaults_RuntimeNotificationRetrySweepInterval(t *testing.T) {
 	}
 }
 
+func TestDefaults_RuntimeStateRefreshInterval(t *testing.T) {
+	if Defaults.RuntimeStateRefreshInterval != 2*time.Second {
+		t.Fatalf("RuntimeStateRefreshInterval = %v, want 2s", Defaults.RuntimeStateRefreshInterval)
+	}
+}
+
+func TestDefaults_RuntimeNotificationRetryBatchSize(t *testing.T) {
+	if Defaults.RuntimeNotificationRetryBatchSize != 128 {
+		t.Fatalf("RuntimeNotificationRetryBatchSize = %d, want 128", Defaults.RuntimeNotificationRetryBatchSize)
+	}
+}
+
 func TestValidateDefaults_PassesWithDefaults(t *testing.T) {
 	if err := ValidateDefaults(); err != nil {
 		t.Fatalf("ValidateDefaults() failed on stock defaults: %v", err)

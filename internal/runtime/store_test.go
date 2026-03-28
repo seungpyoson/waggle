@@ -390,6 +390,59 @@ func TestStore_PendingNotificationsAllReturnsStableOrderAcrossWatches(t *testing
 	}
 }
 
+func TestStore_PendingNotificationsBatchHonorsLimitAndStableOrder(t *testing.T) {
+	store := newTestStore(t)
+
+	records := []DeliveryRecord{
+		{
+			ProjectID:  "proj-c",
+			AgentName:  "agent-3",
+			MessageID:  3,
+			FromName:   "planner",
+			Body:       "third",
+			SentAt:     time.Unix(5, 0).UTC(),
+			ReceivedAt: time.Unix(6, 0).UTC(),
+		},
+		{
+			ProjectID:  "proj-a",
+			AgentName:  "agent-1",
+			MessageID:  1,
+			FromName:   "planner",
+			Body:       "first",
+			SentAt:     time.Unix(1, 0).UTC(),
+			ReceivedAt: time.Unix(2, 0).UTC(),
+		},
+		{
+			ProjectID:  "proj-b",
+			AgentName:  "agent-2",
+			MessageID:  2,
+			FromName:   "planner",
+			Body:       "second",
+			SentAt:     time.Unix(3, 0).UTC(),
+			ReceivedAt: time.Unix(4, 0).UTC(),
+		},
+	}
+	for _, rec := range records {
+		if err := store.AddRecord(rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	pending, err := store.PendingNotificationsBatch(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 2 {
+		t.Fatalf("pending count = %d, want 2", len(pending))
+	}
+	if pending[0].ProjectID != "proj-a" || pending[0].AgentName != "agent-1" || pending[0].MessageID != 1 {
+		t.Fatalf("first pending = %+v, want proj-a/agent-1/1", pending[0])
+	}
+	if pending[1].ProjectID != "proj-b" || pending[1].AgentName != "agent-2" || pending[1].MessageID != 2 {
+		t.Fatalf("second pending = %+v, want proj-b/agent-2/2", pending[1])
+	}
+}
+
 func TestStore_AddRecordUpsertPreservesLifecycleTimestamps(t *testing.T) {
 	store := newTestStore(t)
 
