@@ -64,6 +64,7 @@ type Manager struct {
 	deliveryCauses  map[watchKey]error
 	lastDeliveryErr map[string]error
 	workers         map[watchKey]*watchWorker
+	recentErrors    []ErrorEntry // ring buffer, capped at config.Defaults.RuntimeRecentErrorCap
 }
 
 func NewManager(store *Store, factory ListenerFactory, notifier Notifier) *Manager {
@@ -158,6 +159,15 @@ func (m *Manager) LastDeliveryError() error {
 		parts = append(parts, fmt.Sprintf("%s: %v", key, m.lastDeliveryErr[key]))
 	}
 	return fmt.Errorf("%s", strings.Join(parts, "; "))
+}
+
+// RecentErrors returns a snapshot copy of the error ring buffer (thread-safe).
+func (m *Manager) RecentErrors() []ErrorEntry {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	result := make([]ErrorEntry, len(m.recentErrors))
+	copy(result, m.recentErrors)
+	return result
 }
 
 func (m *Manager) runReconcileLoop(ctx context.Context) {
@@ -465,6 +475,17 @@ func (m *Manager) captureDeliveryError(key string, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.lastDeliveryErr[key] = err
+
+	// Add to ring buffer, evicting oldest if at capacity
+	entry := ErrorEntry{
+		Timestamp: time.Now().UTC(),
+		WatchKey:  key,
+		Error:     err.Error(),
+	}
+	if len(m.recentErrors) >= config.Defaults.RuntimeRecentErrorCap {
+		m.recentErrors = m.recentErrors[1:]
+	}
+	m.recentErrors = append(m.recentErrors, entry)
 }
 
 func (m *Manager) clearDeliveryError(key string) {

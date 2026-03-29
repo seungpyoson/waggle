@@ -15,12 +15,13 @@ import (
 )
 
 type State struct {
-	PID        int       `json:"pid,omitempty"`
-	Running    bool      `json:"running"`
-	StartedAt  time.Time `json:"started_at,omitempty"`
-	StoppedAt  time.Time `json:"stopped_at,omitempty"`
-	WatchCount int       `json:"watch_count,omitempty"`
-	LastError  string    `json:"last_error,omitempty"`
+	PID          int             `json:"pid,omitempty"`
+	Running      bool            `json:"running"`
+	StartedAt    time.Time       `json:"started_at,omitempty"`
+	StoppedAt    time.Time       `json:"stopped_at,omitempty"`
+	WatchCount   int             `json:"watch_count,omitempty"`
+	LastError    string          `json:"last_error,omitempty"`
+	RecentErrors []ErrorEntry    `json:"recent_errors,omitempty"`
 }
 
 func LoadState(paths config.Paths) (State, error) {
@@ -260,11 +261,12 @@ func RunDaemon(ctx context.Context, paths config.Paths, manager *Manager) error 
 			lastErr = err.Error()
 		}
 		current = State{
-			PID:        os.Getpid(),
-			Running:    true,
-			StartedAt:  startedAt,
-			WatchCount: manager.WatchCount(),
-			LastError:  lastErr,
+			PID:          os.Getpid(),
+			Running:      true,
+			StartedAt:    startedAt,
+			WatchCount:   manager.WatchCount(),
+			LastError:    lastErr,
+			RecentErrors: manager.RecentErrors(),
 		}
 		if !sameState(lastSaved, current) {
 			if err := SaveState(paths, current); err != nil {
@@ -303,6 +305,8 @@ func currentState(paths config.Paths) (State, error) {
 }
 
 func sameState(a, b State) bool {
+	// Note: RecentErrors is intentionally excluded from comparison.
+	// Allow up-to-2s propagation latency for error ring buffer updates.
 	return a.PID == b.PID &&
 		a.Running == b.Running &&
 		a.StartedAt.Equal(b.StartedAt) &&

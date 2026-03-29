@@ -89,6 +89,9 @@ func Bootstrap(input BootstrapInput) (BootstrapResult, error) {
 	if err := store.MarkSurfacedBatch(projectID, agentName, messageIDs); err != nil {
 		return BootstrapResult{}, err
 	}
+	if err := store.MarkDismissedBatch(projectID, agentName, messageIDs); err != nil {
+		return BootstrapResult{}, fmt.Errorf("mark dismissed: %w", err)
+	}
 
 	return BootstrapResult{
 		Tool:           tool,

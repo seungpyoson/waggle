@@ -114,6 +114,9 @@ var Defaults = struct {
 	TaskTTLCheckPeriod time.Duration
 	TaskStaleThreshold time.Duration
 	MaxTaskTTL         int
+
+	// Runtime observability
+	RuntimeRecentErrorCap int
 }{
 	DirName:                 ".waggle",
 	DBFile:                  "state.db",
@@ -172,6 +175,8 @@ var Defaults = struct {
 	TaskTTLCheckPeriod: 30 * time.Second,
 	TaskStaleThreshold: 5 * time.Minute,
 	MaxTaskTTL:         86400, // 24 hours
+
+	RuntimeRecentErrorCap: 20,
 }
 
 type Paths struct {

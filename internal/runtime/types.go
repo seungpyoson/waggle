@@ -26,3 +26,10 @@ type DeliveryRecord struct {
 	RetryNextAt      time.Time `json:"-"`
 	RetryExhaustedAt time.Time `json:"-"`
 }
+
+// ErrorEntry captures a point-in-time runtime error for observability.
+type ErrorEntry struct {
+	Timestamp time.Time `json:"timestamp"`
+	WatchKey  string    `json:"watch_key"`
+	Error     string    `json:"error"`
+}
