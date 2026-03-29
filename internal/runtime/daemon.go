@@ -251,7 +251,7 @@ func RunDaemon(ctx context.Context, paths config.Paths, manager *Manager) error 
 	}
 	lastSaved := current
 
-	ticker := time.NewTicker(config.Defaults.PollInterval)
+	ticker := time.NewTicker(config.Defaults.RuntimeStateRefreshInterval)
 	defer ticker.Stop()
 
 	for {

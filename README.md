@@ -127,6 +127,8 @@ Think of it like HTTP for the web, but for AI agents working on code. The protoc
 
 **Hooks stay thin.** The shipped Claude Code and Codex adapters do not launch persistent listeners themselves. They register watch intent with `waggle runtime watch`, then read unread local records with `waggle runtime pull` at safe interaction boundaries. Gemini CLI and Augment Code are not part of this branch yet.
 
+**Cheapness is a product bar.** Waggle must stay boringly cheap under load: one machine-local runtime process max, thin bounded hooks, no per-watch retry polling, no adapter-side process fanout, and safe collapse under failure.
+
 **Four communication primitives:**
 
 | Primitive | What it does | Example |

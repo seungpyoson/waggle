@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/seungpyoson/waggle/internal/config"
 	_ "modernc.org/sqlite"
 )
 
@@ -448,6 +449,159 @@ func TestStore_AddRecordAllowsPendingNotifications(t *testing.T) {
 	}
 }
 
+func TestStore_PendingNotificationsAllReturnsStableOrderAcrossWatches(t *testing.T) {
+	store := newTestStore(t)
+
+	records := []DeliveryRecord{
+		{
+			ProjectID:  "proj-b",
+			AgentName:  "agent-2",
+			MessageID:  2,
+			FromName:   "planner",
+			Body:       "second",
+			SentAt:     time.Unix(3, 0).UTC(),
+			ReceivedAt: time.Unix(4, 0).UTC(),
+		},
+		{
+			ProjectID:  "proj-a",
+			AgentName:  "agent-1",
+			MessageID:  1,
+			FromName:   "planner",
+			Body:       "first",
+			SentAt:     time.Unix(1, 0).UTC(),
+			ReceivedAt: time.Unix(2, 0).UTC(),
+		},
+	}
+	for _, rec := range records {
+		if err := store.AddRecord(rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	pending, err := store.PendingNotificationsAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 2 {
+		t.Fatalf("pending count = %d, want 2", len(pending))
+	}
+	if pending[0].ProjectID != "proj-a" || pending[0].AgentName != "agent-1" || pending[0].MessageID != 1 {
+		t.Fatalf("first pending = %+v, want proj-a/agent-1/1", pending[0])
+	}
+	if pending[1].ProjectID != "proj-b" || pending[1].AgentName != "agent-2" || pending[1].MessageID != 2 {
+		t.Fatalf("second pending = %+v, want proj-b/agent-2/2", pending[1])
+	}
+}
+
+func TestStore_PendingNotificationsBatchHonorsLimitAndStableOrder(t *testing.T) {
+	store := newTestStore(t)
+
+	records := []DeliveryRecord{
+		{
+			ProjectID:  "proj-c",
+			AgentName:  "agent-3",
+			MessageID:  3,
+			FromName:   "planner",
+			Body:       "third",
+			SentAt:     time.Unix(5, 0).UTC(),
+			ReceivedAt: time.Unix(6, 0).UTC(),
+		},
+		{
+			ProjectID:  "proj-a",
+			AgentName:  "agent-1",
+			MessageID:  1,
+			FromName:   "planner",
+			Body:       "first",
+			SentAt:     time.Unix(1, 0).UTC(),
+			ReceivedAt: time.Unix(2, 0).UTC(),
+		},
+		{
+			ProjectID:  "proj-b",
+			AgentName:  "agent-2",
+			MessageID:  2,
+			FromName:   "planner",
+			Body:       "second",
+			SentAt:     time.Unix(3, 0).UTC(),
+			ReceivedAt: time.Unix(4, 0).UTC(),
+		},
+	}
+	for _, rec := range records {
+		if err := store.AddRecord(rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	pending, err := store.PendingNotificationsBatch(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 2 {
+		t.Fatalf("pending count = %d, want 2", len(pending))
+	}
+	if pending[0].ProjectID != "proj-a" || pending[0].AgentName != "agent-1" || pending[0].MessageID != 1 {
+		t.Fatalf("first pending = %+v, want proj-a/agent-1/1", pending[0])
+	}
+	if pending[1].ProjectID != "proj-b" || pending[1].AgentName != "agent-2" || pending[1].MessageID != 2 {
+		t.Fatalf("second pending = %+v, want proj-b/agent-2/2", pending[1])
+	}
+}
+
+func TestStore_PendingNotificationsBatchSkipsDeferredAndExhaustedRecords(t *testing.T) {
+	store := newTestStore(t)
+
+	for _, rec := range []DeliveryRecord{
+		{
+			ProjectID:  "proj-a",
+			AgentName:  "agent-1",
+			MessageID:  1,
+			FromName:   "planner",
+			Body:       "deferred",
+			SentAt:     time.Unix(1, 0).UTC(),
+			ReceivedAt: time.Unix(2, 0).UTC(),
+		},
+		{
+			ProjectID:  "proj-a",
+			AgentName:  "agent-1",
+			MessageID:  2,
+			FromName:   "planner",
+			Body:       "exhausted",
+			SentAt:     time.Unix(3, 0).UTC(),
+			ReceivedAt: time.Unix(4, 0).UTC(),
+		},
+		{
+			ProjectID:  "proj-b",
+			AgentName:  "agent-2",
+			MessageID:  3,
+			FromName:   "planner",
+			Body:       "eligible",
+			SentAt:     time.Unix(5, 0).UTC(),
+			ReceivedAt: time.Unix(6, 0).UTC(),
+		},
+	} {
+		if err := store.AddRecord(rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := store.RecordNotificationFailure("proj-a", "agent-1", 1, 1, time.Now().UTC().Add(time.Hour), time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordNotificationFailure("proj-a", "agent-1", 2, config.Defaults.RuntimeNotificationRetryLimit, time.Time{}, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+
+	pending, err := store.PendingNotificationsBatch(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("pending count = %d, want 1", len(pending))
+	}
+	if pending[0].ProjectID != "proj-b" || pending[0].AgentName != "agent-2" || pending[0].MessageID != 3 {
+		t.Fatalf("pending = %+v, want only eligible later record", pending)
+	}
+}
+
 func TestStore_AddRecordUpsertPreservesLifecycleTimestamps(t *testing.T) {
 	store := newTestStore(t)
 
@@ -491,6 +645,37 @@ func TestStore_AddRecordUpsertPreservesLifecycleTimestamps(t *testing.T) {
 	}
 	if rec.DismissedAt.IsZero() {
 		t.Fatal("dismissed_at was cleared by duplicate upsert")
+	}
+}
+
+func TestStore_MarkNotifiedClearsRetryState(t *testing.T) {
+	store := newTestStore(t)
+
+	rec := DeliveryRecord{
+		ProjectID:  "proj-a",
+		AgentName:  "agent-1",
+		MessageID:  88,
+		FromName:   "planner",
+		Body:       "pending",
+		SentAt:     time.Unix(1, 0).UTC(),
+		ReceivedAt: time.Unix(2, 0).UTC(),
+	}
+	if err := store.AddRecord(rec); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordNotificationFailure("proj-a", "agent-1", 88, 2, time.Now().UTC().Add(time.Minute), time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkNotified("proj-a", "agent-1", 88, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := store.GetRecord("proj-a", "agent-1", 88)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RetryAttempts != 0 || !got.RetryNextAt.IsZero() || !got.RetryExhaustedAt.IsZero() {
+		t.Fatalf("retry state after mark notified = %+v, want cleared retry state", got)
 	}
 }
 

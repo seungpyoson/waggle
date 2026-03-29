@@ -58,14 +58,8 @@ type Manager struct {
 	wg              sync.WaitGroup
 	started         bool
 	inflight        map[deliveryKey]struct{}
-	retries         map[deliveryKey]notificationRetry
 	lastDeliveryErr error
 	workers         map[watchKey]*watchWorker
-}
-
-type notificationRetry struct {
-	attempts int
-	nextTry  time.Time
 }
 
 func NewManager(store *Store, factory ListenerFactory, notifier Notifier) *Manager {
@@ -75,7 +69,6 @@ func NewManager(store *Store, factory ListenerFactory, notifier Notifier) *Manag
 		notifier: notifier,
 		ctx:      context.Background(),
 		inflight: make(map[deliveryKey]struct{}),
-		retries:  make(map[deliveryKey]notificationRetry),
 		workers:  make(map[watchKey]*watchWorker),
 	}
 }
@@ -108,6 +101,12 @@ func (m *Manager) Start(ctx context.Context) error {
 	go func() {
 		defer m.wg.Done()
 		m.runMaintenanceLoop(runCtx)
+	}()
+
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		m.runRetrySweepLoop(runCtx)
 	}()
 
 	return nil
@@ -143,7 +142,7 @@ func (m *Manager) LastDeliveryError() error {
 }
 
 func (m *Manager) runReconcileLoop(ctx context.Context) {
-	ticker := time.NewTicker(config.Defaults.PollInterval)
+	ticker := time.NewTicker(config.Defaults.RuntimeReconcileInterval)
 	defer ticker.Stop()
 
 	for {
@@ -233,6 +232,7 @@ func (m *Manager) stopWatch(key watchKey) {
 	}
 	worker.cancel()
 	<-worker.stopped
+	m.clearDeliveryStateForWatch(key)
 }
 
 func (m *Manager) stopAllWorkers() {
@@ -248,57 +248,47 @@ func (m *Manager) stopAllWorkers() {
 		worker.cancel()
 		<-worker.stopped
 	}
+
+	m.mu.Lock()
+	m.inflight = make(map[deliveryKey]struct{})
+	m.mu.Unlock()
 }
 
 func (m *Manager) runWatch(ctx context.Context, w Watch) {
-	var watchWG sync.WaitGroup
-
-	watchWG.Add(1)
-	go func() {
-		defer watchWG.Done()
-		m.runPendingRetryLoop(ctx, w)
-	}()
-
-	watchWG.Add(1)
-	go func() {
-		defer watchWG.Done()
-		backoff := config.Defaults.PollInterval
-		for {
-			if err := ctx.Err(); err != nil {
-				return
-			}
-			listener, err := m.factory.NewListener(w)
-			if err != nil {
-				m.captureDeliveryError(fmt.Errorf("create listener for %s/%s: %w", w.ProjectID, w.AgentName, err))
-				if !sleepWithContext(ctx, backoff) {
-					return
-				}
-				backoff = nextReconnectBackoff(backoff)
-				continue
-			}
-
-			err = listener.Listen(ctx, func(d Delivery) error {
-				return m.handleDelivery(w, d)
-			})
-			if ctx.Err() != nil {
-				return
-			}
-			if err != nil {
-				m.captureDeliveryError(fmt.Errorf("listen for %s/%s: %w", w.ProjectID, w.AgentName, err))
-				if !sleepWithContext(ctx, backoff) {
-					return
-				}
-				backoff = nextReconnectBackoff(backoff)
-				continue
-			}
-			backoff = config.Defaults.PollInterval
-			if !sleepWithContext(ctx, config.Defaults.PollInterval) {
-				return
-			}
+	backoff := config.Defaults.PollInterval
+	for {
+		if err := ctx.Err(); err != nil {
+			return
 		}
-	}()
+		listener, err := m.factory.NewListener(w)
+		if err != nil {
+			m.captureDeliveryError(fmt.Errorf("create listener for %s/%s: %w", w.ProjectID, w.AgentName, err))
+			if !sleepWithContext(ctx, backoff) {
+				return
+			}
+			backoff = nextReconnectBackoff(backoff)
+			continue
+		}
 
-	watchWG.Wait()
+		err = listener.Listen(ctx, func(d Delivery) error {
+			return m.handleDelivery(w, d)
+		})
+		if ctx.Err() != nil {
+			return
+		}
+		if err != nil {
+			m.captureDeliveryError(fmt.Errorf("listen for %s/%s: %w", w.ProjectID, w.AgentName, err))
+			if !sleepWithContext(ctx, backoff) {
+				return
+			}
+			backoff = nextReconnectBackoff(backoff)
+			continue
+		}
+		backoff = config.Defaults.PollInterval
+		if !sleepWithContext(ctx, config.Defaults.PollInterval) {
+			return
+		}
+	}
 }
 
 func (m *Manager) handleDelivery(w Watch, d Delivery) error {
@@ -326,27 +316,35 @@ func (m *Manager) handleDelivery(w Watch, d Delivery) error {
 	if err != nil {
 		return err
 	}
+	currentRecord := record
 	if !inserted {
 		existing, err := m.store.GetRecord(w.ProjectID, w.AgentName, d.MessageID)
 		if err != nil {
 			return err
 		}
+		currentRecord = existing
 		if !existing.NotifiedAt.IsZero() {
-			m.clearRetry(key)
+			return nil
+		}
+		if !existing.RetryExhaustedAt.IsZero() {
+			return nil
+		}
+		if !existing.RetryNextAt.IsZero() && existing.RetryNextAt.After(time.Now().UTC()) {
 			return nil
 		}
 	}
 	if err := m.notifyRecord(w.ProjectID, w.AgentName, d.MessageID, notificationTitle(d), d.Body); err != nil {
-		m.recordRetry(key)
+		if err := m.recordNotificationFailure(currentRecord); err != nil {
+			return err
+		}
 		m.captureDeliveryError(fmt.Errorf("notify %s/%s/%d: %w", w.ProjectID, w.AgentName, d.MessageID, err))
 		return nil
 	}
-	m.clearRetry(key)
 	return nil
 }
 
-func (m *Manager) retryPendingNotifications(w Watch) error {
-	records, err := m.store.PendingNotifications(w.ProjectID, w.AgentName)
+func (m *Manager) retryPendingNotifications() error {
+	records, err := m.store.PendingNotificationsBatch(config.Defaults.RuntimeNotificationRetryBatchSize)
 	if err != nil {
 		return err
 	}
@@ -361,30 +359,31 @@ func (m *Manager) retryPendingNotifications(w Watch) error {
 		if !ok {
 			continue
 		}
-		if !m.shouldRetry(key) {
-			release()
-			continue
-		}
 		if err := m.notifyRecord(rec.ProjectID, rec.AgentName, rec.MessageID, notificationTitle(Delivery{FromName: rec.FromName}), rec.Body); err != nil {
-			m.recordRetry(key)
+			if recordErr := m.recordNotificationFailure(rec); recordErr != nil && firstErr == nil {
+				firstErr = recordErr
+			}
 			if firstErr == nil {
 				firstErr = err
 			}
-		} else {
-			m.clearRetry(key)
 		}
 		release()
 	}
 	return firstErr
 }
 
-func (m *Manager) runPendingRetryLoop(ctx context.Context, w Watch) {
+func (m *Manager) runRetrySweepLoop(ctx context.Context) {
+	ticker := time.NewTicker(config.Defaults.RuntimeNotificationRetrySweepInterval)
+	defer ticker.Stop()
+
 	for {
-		if err := m.retryPendingNotifications(w); err != nil {
-			m.captureDeliveryError(fmt.Errorf("retry pending for %s/%s: %w", w.ProjectID, w.AgentName, err))
-		}
-		if !sleepWithContext(ctx, config.Defaults.PollInterval) {
+		select {
+		case <-ctx.Done():
 			return
+		case <-ticker.C:
+			if err := m.retryPendingNotifications(); err != nil {
+				m.captureDeliveryError(fmt.Errorf("retry pending notifications: %w", err))
+			}
 		}
 	}
 }
@@ -410,7 +409,6 @@ func (m *Manager) reset() {
 	m.ctx = context.Background()
 	m.started = false
 	m.inflight = make(map[deliveryKey]struct{})
-	m.retries = make(map[deliveryKey]notificationRetry)
 	m.workers = make(map[watchKey]*watchWorker)
 }
 
@@ -452,34 +450,24 @@ func (m *Manager) beginInflight(key deliveryKey) (func(), bool) {
 	}, true
 }
 
-func (m *Manager) shouldRetry(key deliveryKey) bool {
+func (m *Manager) clearDeliveryStateForWatch(key watchKey) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	state, ok := m.retries[key]
-	if !ok {
-		return true
+	for deliveryKey := range m.inflight {
+		if deliveryKey.projectID == key.projectID && deliveryKey.agentName == key.agentName {
+			delete(m.inflight, deliveryKey)
+		}
 	}
-	if state.attempts >= config.Defaults.RuntimeNotificationRetryLimit {
-		return false
-	}
-	return time.Now().UTC().After(state.nextTry) || time.Now().UTC().Equal(state.nextTry)
 }
 
-func (m *Manager) recordRetry(key deliveryKey) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	state := m.retries[key]
-	state.attempts++
-	state.nextTry = time.Now().UTC().Add(retryDelayForAttempt(state.attempts))
-	m.retries[key] = state
-}
-
-func (m *Manager) clearRetry(key deliveryKey) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	delete(m.retries, key)
+func (m *Manager) recordNotificationFailure(rec DeliveryRecord) error {
+	attempts := rec.RetryAttempts + 1
+	now := time.Now().UTC()
+	if attempts >= config.Defaults.RuntimeNotificationRetryLimit {
+		return m.store.RecordNotificationFailure(rec.ProjectID, rec.AgentName, rec.MessageID, attempts, time.Time{}, now)
+	}
+	return m.store.RecordNotificationFailure(rec.ProjectID, rec.AgentName, rec.MessageID, attempts, now.Add(retryDelayForAttempt(attempts)), time.Time{})
 }
 
 func retryDelayForAttempt(attempt int) time.Duration {
