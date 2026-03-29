@@ -186,6 +186,7 @@ func (m *Manager) reconcile(ctx context.Context) error {
 	for _, key := range stale {
 		m.stopWatch(key)
 	}
+	m.clearDeliveryError()
 	return nil
 }
 
@@ -369,6 +370,9 @@ func (m *Manager) retryPendingNotifications() error {
 		}
 		release()
 	}
+	if firstErr == nil {
+		m.clearDeliveryError()
+	}
 	return firstErr
 }
 
@@ -419,6 +423,12 @@ func (m *Manager) captureDeliveryError(err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.lastDeliveryErr = err
+}
+
+func (m *Manager) clearDeliveryError() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.lastDeliveryErr = nil
 }
 
 func notificationTitle(d Delivery) string {
@@ -512,11 +522,17 @@ func (m *Manager) runMaintenanceLoop(ctx context.Context) {
 			return
 		case <-ticker.C:
 			now := time.Now().UTC()
+			var hadErr bool
 			if _, err := m.store.PruneExpiredWatches(now); err != nil {
+				hadErr = true
 				m.captureDeliveryError(fmt.Errorf("prune expired watches: %w", err))
 			}
 			if _, err := m.store.PruneDeliveryRecords(now.Add(-config.Defaults.RuntimeDeliveryRetention)); err != nil {
+				hadErr = true
 				m.captureDeliveryError(fmt.Errorf("prune delivery records: %w", err))
+			}
+			if !hadErr {
+				m.clearDeliveryError()
 			}
 		}
 	}

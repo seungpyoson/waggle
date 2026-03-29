@@ -233,6 +233,19 @@ func TestManager_GlobalRetrySweepRetriesPendingNotificationsAcrossMultipleWatche
 	}
 }
 
+func TestManager_RetryPendingNotificationsClearsLastErrorOnSuccess(t *testing.T) {
+	store := newTestStore(t)
+	manager := NewManager(store, newFakeListenerFactory(), &fakeNotifier{})
+
+	manager.captureDeliveryError(errors.New("stale error"))
+	if err := manager.retryPendingNotifications(); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.LastDeliveryError(); err != nil {
+		t.Fatalf("LastDeliveryError() = %v, want nil after successful retry sweep", err)
+	}
+}
+
 func TestManager_StopCancelsListeners(t *testing.T) {
 	store := newTestStore(t)
 	if err := store.UpsertWatch(Watch{ProjectID: "proj-a", AgentName: "agent-1", Source: "hook"}); err != nil {
@@ -282,6 +295,19 @@ func TestManager_StartReconcilesWatchesAddedAfterStartup(t *testing.T) {
 	waitFor(t, "watch count after add", func() bool {
 		return manager.WatchCount() == 1
 	})
+}
+
+func TestManager_ReconcileClearsLastErrorOnSuccess(t *testing.T) {
+	store := newTestStore(t)
+	manager := NewManager(store, newFakeListenerFactory(), &fakeNotifier{})
+
+	manager.captureDeliveryError(errors.New("stale error"))
+	if err := manager.reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.LastDeliveryError(); err != nil {
+		t.Fatalf("LastDeliveryError() = %v, want nil after successful reconcile", err)
+	}
 }
 
 func TestManager_UsesRuntimeReconcileIntervalForWatchReconciliation(t *testing.T) {
