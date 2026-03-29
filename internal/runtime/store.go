@@ -93,6 +93,7 @@ func migrate(db *sql.DB) error {
 
 	CREATE INDEX IF NOT EXISTS idx_delivery_records_unread
 		ON delivery_records(project_id, agent_name, surfaced_at, message_id);
+
 	`
 	if _, err := db.Exec(schema); err != nil {
 		return fmt.Errorf("create runtime schema: %w", err)
@@ -117,6 +118,12 @@ func migrate(db *sql.DB) error {
 	}
 	if _, err := db.Exec(`UPDATE delivery_records SET retry_exhausted_at = '' WHERE retry_exhausted_at IS NULL`); err != nil {
 		return fmt.Errorf("normalize delivery_records.retry_exhausted_at: %w", err)
+	}
+	if _, err := db.Exec(`
+		CREATE INDEX IF NOT EXISTS idx_delivery_records_pending_notifications
+			ON delivery_records(notified_at, dismissed_at, retry_exhausted_at, retry_next_at, project_id, agent_name, message_id)
+	`); err != nil {
+		return fmt.Errorf("create pending notifications index: %w", err)
 	}
 	return nil
 }
@@ -358,7 +365,7 @@ func (s *Store) PendingNotifications(projectID, agentName string) ([]DeliveryRec
 		FROM delivery_records
 		WHERE project_id = ? AND agent_name = ? AND notified_at = '' AND dismissed_at IS NULL
 		  AND retry_exhausted_at = ''
-		  AND (retry_next_at = '' OR retry_next_at <= ?)
+		  AND (retry_next_at = '' OR julianday(retry_next_at) <= julianday(?))
 		ORDER BY received_at ASC, message_id ASC
 	`, projectID, agentName, time.Now().UTC().Format(time.RFC3339Nano))
 	if err != nil {
@@ -394,7 +401,7 @@ func (s *Store) PendingNotificationsBatch(limit int) ([]DeliveryRecord, error) {
 		FROM delivery_records
 		WHERE notified_at = '' AND dismissed_at IS NULL
 		  AND retry_exhausted_at = ''
-		  AND (retry_next_at = '' OR retry_next_at <= ?)
+		  AND (retry_next_at = '' OR julianday(retry_next_at) <= julianday(?))
 		ORDER BY project_id ASC, agent_name ASC, message_id ASC
 	`
 
@@ -542,7 +549,7 @@ func (s *Store) MarkSurfacedBatch(projectID, agentName string, messageIDs []int6
 
 	ids := uniquePositiveMessageIDs(messageIDs)
 	if len(ids) != len(messageIDs) {
-		return fmt.Errorf("message_id required")
+		return fmt.Errorf("message_ids must be unique and positive")
 	}
 
 	tx, err := s.db.Begin()
@@ -557,18 +564,6 @@ func (s *Store) MarkSurfacedBatch(projectID, agentName string, messageIDs []int6
 	args = append(args, projectID, agentName)
 	for _, id := range ids {
 		args = append(args, id)
-	}
-
-	var matched int
-	if err := tx.QueryRow(fmt.Sprintf(`
-		SELECT COUNT(*)
-		FROM delivery_records
-		WHERE project_id = ? AND agent_name = ? AND message_id IN (%s)
-	`, sqlPlaceholders(len(ids))), args...).Scan(&matched); err != nil {
-		return fmt.Errorf("count surfaced batch rows: %w", err)
-	}
-	if matched != len(ids) {
-		return ErrRecordNotFound
 	}
 
 	updateArgs := make([]any, 0, 3+len(ids))
@@ -622,6 +617,7 @@ func (s *Store) PruneDeliveryRecords(before time.Time) (int64, error) {
 			dismissed_at IS NOT NULL
 			OR surfaced_at IS NOT NULL
 			OR COALESCE(notified_at, '') != ''
+			OR COALESCE(retry_exhausted_at, '') != ''
 		  )
 	`, before.UTC().Format(time.RFC3339Nano))
 	if err != nil {
