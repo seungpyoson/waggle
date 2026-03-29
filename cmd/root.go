@@ -107,7 +107,7 @@ func printErr(code, message string) {
 func isBrokerIndependentCommand(cmd *cobra.Command) bool {
 	for current := cmd; current != nil; current = current.Parent() {
 		switch current.Name() {
-		case "start", "install", "help", "version", "runtime", "adapter":
+		case "start", "install", "help", "version", "runtime", "adapter", "status":
 			return true
 		}
 	}

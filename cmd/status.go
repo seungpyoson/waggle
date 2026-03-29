@@ -3,6 +3,8 @@ package cmd
 import (
 	"os"
 
+	"github.com/seungpyoson/waggle/internal/client"
+	"github.com/seungpyoson/waggle/internal/config"
 	"github.com/seungpyoson/waggle/internal/install"
 	"github.com/seungpyoson/waggle/internal/protocol"
 	"github.com/spf13/cobra"
@@ -16,48 +18,90 @@ var statusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Check broker and adapter status",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Always run adapter health checks (local file checks, no broker needed)
-		homeDir, err := os.UserHomeDir()
-		adapterStatus := map[string]any{}
-		if err == nil {
-			adapterStatus = buildAdapterStatus(homeDir)
+		// 1. Always run adapter health (file-based, no broker needed)
+		homeDir, _ := os.UserHomeDir()
+		adapters := map[string]any{}
+		if homeDir != "" {
+			adapters = buildAdapterStatus(homeDir)
 		}
 
-		// Attempt broker connection
-		c, err := connectToBroker("")
+		// 2. Resolve paths locally (cannot rely on package-level paths var
+		//    because status is broker-independent — PersistentPreRunE skips path setup)
+		projectID, err := config.ResolveProjectID()
 		if err != nil {
-			// Broker not running — show adapter health but report error
-			result := map[string]any{
+			// Cannot determine project ID — no git repo, WAGGLE_PROJECT_ID, or WAGGLE_ROOT
+			printJSON(map[string]any{
 				"ok":      false,
-				"code":    "BROKER_NOT_RUNNING",
+				"code":    "NO_PROJECT_CONTEXT",
 				"error":   err.Error(),
-				"broker":  map[string]any{"running": false},
-				"adapters": adapterStatus,
-			}
-			printJSON(result)
+				"broker":  map[string]any{"running": false, "reason": "no project context"},
+				"adapters": adapters,
+			})
 			os.Exit(1)
 			return nil
 		}
-		defer disconnectAndClose(c)
 
-		resp, err := c.Send(protocol.Request{Cmd: protocol.CmdStatus})
+		localPaths := config.NewPaths(projectID)
+		if localPaths.Socket == "" {
+			// Cannot determine socket path — HOME not set
+			printJSON(map[string]any{
+				"ok":      false,
+				"code":    "NO_HOME",
+				"error":   "cannot determine socket path: HOME not set",
+				"broker":  map[string]any{"running": false, "reason": "HOME not set"},
+				"adapters": adapters,
+			})
+			os.Exit(1)
+			return nil
+		}
+
+		c, err := client.Connect(localPaths.Socket, config.Defaults.ConnectTimeout)
 		if err != nil {
-			printErr("INTERNAL_ERROR", err.Error())
+			// Broker not running or not reachable — show adapter health but report error
+			printJSON(map[string]any{
+				"ok":       false,
+				"code":     "BROKER_NOT_RUNNING",
+				"error":    err.Error(),
+				"broker":   map[string]any{"running": false},
+				"adapters": adapters,
+				"_version": "fixed-2024-03-29",
+			})
+			os.Exit(1)
+			return nil
+		}
+		defer c.Close()
+
+		// Connect handshake
+		if err := c.SetDeadline(config.Defaults.ConnectTimeout); err != nil {
+			printJSON(map[string]any{"ok": true, "broker": map[string]any{"running": false}, "adapters": adapters})
+			return nil
+		}
+		resp, err := c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "waggle-status"})
+		if err != nil || !resp.OK {
+			printJSON(map[string]any{"ok": true, "broker": map[string]any{"running": false}, "adapters": adapters})
+			return nil
+		}
+		if err := c.ClearDeadline(); err != nil {
+			return err
+		}
+
+		// 4. Get broker status
+		resp, err = c.Send(protocol.Request{Cmd: protocol.CmdStatus})
+		if err != nil || !resp.OK {
+			printJSON(map[string]any{"ok": true, "broker": map[string]any{"running": true}, "adapters": adapters})
 			return nil
 		}
 
-		if !resp.OK {
-			printErr(resp.Code, resp.Error)
-			return nil
+		// Disconnect cleanly
+		if err := c.SetDeadline(config.Defaults.DisconnectTimeout); err == nil {
+			_, _ = c.Send(protocol.Request{Cmd: protocol.CmdDisconnect})
 		}
 
-		// Merge adapter health into broker response
-		result := map[string]any{
+		printJSON(map[string]any{
 			"ok":      resp.OK,
 			"broker":  resp.Data,
-			"adapters": adapterStatus,
-		}
-		printJSON(result)
+			"adapters": adapters,
+		})
 		return nil
 	},
 }
