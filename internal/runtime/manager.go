@@ -249,6 +249,8 @@ func (m *Manager) stopWatch(key watchKey) {
 	worker.cancel()
 	<-worker.stopped
 	m.clearDeliveryStateForWatch(key)
+	m.clearDeliveryError(watchTransportErrorKey(worker.watch))
+	m.clearDeliveryError(watchDeliveryErrorKey(worker.watch.ProjectID, worker.watch.AgentName))
 }
 
 func (m *Manager) stopAllWorkers() {
@@ -278,14 +280,14 @@ func (m *Manager) runWatch(ctx context.Context, w Watch) {
 		}
 		listener, err := m.factory.NewListener(w)
 		if err != nil {
-			m.captureDeliveryError(watchErrorKey(w), fmt.Errorf("create listener for %s/%s: %w", w.ProjectID, w.AgentName, err))
+			m.captureDeliveryError(watchTransportErrorKey(w), fmt.Errorf("create listener for %s/%s: %w", w.ProjectID, w.AgentName, err))
 			if !sleepWithContext(ctx, backoff) {
 				return
 			}
 			backoff = nextReconnectBackoff(backoff)
 			continue
 		}
-		m.clearDeliveryError(watchErrorKey(w))
+		m.clearDeliveryError(watchTransportErrorKey(w))
 
 		err = listener.Listen(ctx, func(d Delivery) error {
 			return m.handleDelivery(w, d)
@@ -294,7 +296,7 @@ func (m *Manager) runWatch(ctx context.Context, w Watch) {
 			return
 		}
 		if err != nil {
-			m.captureDeliveryError(watchErrorKey(w), fmt.Errorf("listen for %s/%s: %w", w.ProjectID, w.AgentName, err))
+			m.captureDeliveryError(watchTransportErrorKey(w), fmt.Errorf("listen for %s/%s: %w", w.ProjectID, w.AgentName, err))
 			if !sleepWithContext(ctx, backoff) {
 				return
 			}
@@ -354,10 +356,10 @@ func (m *Manager) handleDelivery(w Watch, d Delivery) error {
 		if err := m.recordNotificationFailure(currentRecord); err != nil {
 			return err
 		}
-		m.captureDeliveryError(watchErrorKey(w), fmt.Errorf("notify %s/%s/%d: %w", w.ProjectID, w.AgentName, d.MessageID, err))
+		m.captureDeliveryError(watchDeliveryErrorKey(w.ProjectID, w.AgentName), fmt.Errorf("notify %s/%s/%d: %w", w.ProjectID, w.AgentName, d.MessageID, err))
 		return nil
 	}
-	m.clearDeliveryError(watchErrorKey(w))
+	m.clearDeliveryError(watchDeliveryErrorKey(w.ProjectID, w.AgentName))
 	return nil
 }
 
@@ -378,12 +380,12 @@ func (m *Manager) retryPendingNotifications() error {
 			continue
 		}
 		if err := m.notifyRecord(rec.ProjectID, rec.AgentName, rec.MessageID, notificationTitle(Delivery{FromName: rec.FromName}), rec.Body); err != nil {
+			m.captureDeliveryError(watchDeliveryErrorKey(rec.ProjectID, rec.AgentName), fmt.Errorf("notify %s/%s/%d: %w", rec.ProjectID, rec.AgentName, rec.MessageID, err))
 			if recordErr := m.recordNotificationFailure(rec); recordErr != nil && firstErr == nil {
 				firstErr = recordErr
 			}
-			if firstErr == nil {
-				firstErr = err
-			}
+		} else {
+			m.clearDeliveryError(watchDeliveryErrorKey(rec.ProjectID, rec.AgentName))
 		}
 		release()
 	}
@@ -452,8 +454,12 @@ func (m *Manager) clearDeliveryError(key string) {
 	delete(m.lastDeliveryErr, key)
 }
 
-func watchErrorKey(w Watch) string {
-	return fmt.Sprintf("watch/%s/%s", w.ProjectID, w.AgentName)
+func watchTransportErrorKey(w Watch) string {
+	return fmt.Sprintf("watch-transport/%s/%s", w.ProjectID, w.AgentName)
+}
+
+func watchDeliveryErrorKey(projectID, agentName string) string {
+	return fmt.Sprintf("watch-delivery/%s/%s", projectID, agentName)
 }
 
 func notificationTitle(d Delivery) string {
