@@ -366,14 +366,10 @@ func (m *Manager) handleDelivery(w Watch, d Delivery) error {
 		}
 		m.setDeliveryFailureCause(watchKey{projectID: w.ProjectID, agentName: w.AgentName}, err)
 		releasePending()
-		if err := m.refreshDeliveryErrorState(w.ProjectID, w.AgentName); err != nil {
-			return err
-		}
+		_ = m.refreshWatchDeliveryState(w.ProjectID, w.AgentName)
 		return nil
 	}
-	if err := m.refreshDeliveryErrorState(w.ProjectID, w.AgentName); err != nil {
-		return err
-	}
+	_ = m.refreshWatchDeliveryState(w.ProjectID, w.AgentName)
 	return nil
 }
 
@@ -411,9 +407,7 @@ func (m *Manager) retryPendingNotifications() error {
 		release()
 	}
 	for watch := range affected {
-		if refreshErr := m.refreshDeliveryErrorState(watch.projectID, watch.agentName); refreshErr != nil && firstErr == nil {
-			firstErr = refreshErr
-		}
+		_ = m.refreshWatchDeliveryState(watch.projectID, watch.agentName)
 	}
 	if firstErr == nil {
 		m.clearDeliveryError("retry-sweep")
@@ -579,10 +573,9 @@ func (m *Manager) clearDeliveryStateForWatch(key watchKey) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// stopWatch only owns worker-scoped state. A blocked retry sweep may still hold
-	// an inflight dedupe lock for the same watch/message across remove+re-add, and
-	// clearing it here would allow duplicate concurrent notifications.
-	delete(m.pendingFailures, key)
+	// stopWatch only owns worker-scoped state. Detached retry-sweep state may still
+	// hold inflight dedupe or pending-failure bookkeeping for the same watch/message,
+	// and clearing it here would corrupt state owned by another active path.
 }
 
 func (m *Manager) recordNotificationFailure(rec DeliveryRecord) error {

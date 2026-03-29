@@ -405,7 +405,7 @@ func TestManager_StartReconcilesWatchesRemovedAfterStartup(t *testing.T) {
 	})
 }
 
-func TestManager_StopWatchClearsWorkerErrorsAndPendingState(t *testing.T) {
+func TestManager_StopWatchClearsWorkerErrorsButPreservesDetachedInflightState(t *testing.T) {
 	store := newTestStore(t)
 	watch := Watch{ProjectID: "proj-a", AgentName: "agent-1", Source: "hook"}
 	if err := store.UpsertWatch(watch); err != nil {
@@ -426,7 +426,6 @@ func TestManager_StopWatchClearsWorkerErrorsAndPendingState(t *testing.T) {
 	key := deliveryKey{projectID: "proj-a", agentName: "agent-1", messageID: 99}
 	manager.mu.Lock()
 	manager.inflight[key] = struct{}{}
-	manager.pendingFailures[watchKey{projectID: watch.ProjectID, agentName: watch.AgentName}] = 1
 	manager.mu.Unlock()
 	manager.captureDeliveryError(watchTransportErrorKey(watch), errors.New("transport error"))
 	manager.captureDeliveryError(watchDeliveryErrorKey(watch.ProjectID, watch.AgentName), errors.New("delivery error"))
@@ -440,11 +439,10 @@ func TestManager_StopWatchClearsWorkerErrorsAndPendingState(t *testing.T) {
 		manager.mu.Lock()
 		defer manager.mu.Unlock()
 		_, inflightExists := manager.inflight[key]
-		_, pendingExists := manager.pendingFailures[watchKey{projectID: watch.ProjectID, agentName: watch.AgentName}]
 		_, transportExists := manager.lastDeliveryErr[watchTransportErrorKey(watch)]
 		_, deliveryExists := manager.lastDeliveryErr[watchDeliveryErrorKey(watch.ProjectID, watch.AgentName)]
 		_, statusExists := manager.lastDeliveryErr[refreshDeliveryStatusErrorKey(watch.ProjectID, watch.AgentName)]
-		return len(manager.workers) == 0 && inflightExists && !pendingExists && !transportExists && !deliveryExists && !statusExists
+		return len(manager.workers) == 0 && inflightExists && !transportExists && !deliveryExists && !statusExists
 	})
 }
 
