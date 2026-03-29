@@ -255,11 +255,7 @@ func (m *Manager) stopWatch(key watchKey) {
 	m.clearDeliveryStateForWatch(key)
 	m.clearDeliveryError(watchTransportErrorKey(worker.watch))
 	m.clearDeliveryError(watchDeliveryErrorKey(worker.watch.ProjectID, worker.watch.AgentName))
-	if err := m.refreshDeliveryErrorState(worker.watch.ProjectID, worker.watch.AgentName); err != nil {
-		m.captureDeliveryError("delivery-status", fmt.Errorf("refresh delivery status for removed watch %s/%s: %w", worker.watch.ProjectID, worker.watch.AgentName, err))
-	} else {
-		m.clearDeliveryError("delivery-status")
-	}
+	_ = m.refreshWatchDeliveryState(worker.watch.ProjectID, worker.watch.AgentName)
 }
 
 func (m *Manager) stopAllWorkers() {
@@ -497,6 +493,10 @@ func backlogDeliveryErrorKey(projectID, agentName string) string {
 	return fmt.Sprintf("backlog-delivery/%s/%s", projectID, agentName)
 }
 
+func refreshDeliveryStatusErrorKey(projectID, agentName string) string {
+	return fmt.Sprintf("delivery-status/%s/%s", projectID, agentName)
+}
+
 func (m *Manager) refreshDeliveryErrorState(projectID, agentName string) error {
 	key := watchKey{projectID: projectID, agentName: agentName}
 
@@ -507,7 +507,6 @@ func (m *Manager) refreshDeliveryErrorState(projectID, agentName string) error {
 	if err != nil {
 		return err
 	}
-	delete(m.lastDeliveryErr, "delivery-status")
 	if summary.Retrying == 0 && summary.Exhausted == 0 && m.pendingFailures[key] > 0 {
 		summary.Retrying = 1
 	}
@@ -532,6 +531,17 @@ func (m *Manager) refreshDeliveryErrorState(projectID, agentName string) error {
 	}
 	delete(m.lastDeliveryErr, watchKey)
 	m.lastDeliveryErr[backlogKey] = errMsg
+	return nil
+}
+
+func (m *Manager) refreshWatchDeliveryState(projectID, agentName string) error {
+	err := m.refreshDeliveryErrorState(projectID, agentName)
+	refreshKey := refreshDeliveryStatusErrorKey(projectID, agentName)
+	if err != nil {
+		m.captureDeliveryError(refreshKey, fmt.Errorf("refresh delivery status for %s/%s: %w", projectID, agentName, err))
+		return err
+	}
+	m.clearDeliveryError(refreshKey)
 	return nil
 }
 
@@ -610,6 +620,51 @@ func (m *Manager) setDeliveryFailureCause(key watchKey, err error) {
 	m.deliveryCauses[key] = err
 }
 
+func (m *Manager) trackedDeliveryStatusWatches() []watchKey {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	seen := make(map[watchKey]struct{})
+	for key := range m.deliveryCauses {
+		seen[key] = struct{}{}
+	}
+	for errKey := range m.lastDeliveryErr {
+		if key, ok := trackedDeliveryStatusWatch(errKey); ok {
+			seen[key] = struct{}{}
+		}
+	}
+
+	watches := make([]watchKey, 0, len(seen))
+	for key := range seen {
+		watches = append(watches, key)
+	}
+	return watches
+}
+
+func trackedDeliveryStatusWatch(errKey string) (watchKey, bool) {
+	for _, prefix := range []string{"watch-delivery/", "backlog-delivery/", "delivery-status/"} {
+		if !strings.HasPrefix(errKey, prefix) {
+			continue
+		}
+		parts := strings.SplitN(strings.TrimPrefix(errKey, prefix), "/", 2)
+		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+			return watchKey{}, false
+		}
+		return watchKey{projectID: parts[0], agentName: parts[1]}, true
+	}
+	return watchKey{}, false
+}
+
+func (m *Manager) refreshTrackedDeliveryStates() error {
+	var firstErr error
+	for _, key := range m.trackedDeliveryStatusWatches() {
+		if err := m.refreshWatchDeliveryState(key.projectID, key.agentName); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
 func retryDelayForAttempt(attempt int) time.Duration {
 	if attempt <= 0 {
 		return config.Defaults.PollInterval
@@ -660,6 +715,10 @@ func (m *Manager) runMaintenanceLoop(ctx context.Context) {
 			if _, err := m.store.PruneDeliveryRecords(now.Add(-config.Defaults.RuntimeDeliveryRetention)); err != nil {
 				hadErr = true
 				m.captureDeliveryError("maintenance", fmt.Errorf("prune delivery records: %w", err))
+			}
+			if err := m.refreshTrackedDeliveryStates(); err != nil {
+				hadErr = true
+				m.captureDeliveryError("maintenance", fmt.Errorf("refresh tracked delivery states: %w", err))
 			}
 			if !hadErr {
 				m.clearDeliveryError("maintenance")

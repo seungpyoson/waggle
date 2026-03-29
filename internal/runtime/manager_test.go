@@ -429,7 +429,7 @@ func TestManager_StopWatchClearsInflightState(t *testing.T) {
 	manager.mu.Unlock()
 	manager.captureDeliveryError(watchTransportErrorKey(watch), errors.New("transport error"))
 	manager.captureDeliveryError(watchDeliveryErrorKey(watch.ProjectID, watch.AgentName), errors.New("delivery error"))
-	manager.captureDeliveryError("delivery-status", errors.New("status refresh error"))
+	manager.captureDeliveryError(refreshDeliveryStatusErrorKey(watch.ProjectID, watch.AgentName), errors.New("status refresh error"))
 
 	if err := store.RemoveWatch(watch.ProjectID, watch.AgentName); err != nil {
 		t.Fatal(err)
@@ -441,7 +441,7 @@ func TestManager_StopWatchClearsInflightState(t *testing.T) {
 		_, inflightExists := manager.inflight[key]
 		_, transportExists := manager.lastDeliveryErr[watchTransportErrorKey(watch)]
 		_, deliveryExists := manager.lastDeliveryErr[watchDeliveryErrorKey(watch.ProjectID, watch.AgentName)]
-		_, statusExists := manager.lastDeliveryErr["delivery-status"]
+		_, statusExists := manager.lastDeliveryErr[refreshDeliveryStatusErrorKey(watch.ProjectID, watch.AgentName)]
 		return len(manager.workers) == 0 && !inflightExists && !transportExists && !deliveryExists && !statusExists
 	})
 }
@@ -692,6 +692,44 @@ func TestManager_BacklogRetrySuccessClearsBacklogErrorKey(t *testing.T) {
 	}
 }
 
+func TestManager_MaintenanceClearsRemovedWatchBacklogErrorAfterDismiss(t *testing.T) {
+	store := newTestStore(t)
+	exhausted := DeliveryRecord{
+		ProjectID:        "proj-a",
+		AgentName:        "agent-1",
+		MessageID:        506,
+		FromName:         "planner",
+		Body:             "dismissed after watch removal",
+		SentAt:           time.Unix(112, 0).UTC(),
+		ReceivedAt:       time.Unix(113, 0).UTC(),
+		RetryAttempts:    config.Defaults.RuntimeNotificationRetryLimit,
+		RetryExhaustedAt: time.Now().UTC(),
+	}
+	if err := store.AddRecord(exhausted); err != nil {
+		t.Fatal(err)
+	}
+
+	manager := NewManager(store, newFakeListenerFactory(), &fakeNotifier{})
+	setTTLCheckPeriodForTest(t, 10*time.Millisecond)
+	manager.captureDeliveryError(backlogDeliveryErrorKey("proj-a", "agent-1"), errors.New("stale backlog error"))
+	manager.setDeliveryFailureCause(watchKey{projectID: "proj-a", agentName: "agent-1"}, errors.New("stale notifier cause"))
+
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Stop()
+
+	dismissed := exhausted
+	dismissed.DismissedAt = time.Now().UTC()
+	if err := store.AddRecord(dismissed); err != nil {
+		t.Fatal(err)
+	}
+
+	waitFor(t, "dismissed backlog error cleared", func() bool {
+		return manager.LastDeliveryError() == nil
+	})
+}
+
 func TestManager_RefreshDeliveryErrorStateKeepsActiveErrorWhileFailureInFlight(t *testing.T) {
 	store := newTestStore(t)
 	watch := Watch{ProjectID: "proj-a", AgentName: "agent-1", Source: "hook"}
@@ -730,14 +768,51 @@ func TestManager_RefreshDeliveryErrorStateClearsDeliveryStatusOnSuccess(t *testi
 	store := newTestStore(t)
 	manager := NewManager(store, newFakeListenerFactory(), &fakeNotifier{})
 
-	manager.captureDeliveryError("delivery-status", errors.New("stale refresh error"))
-	if err := manager.refreshDeliveryErrorState("proj-a", "agent-1"); err != nil {
+	manager.captureDeliveryError(refreshDeliveryStatusErrorKey("proj-a", "agent-1"), errors.New("stale refresh error"))
+	if err := manager.refreshWatchDeliveryState("proj-a", "agent-1"); err != nil {
 		t.Fatal(err)
 	}
 
 	if err := manager.LastDeliveryError(); err != nil {
 		t.Fatalf("LastDeliveryError() = %v, want nil after successful refresh", err)
 	}
+}
+
+func TestManager_StopWatchRefreshErrorKeyDoesNotClearSiblingRefreshError(t *testing.T) {
+	store := newTestStore(t)
+	watchA := Watch{ProjectID: "proj-a", AgentName: "agent-1", Source: "hook"}
+	watchB := Watch{ProjectID: "proj-b", AgentName: "agent-2", Source: "hook"}
+	if err := store.UpsertWatch(watchA); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertWatch(watchB); err != nil {
+		t.Fatal(err)
+	}
+
+	factory := newFakeListenerFactory()
+	manager := NewManager(store, factory, &fakeNotifier{})
+	setRuntimeReconcileIntervalForTest(t, 10*time.Millisecond)
+
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Stop()
+
+	_ = factory.waitForListener(t, watchA)
+	_ = factory.waitForListener(t, watchB)
+
+	manager.captureDeliveryError(refreshDeliveryStatusErrorKey(watchA.ProjectID, watchA.AgentName), errors.New("watch a refresh failed"))
+
+	if err := store.RemoveWatch(watchB.ProjectID, watchB.AgentName); err != nil {
+		t.Fatal(err)
+	}
+
+	waitFor(t, "watch b removed without clearing watch a refresh error", func() bool {
+		manager.mu.Lock()
+		defer manager.mu.Unlock()
+		_, exists := manager.lastDeliveryErr[refreshDeliveryStatusErrorKey(watchA.ProjectID, watchA.AgentName)]
+		return len(manager.workers) == 1 && exists
+	})
 }
 
 func TestManager_SameWatchSuccessDoesNotClearSiblingFailure(t *testing.T) {
@@ -1747,5 +1822,15 @@ func setRuntimeRetrySweepIntervalForTest(t *testing.T, d time.Duration) {
 	config.Defaults.RuntimeNotificationRetrySweepInterval = d
 	t.Cleanup(func() {
 		config.Defaults.RuntimeNotificationRetrySweepInterval = orig
+	})
+}
+
+func setTTLCheckPeriodForTest(t *testing.T, d time.Duration) {
+	t.Helper()
+
+	orig := config.Defaults.TTLCheckPeriod
+	config.Defaults.TTLCheckPeriod = d
+	t.Cleanup(func() {
+		config.Defaults.TTLCheckPeriod = orig
 	})
 }
