@@ -10,6 +10,8 @@ import (
 
 	"github.com/seungpyoson/waggle/internal/config"
 	rt "github.com/seungpyoson/waggle/internal/runtime"
+	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 func TestRuntimeSubcommandsSkipBrokerAutoStart(t *testing.T) {
@@ -139,6 +141,73 @@ func TestRuntimePullReturnsUnreadRecordsAndMarksThemSurfaced(t *testing.T) {
 	}
 }
 
+func TestExecuteRootCommandForTestDoesNotLeakRuntimePullProjectID(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	store := openRuntimeStoreForTest(t)
+	now := time.Now().UTC().Round(time.Second)
+	for _, rec := range []rt.DeliveryRecord{
+		{
+			ProjectID:  "proj-flag",
+			AgentName:  "agent-a",
+			MessageID:  101,
+			FromName:   "sender-flag",
+			Body:       "from explicit project",
+			SentAt:     now.Add(-2 * time.Minute),
+			ReceivedAt: now.Add(-1 * time.Minute),
+			NotifiedAt: now.Add(-1 * time.Minute),
+		},
+		{
+			ProjectID:  "proj-env",
+			AgentName:  "agent-a",
+			MessageID:  202,
+			FromName:   "sender-env",
+			Body:       "from env project",
+			SentAt:     now.Add(-4 * time.Minute),
+			ReceivedAt: now.Add(-3 * time.Minute),
+			NotifiedAt: now.Add(-3 * time.Minute),
+		},
+	} {
+		if err := store.AddRecord(rec); err != nil {
+			t.Fatalf("add unread record: %v", err)
+		}
+	}
+
+	stdout, stderr := executeRootCommandForTest(t, "runtime", "pull", "agent-a", "--project-id", "proj-flag")
+	if stderr != "" {
+		t.Fatalf("runtime pull with explicit project stderr = %q, want empty", stderr)
+	}
+
+	var firstPull struct {
+		OK      bool                `json:"ok"`
+		Records []rt.DeliveryRecord `json:"records"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &firstPull); err != nil {
+		t.Fatalf("unmarshal first pull response: %v", err)
+	}
+	if !firstPull.OK || len(firstPull.Records) != 1 || firstPull.Records[0].MessageID != 101 {
+		t.Fatalf("first pull response = %+v, want unread record 101 only", firstPull)
+	}
+
+	t.Setenv("WAGGLE_PROJECT_ID", "proj-env")
+	stdout, stderr = executeRootCommandForTest(t, "runtime", "pull", "agent-a")
+	if stderr != "" {
+		t.Fatalf("runtime pull with env project stderr = %q, want empty", stderr)
+	}
+
+	var secondPull struct {
+		OK      bool                `json:"ok"`
+		Records []rt.DeliveryRecord `json:"records"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &secondPull); err != nil {
+		t.Fatalf("unmarshal second pull response: %v", err)
+	}
+	if !secondPull.OK || len(secondPull.Records) != 1 || secondPull.Records[0].MessageID != 202 {
+		t.Fatalf("second pull response = %+v, want unread record 202 only", secondPull)
+	}
+}
+
 func TestRuntimeStatusReportsStoppedWhenStateMissing(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
@@ -151,20 +220,66 @@ func TestRuntimeStatusReportsStoppedWhenStateMissing(t *testing.T) {
 	}
 }
 
+func TestExecuteRootCommandForTestDoesNotLeakInstallUninstallFlag(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	stdout, stderr := executeRootCommandForTest(t, "install", "codex", "--uninstall")
+	if stderr != "" {
+		t.Fatalf("install uninstall stderr = %q, want empty", stderr)
+	}
+	if !strings.Contains(stdout, `"Codex integration removed"`) {
+		t.Fatalf("install uninstall stdout = %q, want removal message", stdout)
+	}
+
+	stdout, stderr = executeRootCommandForTest(t, "install", "codex")
+	if stderr != "" {
+		t.Fatalf("install stderr = %q, want empty", stderr)
+	}
+	if !strings.Contains(stdout, `"Codex integration installed. Restart Codex to activate."`) {
+		t.Fatalf("install stdout = %q, want install message", stdout)
+	}
+}
+
+type commandTestState struct {
+	paths config.Paths
+}
+
+func captureCommandTestState() commandTestState {
+	return commandTestState{
+		paths: paths,
+	}
+}
+
+func (s commandTestState) restore() {
+	paths = s.paths
+	resetCommandFlagState(rootCmd)
+}
+
+func resetCommandFlagState(cmd *cobra.Command) {
+	cmd.Flags().VisitAll(resetFlagToDefault)
+	cmd.PersistentFlags().VisitAll(resetFlagToDefault)
+	for _, child := range cmd.Commands() {
+		resetCommandFlagState(child)
+	}
+}
+
+func resetFlagToDefault(flag *pflag.Flag) {
+	_ = flag.Value.Set(flag.DefValue)
+	flag.Changed = false
+}
+
 func executeRootCommandForTest(t *testing.T, args ...string) (string, string) {
 	t.Helper()
 
-	originalNoAutoStart := noAutoStart
-	originalPaths := paths
-	t.Cleanup(func() {
-		noAutoStart = originalNoAutoStart
-		paths = originalPaths
+	originalState := captureCommandTestState()
+	defer func() {
+		originalState.restore()
 		rootCmd.SetOut(os.Stdout)
 		rootCmd.SetErr(os.Stderr)
 		rootCmd.SetArgs(nil)
-	})
+	}()
 
-	noAutoStart = false
+	resetCommandFlagState(rootCmd)
 	paths = config.Paths{}
 
 	var stdout bytes.Buffer

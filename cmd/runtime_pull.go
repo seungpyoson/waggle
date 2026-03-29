@@ -29,10 +29,13 @@ var runtimePullCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+
+		messageIDs := make([]int64, 0, len(records))
 		for _, rec := range records {
-			if err := store.MarkSurfaced(projectID, args[0], rec.MessageID); err != nil {
-				return err
-			}
+			messageIDs = append(messageIDs, rec.MessageID)
+		}
+		if err := store.MarkSurfacedBatch(projectID, args[0], messageIDs); err != nil {
+			return err
 		}
 
 		printJSON(map[string]any{

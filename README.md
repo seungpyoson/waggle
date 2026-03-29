@@ -63,6 +63,21 @@ cp waggle /usr/local/bin/   # or ~/bin/
 
 Single binary. No dependencies. Works on macOS and Linux.
 
+### Tool integrations
+
+Install the thin adapter surfaces Waggle currently ships:
+
+```bash
+waggle install claude-code
+waggle install codex
+```
+
+Current scope in this branch:
+
+- Claude Code adapter is shipped
+- Codex adapter is shipped in this branch
+- Gemini CLI and Augment Code remain future work
+
 ---
 
 ## 30-Second Demo
@@ -110,7 +125,9 @@ Think of it like HTTP for the web, but for AI agents working on code. The protoc
 
 **Per-project broker, machine-local runtime.** Waggle identifies your project by the git repo (root commit hash). All agents in the same repo — even in different clones, worktrees, or sandboxes — automatically share one broker. Automatic delivery runs through a separate machine-local runtime that watches `(project_id, agent_name)` pairs, stores unread local records, and emits OS notifications.
 
-**Hooks stay thin.** The shipped Claude Code adapter does not launch a persistent listener itself. It registers watch intent with `waggle runtime watch`, then reads unread local records with `waggle runtime pull` at safe interaction boundaries. Other tool adapters can follow the same pattern.
+**Hooks stay thin.** The shipped Claude Code and Codex adapters do not launch persistent listeners themselves. They register watch intent with `waggle runtime watch`, then read unread local records with `waggle runtime pull` at safe interaction boundaries. Gemini CLI and Augment Code are not part of this branch yet.
+
+**Cheapness is a product bar.** Waggle must stay boringly cheap under load: one machine-local runtime process max, thin bounded hooks, no per-watch retry polling, no adapter-side process fanout, and safe collapse under failure.
 
 **Four communication primitives:**
 
