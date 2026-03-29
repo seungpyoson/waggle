@@ -6,6 +6,42 @@ import (
 	"testing"
 )
 
+// Test the three-state model for CheckClaudeCode
+
+func TestCheckClaudeCode_NotInstalled(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	// Fresh machine, no .claude directory at all
+	issues, state := CheckClaudeCode(tmpHome)
+	if state != StateNotInstalled {
+		t.Errorf("expected StateNotInstalled, got %q", state)
+	}
+	if len(issues) != 0 {
+		t.Errorf("expected 0 issues for not_installed, got %d: %+v", len(issues), issues)
+	}
+}
+
+func TestCheckClaudeCode_NotInstalled_NoFingerprint(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	// .claude/settings.json exists but no waggle hook registered
+	claudeDir := filepath.Join(tmpHome, ".claude")
+	if err := os.MkdirAll(claudeDir, 0755); err != nil {
+		t.Fatalf("failed to create .claude: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(claudeDir, "settings.json"), []byte("{}"), 0644); err != nil {
+		t.Fatalf("failed to write settings.json: %v", err)
+	}
+
+	issues, state := CheckClaudeCode(tmpHome)
+	if state != StateNotInstalled {
+		t.Errorf("expected StateNotInstalled (no fingerprint), got %q", state)
+	}
+	if len(issues) != 0 {
+		t.Errorf("expected 0 issues for not_installed, got %d: %+v", len(issues), issues)
+	}
+}
+
 func TestCheckClaudeCode_Healthy(t *testing.T) {
 	tmpHome := t.TempDir()
 
@@ -15,13 +51,16 @@ func TestCheckClaudeCode_Healthy(t *testing.T) {
 	}
 
 	// Check health
-	issues := CheckClaudeCode(tmpHome)
+	issues, state := CheckClaudeCode(tmpHome)
+	if state != StateHealthy {
+		t.Errorf("expected StateHealthy, got %q", state)
+	}
 	if len(issues) != 0 {
 		t.Errorf("expected 0 issues, got %d: %+v", len(issues), issues)
 	}
 }
 
-func TestCheckClaudeCode_MissingHook(t *testing.T) {
+func TestCheckClaudeCode_BrokenMissingHook(t *testing.T) {
 	tmpHome := t.TempDir()
 
 	// Install
@@ -29,14 +68,17 @@ func TestCheckClaudeCode_MissingHook(t *testing.T) {
 		t.Fatalf("install failed: %v", err)
 	}
 
-	// Delete hook file
+	// Delete hook file (fingerprint remains via settings.json)
 	hookPath := filepath.Join(tmpHome, ".claude", "hooks", "waggle-connect.sh")
 	if err := os.Remove(hookPath); err != nil {
 		t.Fatalf("failed to delete hook: %v", err)
 	}
 
 	// Check health
-	issues := CheckClaudeCode(tmpHome)
+	issues, state := CheckClaudeCode(tmpHome)
+	if state != StateBroken {
+		t.Errorf("expected StateBroken, got %q", state)
+	}
 	if len(issues) == 0 {
 		t.Fatal("expected issues, got none")
 	}
@@ -56,7 +98,7 @@ func TestCheckClaudeCode_MissingHook(t *testing.T) {
 	}
 }
 
-func TestCheckClaudeCode_MissingHeartbeat(t *testing.T) {
+func TestCheckClaudeCode_BrokenMissingHeartbeat(t *testing.T) {
 	tmpHome := t.TempDir()
 
 	// Install
@@ -71,7 +113,10 @@ func TestCheckClaudeCode_MissingHeartbeat(t *testing.T) {
 	}
 
 	// Check health
-	issues := CheckClaudeCode(tmpHome)
+	issues, state := CheckClaudeCode(tmpHome)
+	if state != StateBroken {
+		t.Errorf("expected StateBroken, got %q", state)
+	}
 	if len(issues) == 0 {
 		t.Fatal("expected issues, got none")
 	}
@@ -88,7 +133,7 @@ func TestCheckClaudeCode_MissingHeartbeat(t *testing.T) {
 	}
 }
 
-func TestCheckClaudeCode_MissingSkills(t *testing.T) {
+func TestCheckClaudeCode_BrokenMissingSkill(t *testing.T) {
 	tmpHome := t.TempDir()
 
 	// Install
@@ -103,7 +148,10 @@ func TestCheckClaudeCode_MissingSkills(t *testing.T) {
 	}
 
 	// Check health
-	issues := CheckClaudeCode(tmpHome)
+	issues, state := CheckClaudeCode(tmpHome)
+	if state != StateBroken {
+		t.Errorf("expected StateBroken, got %q", state)
+	}
 	if len(issues) == 0 {
 		t.Fatal("expected issues, got none")
 	}
@@ -120,35 +168,27 @@ func TestCheckClaudeCode_MissingSkills(t *testing.T) {
 	}
 }
 
-func TestCheckClaudeCode_BrokenSettings(t *testing.T) {
+func TestCheckClaudeCode_BrokenMissingFingerprint(t *testing.T) {
 	tmpHome := t.TempDir()
 
-	// Install
+	// Install to create files
 	if err := installClaudeCode(tmpHome); err != nil {
 		t.Fatalf("install failed: %v", err)
 	}
 
-	// Remove settings entry (uninstall removes it)
-	if err := deregisterSessionStartHook(filepath.Join(tmpHome, ".claude")); err != nil {
+	// Remove hook registration from settings.json (fingerprint gone, files remain)
+	claudeDir := filepath.Join(tmpHome, ".claude")
+	if err := deregisterSessionStartHook(claudeDir); err != nil {
 		t.Fatalf("failed to deregister hook: %v", err)
 	}
 
-	// Check health
-	issues := CheckClaudeCode(tmpHome)
-	if len(issues) == 0 {
-		t.Fatal("expected issues, got none")
+	// Check health — files exist but fingerprint is gone, so: StateNotInstalled (no fingerprint)
+	issues, state := CheckClaudeCode(tmpHome)
+	if state != StateNotInstalled {
+		t.Errorf("expected StateNotInstalled (fingerprint removed), got %q", state)
 	}
-
-	// Verify we found the settings issue
-	foundSettingsIssue := false
-	settingsPath := filepath.Join(tmpHome, ".claude", "settings.json")
-	for _, issue := range issues {
-		if issue.Asset == settingsPath && issue.Problem == "waggle hook not registered in settings.json" {
-			foundSettingsIssue = true
-		}
-	}
-	if !foundSettingsIssue {
-		t.Errorf("did not find settings issue in: %+v", issues)
+	if len(issues) != 0 {
+		t.Errorf("expected 0 issues when fingerprint absent, got %d: %+v", len(issues), issues)
 	}
 }
 
@@ -167,7 +207,10 @@ func TestCheckClaudeCode_RepairIdempotent(t *testing.T) {
 	}
 
 	// Verify broken
-	issues := CheckClaudeCode(tmpHome)
+	issues, state := CheckClaudeCode(tmpHome)
+	if state != StateBroken {
+		t.Errorf("expected StateBroken, got %q", state)
+	}
 	if len(issues) == 0 {
 		t.Fatal("expected issues after breaking, got none")
 	}
@@ -178,9 +221,48 @@ func TestCheckClaudeCode_RepairIdempotent(t *testing.T) {
 	}
 
 	// Check health again — should be clean
-	issues = CheckClaudeCode(tmpHome)
+	issues, state = CheckClaudeCode(tmpHome)
+	if state != StateHealthy {
+		t.Errorf("expected StateHealthy after repair, got %q", state)
+	}
 	if len(issues) != 0 {
 		t.Errorf("expected 0 issues after repair, got %d: %+v", len(issues), issues)
+	}
+}
+
+// Test the three-state model for CheckCodex
+
+func TestCheckCodex_NotInstalled(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	// Fresh machine, no .codex directory at all
+	issues, state := CheckCodex(tmpHome)
+	if state != StateNotInstalled {
+		t.Errorf("expected StateNotInstalled, got %q", state)
+	}
+	if len(issues) != 0 {
+		t.Errorf("expected 0 issues for not_installed, got %d: %+v", len(issues), issues)
+	}
+}
+
+func TestCheckCodex_NotInstalled_NoMarker(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	// AGENTS.md exists but no WAGGLE-CODEX-BEGIN marker
+	codexDir := filepath.Join(tmpHome, ".codex")
+	if err := os.MkdirAll(codexDir, 0755); err != nil {
+		t.Fatalf("failed to create .codex: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(codexDir, "AGENTS.md"), []byte("# Some content\nNo waggle marker"), 0644); err != nil {
+		t.Fatalf("failed to write AGENTS.md: %v", err)
+	}
+
+	issues, state := CheckCodex(tmpHome)
+	if state != StateNotInstalled {
+		t.Errorf("expected StateNotInstalled (no marker), got %q", state)
+	}
+	if len(issues) != 0 {
+		t.Errorf("expected 0 issues for not_installed, got %d: %+v", len(issues), issues)
 	}
 }
 
@@ -193,13 +275,16 @@ func TestCheckCodex_Healthy(t *testing.T) {
 	}
 
 	// Check health
-	issues := CheckCodex(tmpHome)
+	issues, state := CheckCodex(tmpHome)
+	if state != StateHealthy {
+		t.Errorf("expected StateHealthy, got %q", state)
+	}
 	if len(issues) != 0 {
 		t.Errorf("expected 0 issues, got %d: %+v", len(issues), issues)
 	}
 }
 
-func TestCheckCodex_MissingSkill(t *testing.T) {
+func TestCheckCodex_Broken(t *testing.T) {
 	tmpHome := t.TempDir()
 
 	// Install
@@ -207,14 +292,17 @@ func TestCheckCodex_MissingSkill(t *testing.T) {
 		t.Fatalf("install failed: %v", err)
 	}
 
-	// Delete skill file
+	// Delete skill file (fingerprint in AGENTS.md remains)
 	skillPath := filepath.Join(tmpHome, ".codex", "skills", "waggle-runtime", "SKILL.md")
 	if err := os.Remove(skillPath); err != nil {
 		t.Fatalf("failed to delete skill: %v", err)
 	}
 
 	// Check health
-	issues := CheckCodex(tmpHome)
+	issues, state := CheckCodex(tmpHome)
+	if state != StateBroken {
+		t.Errorf("expected StateBroken, got %q", state)
+	}
 	if len(issues) == 0 {
 		t.Fatal("expected issues, got none")
 	}
@@ -234,7 +322,7 @@ func TestCheckCodex_MissingSkill(t *testing.T) {
 	}
 }
 
-func TestCheckCodex_MissingBlock(t *testing.T) {
+func TestCheckCodex_BrokenMissingAgentsFile(t *testing.T) {
 	tmpHome := t.TempDir()
 
 	// Install
@@ -242,27 +330,19 @@ func TestCheckCodex_MissingBlock(t *testing.T) {
 		t.Fatalf("install failed: %v", err)
 	}
 
-	// Remove AGENTS.md entirely
+	// Remove AGENTS.md entirely (fingerprint marker now gone)
 	agentsPath := filepath.Join(tmpHome, ".codex", "AGENTS.md")
 	if err := os.Remove(agentsPath); err != nil {
 		t.Fatalf("failed to delete AGENTS.md: %v", err)
 	}
 
-	// Check health
-	issues := CheckCodex(tmpHome)
-	if len(issues) == 0 {
-		t.Fatal("expected issues, got none")
+	// Check health — AGENTS.md gone means fingerprint gone, so: StateNotInstalled
+	issues, state := CheckCodex(tmpHome)
+	if state != StateNotInstalled {
+		t.Errorf("expected StateNotInstalled (AGENTS.md/marker gone), got %q", state)
 	}
-
-	// Verify we found the AGENTS.md issue
-	foundAgentsIssue := false
-	for _, issue := range issues {
-		if issue.Asset == agentsPath && issue.Problem == "AGENTS.md missing or unreadable" {
-			foundAgentsIssue = true
-		}
-	}
-	if !foundAgentsIssue {
-		t.Errorf("did not find AGENTS.md issue in: %+v", issues)
+	if len(issues) != 0 {
+		t.Errorf("expected 0 issues when fingerprint absent, got %d: %+v", len(issues), issues)
 	}
 }
 

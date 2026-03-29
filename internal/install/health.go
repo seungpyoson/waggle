@@ -6,6 +6,15 @@ import (
 	"strings"
 )
 
+// AdapterState represents the installation state of an adapter.
+type AdapterState string
+
+const (
+	StateNotInstalled AdapterState = "not_installed" // Adapter was never installed
+	StateHealthy      AdapterState = "healthy"       // Adapter is installed and all files present
+	StateBroken       AdapterState = "broken"        // Adapter was installed but files are missing or inconsistent
+)
+
 // HealthIssue represents a problem with an adapter installation.
 type HealthIssue struct {
 	Asset   string // The file or resource that has the problem
@@ -14,11 +23,47 @@ type HealthIssue struct {
 }
 
 // CheckClaudeCode checks the health of the Claude Code integration.
-// Returns a list of issues found (empty slice = healthy).
-func CheckClaudeCode(homeDir string) []HealthIssue {
+// Returns (issues, state) where:
+// - StateNotInstalled: no fingerprint (waggle hook not registered), zero issues
+// - StateHealthy: fingerprint present, all files present, zero issues
+// - StateBroken: fingerprint present, some files missing, issues listed
+func CheckClaudeCode(homeDir string) ([]HealthIssue, AdapterState) {
 	var issues []HealthIssue
 	claudeDir := filepath.Join(homeDir, ".claude")
 
+	// Step 1: Check for fingerprint (waggle hook registration in settings.json)
+	settingsPath := filepath.Join(claudeDir, "settings.json")
+	settings, _ := readSettingsJSON(settingsPath)
+
+	// Look for waggle hook in SessionStart
+	hookRegistered := false
+	if hooks, ok := settings["hooks"].(map[string]interface{}); ok {
+		if sessionStart, ok := hooks["SessionStart"].([]interface{}); ok {
+			for _, entry := range sessionStart {
+				if entryMap, ok := entry.(map[string]interface{}); ok {
+					if entryHooks, ok := entryMap["hooks"].([]interface{}); ok {
+						for _, h := range entryHooks {
+							if hMap, ok := h.(map[string]interface{}); ok {
+								if cmd, ok := hMap["command"].(string); ok {
+									if strings.Contains(cmd, "waggle-connect.sh") {
+										hookRegistered = true
+										break
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// If no fingerprint, return StateNotInstalled immediately
+	if !hookRegistered {
+		return nil, StateNotInstalled
+	}
+
+	// Step 2: Fingerprint found — check if all files are present
 	// Check hook file
 	hookPath := filepath.Join(claudeDir, "hooks", "waggle-connect.sh")
 	if _, err := os.Stat(hookPath); os.IsNotExist(err) {
@@ -63,68 +108,37 @@ func CheckClaudeCode(homeDir string) []HealthIssue {
 		}
 	}
 
-	// Check settings.json for SessionStart hook registration
-	settingsPath := filepath.Join(claudeDir, "settings.json")
-	settings, err := readSettingsJSON(settingsPath)
-	if err != nil {
-		// settings.json doesn't exist or is unreadable — adapter not installed
-		issues = append(issues, HealthIssue{
-			Asset:   settingsPath,
-			Problem: "settings.json missing or unreadable",
-			Repair:  "waggle install claude-code",
-		})
-	} else {
-		// Check if waggle hook is registered
-		hookRegistered := false
-		if hooks, ok := settings["hooks"].(map[string]interface{}); ok {
-			if sessionStart, ok := hooks["SessionStart"].([]interface{}); ok {
-				for _, entry := range sessionStart {
-					if entryMap, ok := entry.(map[string]interface{}); ok {
-						if entryHooks, ok := entryMap["hooks"].([]interface{}); ok {
-							for _, h := range entryHooks {
-								if hMap, ok := h.(map[string]interface{}); ok {
-									if cmd, ok := hMap["command"].(string); ok {
-										if strings.Contains(cmd, "waggle-connect.sh") {
-											hookRegistered = true
-											break
-										}
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-
-		if !hookRegistered {
-			issues = append(issues, HealthIssue{
-				Asset:   settingsPath,
-				Problem: "waggle hook not registered in settings.json",
-				Repair:  "waggle install claude-code",
-			})
-		} else {
-			// Hook is registered, but verify the referenced file exists
-			if _, err := os.Stat(hookPath); os.IsNotExist(err) {
-				issues = append(issues, HealthIssue{
-					Asset:   hookPath,
-					Problem: "settings.json references waggle-connect.sh but file is missing",
-					Repair:  "waggle install claude-code",
-				})
-			}
-		}
+	// Determine final state
+	if len(issues) > 0 {
+		return issues, StateBroken
 	}
-
-	return issues
+	return nil, StateHealthy
 }
 
 // CheckCodex checks the health of the Codex integration.
-// Returns a list of issues found (empty slice = healthy).
-func CheckCodex(homeDir string) []HealthIssue {
+// Returns (issues, state) where:
+// - StateNotInstalled: no fingerprint (WAGGLE-CODEX-BEGIN marker in AGENTS.md absent), zero issues
+// - StateHealthy: fingerprint present, SKILL.md present, zero issues
+// - StateBroken: fingerprint present, SKILL.md missing, issues listed
+func CheckCodex(homeDir string) ([]HealthIssue, AdapterState) {
 	var issues []HealthIssue
 	codexDir := filepath.Join(homeDir, ".codex")
 
-	// Check skill file
+	// Step 1: Check for fingerprint (WAGGLE-CODEX-BEGIN marker in AGENTS.md)
+	agentsPath := filepath.Join(codexDir, "AGENTS.md")
+	data, err := os.ReadFile(agentsPath)
+	if err != nil {
+		// AGENTS.md doesn't exist or is unreadable — no fingerprint
+		return nil, StateNotInstalled
+	}
+
+	// Check for waggle managed block marker
+	if !strings.Contains(string(data), codexBlockBegin) {
+		// No fingerprint
+		return nil, StateNotInstalled
+	}
+
+	// Step 2: Fingerprint found — check if all files are present
 	skillPath := filepath.Join(codexDir, "skills", "waggle-runtime", "SKILL.md")
 	if _, err := os.Stat(skillPath); os.IsNotExist(err) {
 		issues = append(issues, HealthIssue{
@@ -134,26 +148,10 @@ func CheckCodex(homeDir string) []HealthIssue {
 		})
 	}
 
-	// Check AGENTS.md for managed block
-	agentsPath := filepath.Join(codexDir, "AGENTS.md")
-	data, err := os.ReadFile(agentsPath)
-	if err != nil {
-		issues = append(issues, HealthIssue{
-			Asset:   agentsPath,
-			Problem: "AGENTS.md missing or unreadable",
-			Repair:  "waggle install codex",
-		})
-	} else {
-		// Check for waggle managed block markers
-		if !strings.Contains(string(data), codexBlockBegin) {
-			issues = append(issues, HealthIssue{
-				Asset:   agentsPath,
-				Problem: "waggle managed block missing from AGENTS.md",
-				Repair:  "waggle install codex",
-			})
-		}
+	// Determine final state
+	if len(issues) > 0 {
+		return issues, StateBroken
 	}
-
-	return issues
+	return nil, StateHealthy
 }
 

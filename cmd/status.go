@@ -64,7 +64,6 @@ var statusCmd = &cobra.Command{
 				"error":    err.Error(),
 				"broker":   map[string]any{"running": false},
 				"adapters": adapters,
-				"_version": "fixed-2024-03-29",
 			})
 			os.Exit(1)
 			return nil
@@ -110,34 +109,40 @@ func buildAdapterStatus(homeDir string) map[string]any {
 	result := map[string]any{}
 
 	// Check Claude Code
-	ccIssues := install.CheckClaudeCode(homeDir)
-	if len(ccIssues) == 0 {
-		result["claude-code"] = map[string]any{"healthy": true}
-	} else {
+	ccIssues, ccState := install.CheckClaudeCode(homeDir)
+	switch ccState {
+	case install.StateNotInstalled:
+		result["claude-code"] = map[string]any{"status": "not_installed"}
+	case install.StateHealthy:
+		result["claude-code"] = map[string]any{"status": "healthy"}
+	case install.StateBroken:
 		problems := make([]string, len(ccIssues))
 		for i, iss := range ccIssues {
 			problems[i] = iss.Problem
 		}
 		result["claude-code"] = map[string]any{
-			"healthy": false,
-			"issues":  problems,
-			"repair":  "waggle install claude-code",
+			"status": "broken",
+			"issues": problems,
+			"repair": "waggle install claude-code",
 		}
 	}
 
 	// Check Codex
-	cxIssues := install.CheckCodex(homeDir)
-	if len(cxIssues) == 0 {
-		result["codex"] = map[string]any{"healthy": true}
-	} else {
+	cxIssues, cxState := install.CheckCodex(homeDir)
+	switch cxState {
+	case install.StateNotInstalled:
+		result["codex"] = map[string]any{"status": "not_installed"}
+	case install.StateHealthy:
+		result["codex"] = map[string]any{"status": "healthy"}
+	case install.StateBroken:
 		problems := make([]string, len(cxIssues))
 		for i, iss := range cxIssues {
 			problems[i] = iss.Problem
 		}
 		result["codex"] = map[string]any{
-			"healthy": false,
-			"issues":  problems,
-			"repair":  "waggle install codex",
+			"status": "broken",
+			"issues": problems,
+			"repair": "waggle install codex",
 		}
 	}
 
