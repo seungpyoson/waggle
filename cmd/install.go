@@ -35,10 +35,23 @@ var installCmd = &cobra.Command{
 				}
 				printJSON(map[string]any{"ok": true, "message": "Claude Code integration installed. Restart Claude Code to activate."})
 			}
+		case "codex":
+			if installUninstall {
+				if err := install.UninstallCodex(); err != nil {
+					printErr("INSTALL_ERROR", err.Error())
+					return nil
+				}
+				printJSON(map[string]any{"ok": true, "message": "Codex integration removed"})
+			} else {
+				if err := install.InstallCodex(); err != nil {
+					printErr("INSTALL_ERROR", err.Error())
+					return nil
+				}
+				printJSON(map[string]any{"ok": true, "message": "Codex integration installed. Restart Codex to activate."})
+			}
 		default:
-			printErr("INVALID_REQUEST", fmt.Sprintf("unknown platform: %s (supported: claude-code)", platform))
+			printErr("INVALID_REQUEST", fmt.Sprintf("unknown platform: %s (supported: claude-code, codex)", platform))
 		}
 		return nil
 	},
 }
-
