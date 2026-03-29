@@ -497,23 +497,29 @@ func (s *Store) RecordNotificationFailure(projectID, agentName string, messageID
 	return nil
 }
 
-func (s *Store) HasUnresolvedFailedDeliveries(projectID, agentName string) (bool, error) {
+type DeliveryFailureSummary struct {
+	Retrying  int
+	Exhausted int
+}
+
+func (s *Store) DeliveryFailureSummary(projectID, agentName string) (DeliveryFailureSummary, error) {
 	if projectID == "" || agentName == "" {
-		return false, fmt.Errorf("project_id and agent_name required")
+		return DeliveryFailureSummary{}, fmt.Errorf("project_id and agent_name required")
 	}
 
-	var count int
+	var summary DeliveryFailureSummary
 	if err := s.db.QueryRow(`
-		SELECT COUNT(*)
+		SELECT
+			COALESCE(SUM(CASE WHEN retry_attempts > 0 AND retry_exhausted_at = '' THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN retry_exhausted_at != '' THEN 1 ELSE 0 END), 0)
 		FROM delivery_records
 		WHERE project_id = ? AND agent_name = ?
 		  AND notified_at = ''
 		  AND dismissed_at IS NULL
-		  AND retry_attempts > 0
-	`, projectID, agentName).Scan(&count); err != nil {
-		return false, fmt.Errorf("query unresolved failed deliveries: %w", err)
+	`, projectID, agentName).Scan(&summary.Retrying, &summary.Exhausted); err != nil {
+		return DeliveryFailureSummary{}, fmt.Errorf("query unresolved failed deliveries: %w", err)
 	}
-	return count > 0, nil
+	return summary, nil
 }
 
 // MarkSurfaced marks a delivery record as surfaced to the agent.

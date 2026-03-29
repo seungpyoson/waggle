@@ -255,6 +255,8 @@ func (m *Manager) stopWatch(key watchKey) {
 	m.clearDeliveryError(watchDeliveryErrorKey(worker.watch.ProjectID, worker.watch.AgentName))
 	if err := m.refreshDeliveryErrorState(worker.watch.ProjectID, worker.watch.AgentName); err != nil {
 		m.captureDeliveryError("delivery-status", fmt.Errorf("refresh delivery status for removed watch %s/%s: %w", worker.watch.ProjectID, worker.watch.AgentName, err))
+	} else {
+		m.clearDeliveryError("delivery-status")
 	}
 }
 
@@ -496,22 +498,22 @@ func (m *Manager) watchIsActive(projectID, agentName string) bool {
 }
 
 func (m *Manager) refreshDeliveryErrorState(projectID, agentName string) error {
-	hasFailures, err := m.store.HasUnresolvedFailedDeliveries(projectID, agentName)
+	summary, err := m.store.DeliveryFailureSummary(projectID, agentName)
 	if err != nil {
 		return err
 	}
-	if !hasFailures && m.hasPendingFailure(watchKey{projectID: projectID, agentName: agentName}) {
-		hasFailures = true
+	if summary.Retrying == 0 && summary.Exhausted == 0 && m.hasPendingFailure(watchKey{projectID: projectID, agentName: agentName}) {
+		summary.Retrying = 1
 	}
 	watchKey := watchDeliveryErrorKey(projectID, agentName)
 	backlogKey := backlogDeliveryErrorKey(projectID, agentName)
-	if !hasFailures {
+	if summary.Retrying == 0 && summary.Exhausted == 0 {
 		m.clearDeliveryError(watchKey)
 		m.clearDeliveryError(backlogKey)
 		return nil
 	}
 
-	errMsg := fmt.Errorf("unresolved delivery failures for %s/%s", projectID, agentName)
+	errMsg := fmt.Errorf("%d unresolved delivery failures for %s/%s (%d retrying, %d exhausted)", summary.Retrying+summary.Exhausted, projectID, agentName, summary.Retrying, summary.Exhausted)
 	if m.watchIsActive(projectID, agentName) {
 		m.clearDeliveryError(backlogKey)
 		m.captureDeliveryError(watchKey, errMsg)

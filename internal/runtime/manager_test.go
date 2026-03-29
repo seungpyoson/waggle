@@ -429,6 +429,7 @@ func TestManager_StopWatchClearsInflightState(t *testing.T) {
 	manager.mu.Unlock()
 	manager.captureDeliveryError(watchTransportErrorKey(watch), errors.New("transport error"))
 	manager.captureDeliveryError(watchDeliveryErrorKey(watch.ProjectID, watch.AgentName), errors.New("delivery error"))
+	manager.captureDeliveryError("delivery-status", errors.New("status refresh error"))
 
 	if err := store.RemoveWatch(watch.ProjectID, watch.AgentName); err != nil {
 		t.Fatal(err)
@@ -440,7 +441,8 @@ func TestManager_StopWatchClearsInflightState(t *testing.T) {
 		_, inflightExists := manager.inflight[key]
 		_, transportExists := manager.lastDeliveryErr[watchTransportErrorKey(watch)]
 		_, deliveryExists := manager.lastDeliveryErr[watchDeliveryErrorKey(watch.ProjectID, watch.AgentName)]
-		return len(manager.workers) == 0 && !inflightExists && !transportExists && !deliveryExists
+		_, statusExists := manager.lastDeliveryErr["delivery-status"]
+		return len(manager.workers) == 0 && !inflightExists && !transportExists && !deliveryExists && !statusExists
 	})
 }
 
