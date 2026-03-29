@@ -182,9 +182,15 @@ func TestE2E_ZombieFailFast_NoAutoStart(t *testing.T) {
 
 	select {
 	case result := <-done:
-		// Must fail (non-zero exit) — broker is zombie and --no-auto-start prevents restart
-		if result.err == nil {
-			t.Errorf("expected non-zero exit with zombie + --no-auto-start, but exited 0\noutput: %s", result.out)
+		output := string(result.out)
+		if result.err != nil {
+			t.Errorf("expected exit 0 with zombie + --no-auto-start, got error: %v\noutput: %s", result.err, result.out)
+		}
+		if !strings.Contains(output, `"running": false`) {
+			t.Errorf("expected broker.running=false in output, got:\n%s", output)
+		}
+		if !strings.Contains(output, `"ok": true`) {
+			t.Errorf("expected ok=true in output, got:\n%s", output)
 		}
 	case <-time.After(10 * time.Second):
 		if cmd.Process != nil {
