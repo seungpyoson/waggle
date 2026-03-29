@@ -3,6 +3,8 @@ package runtime
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -58,18 +60,19 @@ type Manager struct {
 	wg              sync.WaitGroup
 	started         bool
 	inflight        map[deliveryKey]struct{}
-	lastDeliveryErr error
+	lastDeliveryErr map[string]error
 	workers         map[watchKey]*watchWorker
 }
 
 func NewManager(store *Store, factory ListenerFactory, notifier Notifier) *Manager {
 	return &Manager{
-		store:    store,
-		factory:  factory,
-		notifier: notifier,
-		ctx:      context.Background(),
-		inflight: make(map[deliveryKey]struct{}),
-		workers:  make(map[watchKey]*watchWorker),
+		store:           store,
+		factory:         factory,
+		notifier:        notifier,
+		ctx:             context.Background(),
+		inflight:        make(map[deliveryKey]struct{}),
+		lastDeliveryErr: make(map[string]error),
+		workers:         make(map[watchKey]*watchWorker),
 	}
 }
 
@@ -138,7 +141,19 @@ func (m *Manager) WatchCount() int {
 func (m *Manager) LastDeliveryError() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.lastDeliveryErr
+	if len(m.lastDeliveryErr) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(m.lastDeliveryErr))
+	for key := range m.lastDeliveryErr {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, fmt.Sprintf("%s: %v", key, m.lastDeliveryErr[key]))
+	}
+	return fmt.Errorf("%s", strings.Join(parts, "; "))
 }
 
 func (m *Manager) runReconcileLoop(ctx context.Context) {
@@ -152,7 +167,7 @@ func (m *Manager) runReconcileLoop(ctx context.Context) {
 			return
 		case <-ticker.C:
 			if err := m.reconcile(ctx); err != nil {
-				m.captureDeliveryError(fmt.Errorf("reconcile watches: %w", err))
+				m.captureDeliveryError("reconcile", fmt.Errorf("reconcile watches: %w", err))
 			}
 		}
 	}
@@ -186,7 +201,7 @@ func (m *Manager) reconcile(ctx context.Context) error {
 	for _, key := range stale {
 		m.stopWatch(key)
 	}
-	m.clearDeliveryError()
+	m.clearDeliveryError("reconcile")
 	return nil
 }
 
@@ -263,13 +278,14 @@ func (m *Manager) runWatch(ctx context.Context, w Watch) {
 		}
 		listener, err := m.factory.NewListener(w)
 		if err != nil {
-			m.captureDeliveryError(fmt.Errorf("create listener for %s/%s: %w", w.ProjectID, w.AgentName, err))
+			m.captureDeliveryError(watchErrorKey(w), fmt.Errorf("create listener for %s/%s: %w", w.ProjectID, w.AgentName, err))
 			if !sleepWithContext(ctx, backoff) {
 				return
 			}
 			backoff = nextReconnectBackoff(backoff)
 			continue
 		}
+		m.clearDeliveryError(watchErrorKey(w))
 
 		err = listener.Listen(ctx, func(d Delivery) error {
 			return m.handleDelivery(w, d)
@@ -278,7 +294,7 @@ func (m *Manager) runWatch(ctx context.Context, w Watch) {
 			return
 		}
 		if err != nil {
-			m.captureDeliveryError(fmt.Errorf("listen for %s/%s: %w", w.ProjectID, w.AgentName, err))
+			m.captureDeliveryError(watchErrorKey(w), fmt.Errorf("listen for %s/%s: %w", w.ProjectID, w.AgentName, err))
 			if !sleepWithContext(ctx, backoff) {
 				return
 			}
@@ -338,9 +354,10 @@ func (m *Manager) handleDelivery(w Watch, d Delivery) error {
 		if err := m.recordNotificationFailure(currentRecord); err != nil {
 			return err
 		}
-		m.captureDeliveryError(fmt.Errorf("notify %s/%s/%d: %w", w.ProjectID, w.AgentName, d.MessageID, err))
+		m.captureDeliveryError(watchErrorKey(w), fmt.Errorf("notify %s/%s/%d: %w", w.ProjectID, w.AgentName, d.MessageID, err))
 		return nil
 	}
+	m.clearDeliveryError(watchErrorKey(w))
 	return nil
 }
 
@@ -371,7 +388,7 @@ func (m *Manager) retryPendingNotifications() error {
 		release()
 	}
 	if firstErr == nil {
-		m.clearDeliveryError()
+		m.clearDeliveryError("retry-sweep")
 	}
 	return firstErr
 }
@@ -386,7 +403,7 @@ func (m *Manager) runRetrySweepLoop(ctx context.Context) {
 			return
 		case <-ticker.C:
 			if err := m.retryPendingNotifications(); err != nil {
-				m.captureDeliveryError(fmt.Errorf("retry pending notifications: %w", err))
+				m.captureDeliveryError("retry-sweep", fmt.Errorf("retry pending notifications: %w", err))
 			}
 		}
 	}
@@ -413,22 +430,30 @@ func (m *Manager) reset() {
 	m.ctx = context.Background()
 	m.started = false
 	m.inflight = make(map[deliveryKey]struct{})
+	m.lastDeliveryErr = make(map[string]error)
 	m.workers = make(map[watchKey]*watchWorker)
 }
 
-func (m *Manager) captureDeliveryError(err error) {
-	if err == nil {
+func (m *Manager) captureDeliveryError(key string, err error) {
+	if key == "" || err == nil {
 		return
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.lastDeliveryErr = err
+	m.lastDeliveryErr[key] = err
 }
 
-func (m *Manager) clearDeliveryError() {
+func (m *Manager) clearDeliveryError(key string) {
+	if key == "" {
+		return
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.lastDeliveryErr = nil
+	delete(m.lastDeliveryErr, key)
+}
+
+func watchErrorKey(w Watch) string {
+	return fmt.Sprintf("watch/%s/%s", w.ProjectID, w.AgentName)
 }
 
 func notificationTitle(d Delivery) string {
@@ -525,14 +550,14 @@ func (m *Manager) runMaintenanceLoop(ctx context.Context) {
 			var hadErr bool
 			if _, err := m.store.PruneExpiredWatches(now); err != nil {
 				hadErr = true
-				m.captureDeliveryError(fmt.Errorf("prune expired watches: %w", err))
+				m.captureDeliveryError("maintenance", fmt.Errorf("prune expired watches: %w", err))
 			}
 			if _, err := m.store.PruneDeliveryRecords(now.Add(-config.Defaults.RuntimeDeliveryRetention)); err != nil {
 				hadErr = true
-				m.captureDeliveryError(fmt.Errorf("prune delivery records: %w", err))
+				m.captureDeliveryError("maintenance", fmt.Errorf("prune delivery records: %w", err))
 			}
 			if !hadErr {
-				m.clearDeliveryError()
+				m.clearDeliveryError("maintenance")
 			}
 		}
 	}

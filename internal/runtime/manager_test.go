@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -233,16 +234,24 @@ func TestManager_GlobalRetrySweepRetriesPendingNotificationsAcrossMultipleWatche
 	}
 }
 
-func TestManager_RetryPendingNotificationsClearsLastErrorOnSuccess(t *testing.T) {
+func TestManager_RetryPendingNotificationsClearsOnlyRetryErrorOnSuccess(t *testing.T) {
 	store := newTestStore(t)
 	manager := NewManager(store, newFakeListenerFactory(), &fakeNotifier{})
 
-	manager.captureDeliveryError(errors.New("stale error"))
+	manager.captureDeliveryError("retry-sweep", errors.New("stale retry error"))
+	manager.captureDeliveryError("reconcile", errors.New("live reconcile error"))
 	if err := manager.retryPendingNotifications(); err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.LastDeliveryError(); err != nil {
-		t.Fatalf("LastDeliveryError() = %v, want nil after successful retry sweep", err)
+	err := manager.LastDeliveryError()
+	if err == nil {
+		t.Fatal("LastDeliveryError() = nil, want remaining reconcile error")
+	}
+	if strings.Contains(err.Error(), "retry-sweep") {
+		t.Fatalf("LastDeliveryError() = %v, want retry-sweep error cleared", err)
+	}
+	if !strings.Contains(err.Error(), "reconcile") {
+		t.Fatalf("LastDeliveryError() = %v, want remaining reconcile error", err)
 	}
 }
 
@@ -297,16 +306,24 @@ func TestManager_StartReconcilesWatchesAddedAfterStartup(t *testing.T) {
 	})
 }
 
-func TestManager_ReconcileClearsLastErrorOnSuccess(t *testing.T) {
+func TestManager_ReconcileClearsOnlyReconcileErrorOnSuccess(t *testing.T) {
 	store := newTestStore(t)
 	manager := NewManager(store, newFakeListenerFactory(), &fakeNotifier{})
 
-	manager.captureDeliveryError(errors.New("stale error"))
+	manager.captureDeliveryError("reconcile", errors.New("stale reconcile error"))
+	manager.captureDeliveryError("watch/proj-a/agent-1", errors.New("live watch error"))
 	if err := manager.reconcile(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.LastDeliveryError(); err != nil {
-		t.Fatalf("LastDeliveryError() = %v, want nil after successful reconcile", err)
+	err := manager.LastDeliveryError()
+	if err == nil {
+		t.Fatal("LastDeliveryError() = nil, want remaining watch error")
+	}
+	if strings.Contains(err.Error(), "reconcile") {
+		t.Fatalf("LastDeliveryError() = %v, want reconcile error cleared", err)
+	}
+	if !strings.Contains(err.Error(), "watch/proj-a/agent-1") {
+		t.Fatalf("LastDeliveryError() = %v, want remaining watch error", err)
 	}
 }
 
