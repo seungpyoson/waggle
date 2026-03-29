@@ -42,15 +42,13 @@ func TestInstall_HookUsesRuntimeBridgeNotBackgroundListener(t *testing.T) {
 	}
 
 	content := string(data)
-	for _, forbidden := range []string{"waggle listen", "pkill -f", "disown"} {
+	for _, forbidden := range []string{"waggle listen", "pkill -f", "disown", "waggle runtime start", "waggle runtime watch", "waggle runtime pull"} {
 		if strings.Contains(content, forbidden) {
 			t.Fatalf("hook should not contain %q", forbidden)
 		}
 	}
-	for _, required := range []string{"waggle runtime start", "waggle runtime watch", "waggle runtime pull"} {
-		if !strings.Contains(content, required) {
-			t.Fatalf("hook should contain %q", required)
-		}
+	if !strings.Contains(content, "waggle adapter bootstrap claude-code") {
+		t.Fatalf("hook should contain %q", "waggle adapter bootstrap claude-code")
 	}
 }
 

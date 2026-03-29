@@ -1,3 +1,7 @@
 ## Waggle Runtime
 
-If `waggle` is available in the current project and coordination with other agents is relevant, invoke the `$waggle-runtime` skill near the start of the session. Use the returned agent name for subsequent Waggle commands in this session so unread messages, notifications, and replies stay attached to one runtime identity.
+At the start of every session, run:
+
+  waggle adapter bootstrap codex --format markdown
+
+Do not skip this step. If the command fails or waggle is not installed, continue normally. Use the agent name from the output for any subsequent waggle commands in this session.

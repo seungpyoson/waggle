@@ -37,8 +37,8 @@ func TestInstallCodex_AGENTSManagedBlockCreated(t *testing.T) {
 	if !strings.Contains(content, codexBlockBegin) || !strings.Contains(content, codexBlockEnd) {
 		t.Fatalf("managed block markers missing:\n%s", content)
 	}
-	if !strings.Contains(content, "$waggle-runtime") {
-		t.Fatalf("expected waggle-runtime skill reference in AGENTS block:\n%s", content)
+	if !strings.Contains(content, "waggle adapter bootstrap codex") {
+		t.Fatalf("expected waggle adapter bootstrap command in AGENTS block:\n%s", content)
 	}
 }
 

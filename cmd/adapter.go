@@ -60,6 +60,25 @@ var adapterBootstrapCmd = &cobra.Command{
 			return err
 		}
 
+		// Graceful skip: bootstrap is a startup-path command and must be
+		// resilient in degraded environments (no git, no env vars, no HOME).
+		// Exit 0 so hooks and AGENTS-block instructions remain non-fatal.
+		if result.Skipped {
+			switch strings.ToLower(strings.TrimSpace(adapterBootstrapFormat)) {
+			case "markdown":
+				// Silent — no output, exit 0.
+				return nil
+			default:
+				printJSON(map[string]any{
+					"ok":          false,
+					"skipped":     true,
+					"skip_reason": result.SkipReason,
+					"tool":        result.Tool,
+				})
+				return nil
+			}
+		}
+
 		switch strings.ToLower(strings.TrimSpace(adapterBootstrapFormat)) {
 		case "", "json":
 			printJSON(map[string]any{

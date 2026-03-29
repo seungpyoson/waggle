@@ -27,6 +27,8 @@ type BootstrapResult struct {
 	RuntimeRunning bool                `json:"runtime_running"`
 	RuntimeError   string              `json:"runtime_error,omitempty"`
 	Records        []rt.DeliveryRecord `json:"records"`
+	Skipped        bool                `json:"skipped,omitempty"`
+	SkipReason     string              `json:"skip_reason,omitempty"`
 }
 
 func Bootstrap(input BootstrapInput) (BootstrapResult, error) {
@@ -37,12 +39,12 @@ func Bootstrap(input BootstrapInput) (BootstrapResult, error) {
 
 	runtimePaths, err := resolveRuntimePaths()
 	if err != nil {
-		return BootstrapResult{}, err
+		return BootstrapResult{Tool: tool, Skipped: true, SkipReason: err.Error()}, nil
 	}
 
 	projectID, err := resolveProjectID(input.ProjectID)
 	if err != nil {
-		return BootstrapResult{}, err
+		return BootstrapResult{Tool: tool, Skipped: true, SkipReason: err.Error()}, nil
 	}
 
 	agentName := ResolveAgentName(tool, input.AgentName, resolveTTY(), os.Getppid(), os.Getpid())
