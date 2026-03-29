@@ -496,6 +496,9 @@ func TestManager_RetryPendingNotificationsUsesBacklogErrorKeyAfterWatchRemoval(t
 	if !strings.Contains(err.Error(), backlogDeliveryErrorKey("proj-a", "agent-1")) {
 		t.Fatalf("LastDeliveryError() = %v, want backlog-delivery key", err)
 	}
+	if !strings.Contains(err.Error(), "notify failed") {
+		t.Fatalf("LastDeliveryError() = %v, want preserved notifier failure detail", err)
+	}
 }
 
 func TestManager_BacklogRetrySuccessClearsBacklogErrorKey(t *testing.T) {
@@ -645,6 +648,9 @@ func TestManager_SameWatchSuccessDoesNotClearSiblingFailure(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), watchDeliveryErrorKey("proj-a", "agent-1")) {
 		t.Fatalf("LastDeliveryError() = %v, want watch-delivery key to remain while sibling failure exists", err)
+	}
+	if !strings.Contains(err.Error(), "first still failing") {
+		t.Fatalf("LastDeliveryError() = %v, want preserved notifier failure detail", err)
 	}
 
 	failed, err := store.GetRecord("proj-a", "agent-1", 601)
