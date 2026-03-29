@@ -107,7 +107,7 @@ func TestCheckAugment_NotInstalled(t *testing.T) {
 	issues, state := CheckAugment(tmpHome)
 
 	if state != StateNotInstalled {
-		t.Errorf("expected StateNotInstalled, got %d", state)
+		t.Errorf("expected StateNotInstalled, got %q", state)
 	}
 	if len(issues) != 0 {
 		t.Errorf("expected no issues, got %d", len(issues))
@@ -126,7 +126,7 @@ func TestCheckAugment_NotInstalledNoMarker(t *testing.T) {
 	issues, state := CheckAugment(tmpHome)
 
 	if state != StateNotInstalled {
-		t.Errorf("expected StateNotInstalled, got %d", state)
+		t.Errorf("expected StateNotInstalled, got %q", state)
 	}
 	if len(issues) != 0 {
 		t.Errorf("expected no issues, got %d", len(issues))
@@ -143,7 +143,7 @@ func TestCheckAugment_Healthy(t *testing.T) {
 	issues, state := CheckAugment(tmpHome)
 
 	if state != StateHealthy {
-		t.Errorf("expected StateHealthy, got %d", state)
+		t.Errorf("expected StateHealthy, got %q", state)
 	}
 	if len(issues) != 0 {
 		t.Errorf("expected no issues, got %d: %v", len(issues), issues)
@@ -162,7 +162,7 @@ func TestCheckAugment_Broken(t *testing.T) {
 	issues, state := CheckAugment(tmpHome)
 
 	if state != StateBroken {
-		t.Errorf("expected StateBroken, got %d", state)
+		t.Errorf("expected StateBroken, got %q", state)
 	}
 	if len(issues) == 0 {
 		t.Errorf("expected issues for broken block, got none")

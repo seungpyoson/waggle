@@ -159,6 +159,10 @@ func buildAdapterStatus(homeDir string) map[string]any {
 	agIssues, agState := install.CheckAuggie(homeDir)
 	result["auggie"] = formatAdapterState(agState, agIssues, "waggle install auggie")
 
+	// Check Augment
+	augIssues, augState := install.CheckAugment(homeDir)
+	result["augment"] = formatAdapterState(augState, augIssues, "waggle install augment")
+
 	return result
 }
 

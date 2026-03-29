@@ -348,6 +348,30 @@ func CheckAuggie(homeDir string) ([]HealthIssue, AdapterState) {
 	return nil, StateHealthy
 }
 
+// CheckAugment checks the health of the Augment integration.
+func CheckAugment(homeDir string) ([]HealthIssue, AdapterState) {
+	const repairCmd = "waggle install augment"
+	skillPath := filepath.Join(homeDir, ".augment", "skills", "waggle.md")
+	data, err := os.ReadFile(skillPath)
+	if err != nil {
+		return nil, StateNotInstalled
+	}
+
+	content := string(data)
+	if !strings.Contains(content, augmentBlockBegin) {
+		return nil, StateNotInstalled
+	}
+	if !strings.Contains(content, augmentBlockEnd) {
+		return []HealthIssue{{
+			Asset:   skillPath,
+			Problem: "managed block truncated (begin marker without end marker)",
+			Repair:  repairCmd,
+		}}, StateBroken
+	}
+
+	return nil, StateHealthy
+}
+
 // fileExists returns true if a path exists on disk (file or directory).
 func fileExists(path string) bool {
 	_, err := os.Stat(path)

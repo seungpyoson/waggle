@@ -195,6 +195,12 @@ func TestE2E_ZombieFailFast_NoAutoStart(t *testing.T) {
 		if !strings.Contains(output, `"BROKER_UNRESPONSIVE"`) {
 			t.Errorf("expected BROKER_UNRESPONSIVE code in output, got:\n%s", output)
 		}
+		if !strings.Contains(output, `"adapters"`) {
+			t.Errorf("expected adapters in output, got:\n%s", output)
+		}
+		if !strings.Contains(output, `"augment"`) {
+			t.Errorf("expected augment adapter status in output, got:\n%s", output)
+		}
 	case <-time.After(10 * time.Second):
 		if cmd.Process != nil {
 			cmd.Process.Kill()
