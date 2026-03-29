@@ -359,9 +359,10 @@ func (m *Manager) handleDelivery(w Watch, d Delivery) error {
 	}
 	if err := m.notifyRecord(w.ProjectID, w.AgentName, d.MessageID, notificationTitle(d), d.Body); err != nil {
 		releasePending := m.beginPendingFailure(watchKey{projectID: w.ProjectID, agentName: w.AgentName})
-		if err := m.recordNotificationFailure(currentRecord); err != nil {
+		recordErr := m.recordNotificationFailure(currentRecord)
+		if recordErr != nil {
 			releasePending()
-			return err
+			return recordErr
 		}
 		m.setDeliveryFailureCause(watchKey{projectID: w.ProjectID, agentName: w.AgentName}, err)
 		releasePending()
