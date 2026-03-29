@@ -60,6 +60,7 @@ type Manager struct {
 	wg              sync.WaitGroup
 	started         bool
 	inflight        map[deliveryKey]struct{}
+	pendingFailures map[watchKey]int
 	lastDeliveryErr map[string]error
 	workers         map[watchKey]*watchWorker
 }
@@ -71,6 +72,7 @@ func NewManager(store *Store, factory ListenerFactory, notifier Notifier) *Manag
 		notifier:        notifier,
 		ctx:             context.Background(),
 		inflight:        make(map[deliveryKey]struct{}),
+		pendingFailures: make(map[watchKey]int),
 		lastDeliveryErr: make(map[string]error),
 		workers:         make(map[watchKey]*watchWorker),
 	}
@@ -356,9 +358,12 @@ func (m *Manager) handleDelivery(w Watch, d Delivery) error {
 		}
 	}
 	if err := m.notifyRecord(w.ProjectID, w.AgentName, d.MessageID, notificationTitle(d), d.Body); err != nil {
+		releasePending := m.beginPendingFailure(watchKey{projectID: w.ProjectID, agentName: w.AgentName})
 		if err := m.recordNotificationFailure(currentRecord); err != nil {
+			releasePending()
 			return err
 		}
+		releasePending()
 		if err := m.refreshDeliveryErrorState(w.ProjectID, w.AgentName); err != nil {
 			return err
 		}
@@ -376,29 +381,32 @@ func (m *Manager) retryPendingNotifications() error {
 		return err
 	}
 	var firstErr error
+	affected := make(map[watchKey]struct{})
 	for _, rec := range records {
 		key := deliveryKey{
 			projectID: rec.ProjectID,
 			agentName: rec.AgentName,
 			messageID: rec.MessageID,
 		}
+		watch := watchKey{projectID: rec.ProjectID, agentName: rec.AgentName}
+		affected[watch] = struct{}{}
 		release, ok := m.beginInflight(key)
 		if !ok {
 			continue
 		}
 		if err := m.notifyRecord(rec.ProjectID, rec.AgentName, rec.MessageID, notificationTitle(Delivery{FromName: rec.FromName}), rec.Body); err != nil {
+			releasePending := m.beginPendingFailure(watch)
 			if recordErr := m.recordNotificationFailure(rec); recordErr != nil && firstErr == nil {
 				firstErr = recordErr
 			}
-			if refreshErr := m.refreshDeliveryErrorState(rec.ProjectID, rec.AgentName); refreshErr != nil && firstErr == nil {
-				firstErr = refreshErr
-			}
-		} else {
-			if refreshErr := m.refreshDeliveryErrorState(rec.ProjectID, rec.AgentName); refreshErr != nil && firstErr == nil {
-				firstErr = refreshErr
-			}
+			releasePending()
 		}
 		release()
+	}
+	for watch := range affected {
+		if refreshErr := m.refreshDeliveryErrorState(watch.projectID, watch.agentName); refreshErr != nil && firstErr == nil {
+			firstErr = refreshErr
+		}
 	}
 	if firstErr == nil {
 		m.clearDeliveryError("retry-sweep")
@@ -443,6 +451,7 @@ func (m *Manager) reset() {
 	m.ctx = context.Background()
 	m.started = false
 	m.inflight = make(map[deliveryKey]struct{})
+	m.pendingFailures = make(map[watchKey]int)
 	m.lastDeliveryErr = make(map[string]error)
 	m.workers = make(map[watchKey]*watchWorker)
 }
@@ -491,6 +500,9 @@ func (m *Manager) refreshDeliveryErrorState(projectID, agentName string) error {
 	if err != nil {
 		return err
 	}
+	if !hasFailures && m.hasPendingFailure(watchKey{projectID: projectID, agentName: agentName}) {
+		hasFailures = true
+	}
 	watchKey := watchDeliveryErrorKey(projectID, agentName)
 	backlogKey := backlogDeliveryErrorKey(projectID, agentName)
 	if !hasFailures {
@@ -499,7 +511,7 @@ func (m *Manager) refreshDeliveryErrorState(projectID, agentName string) error {
 		return nil
 	}
 
-	errMsg := fmt.Errorf("unresolved delivery failures pending retry for %s/%s", projectID, agentName)
+	errMsg := fmt.Errorf("unresolved delivery failures for %s/%s", projectID, agentName)
 	if m.watchIsActive(projectID, agentName) {
 		m.clearDeliveryError(backlogKey)
 		m.captureDeliveryError(watchKey, errMsg)
@@ -548,6 +560,7 @@ func (m *Manager) clearDeliveryStateForWatch(key watchKey) {
 			delete(m.inflight, deliveryKey)
 		}
 	}
+	delete(m.pendingFailures, key)
 }
 
 func (m *Manager) recordNotificationFailure(rec DeliveryRecord) error {
@@ -557,6 +570,28 @@ func (m *Manager) recordNotificationFailure(rec DeliveryRecord) error {
 		return m.store.RecordNotificationFailure(rec.ProjectID, rec.AgentName, rec.MessageID, attempts, time.Time{}, now)
 	}
 	return m.store.RecordNotificationFailure(rec.ProjectID, rec.AgentName, rec.MessageID, attempts, now.Add(retryDelayForAttempt(attempts)), time.Time{})
+}
+
+func (m *Manager) beginPendingFailure(key watchKey) func() {
+	m.mu.Lock()
+	m.pendingFailures[key]++
+	m.mu.Unlock()
+
+	return func() {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		if m.pendingFailures[key] <= 1 {
+			delete(m.pendingFailures, key)
+			return
+		}
+		m.pendingFailures[key]--
+	}
+}
+
+func (m *Manager) hasPendingFailure(key watchKey) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.pendingFailures[key] > 0
 }
 
 func retryDelayForAttempt(attempt int) time.Duration {

@@ -539,6 +539,40 @@ func TestManager_BacklogRetrySuccessClearsBacklogErrorKey(t *testing.T) {
 	}
 }
 
+func TestManager_RefreshDeliveryErrorStateKeepsActiveErrorWhileFailureInFlight(t *testing.T) {
+	store := newTestStore(t)
+	watch := Watch{ProjectID: "proj-a", AgentName: "agent-1", Source: "hook"}
+	if err := store.UpsertWatch(watch); err != nil {
+		t.Fatal(err)
+	}
+
+	factory := newFakeListenerFactory()
+	manager := NewManager(store, factory, &fakeNotifier{})
+	setRuntimeReconcileIntervalForTest(t, 10*time.Millisecond)
+
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Stop()
+
+	_ = factory.waitForListener(t, watch)
+
+	releasePending := manager.beginPendingFailure(watchKey{projectID: "proj-a", agentName: "agent-1"})
+	defer releasePending()
+
+	if err := manager.refreshDeliveryErrorState("proj-a", "agent-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	err := manager.LastDeliveryError()
+	if err == nil {
+		t.Fatal("LastDeliveryError() = nil, want active watch-delivery error while failure is in flight")
+	}
+	if !strings.Contains(err.Error(), watchDeliveryErrorKey("proj-a", "agent-1")) {
+		t.Fatalf("LastDeliveryError() = %v, want watch-delivery key", err)
+	}
+}
+
 func TestManager_SameWatchSuccessDoesNotClearSiblingFailure(t *testing.T) {
 	store := newTestStore(t)
 	watch := Watch{ProjectID: "proj-a", AgentName: "agent-1", Source: "hook"}
