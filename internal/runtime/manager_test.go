@@ -444,6 +444,101 @@ func TestManager_StopWatchClearsInflightState(t *testing.T) {
 	})
 }
 
+func TestManager_RetryPendingNotificationsUsesBacklogErrorKeyAfterWatchRemoval(t *testing.T) {
+	store := newTestStore(t)
+	watch := Watch{ProjectID: "proj-a", AgentName: "agent-1", Source: "hook"}
+	if err := store.UpsertWatch(watch); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.AddRecordIfAbsent(DeliveryRecord{
+		ProjectID:  "proj-a",
+		AgentName:  "agent-1",
+		MessageID:  404,
+		FromName:   "planner",
+		Body:       "retry after watch removal",
+		SentAt:     time.Unix(100, 0).UTC(),
+		ReceivedAt: time.Unix(101, 0).UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	factory := newFakeListenerFactory()
+	manager := NewManager(store, factory, &fakeNotifier{errs: []error{errors.New("notify failed")}})
+	setRuntimeReconcileIntervalForTest(t, 10*time.Millisecond)
+
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Stop()
+
+	_ = factory.waitForListener(t, watch)
+	if err := store.RemoveWatch(watch.ProjectID, watch.AgentName); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "watch removed", func() bool {
+		return manager.WatchCount() == 0
+	})
+
+	if err := manager.retryPendingNotifications(); err != nil {
+		t.Fatalf("retryPendingNotifications returned unexpected error: %v", err)
+	}
+
+	err := manager.LastDeliveryError()
+	if err == nil {
+		t.Fatal("LastDeliveryError() = nil, want backlog delivery error")
+	}
+	if strings.Contains(err.Error(), watchDeliveryErrorKey("proj-a", "agent-1")) {
+		t.Fatalf("LastDeliveryError() = %v, want no watch-delivery key after watch removal", err)
+	}
+	if !strings.Contains(err.Error(), backlogDeliveryErrorKey("proj-a", "agent-1")) {
+		t.Fatalf("LastDeliveryError() = %v, want backlog-delivery key", err)
+	}
+}
+
+func TestManager_BacklogRetrySuccessClearsBacklogErrorKey(t *testing.T) {
+	store := newTestStore(t)
+	if _, err := store.AddRecordIfAbsent(DeliveryRecord{
+		ProjectID:     "proj-a",
+		AgentName:     "agent-1",
+		MessageID:     505,
+		FromName:      "planner",
+		Body:          "backlog retry clears key",
+		SentAt:        time.Unix(110, 0).UTC(),
+		ReceivedAt:    time.Unix(111, 0).UTC(),
+		RetryAttempts: 1,
+		RetryNextAt:   time.Now().UTC().Add(-time.Millisecond),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	notifier := &fakeNotifier{errs: []error{errors.New("notify failed"), nil}}
+	manager := NewManager(store, newFakeListenerFactory(), notifier)
+
+	if err := manager.retryPendingNotifications(); err != nil {
+		t.Fatalf("first retryPendingNotifications returned unexpected error: %v", err)
+	}
+	err := manager.LastDeliveryError()
+	if err == nil || !strings.Contains(err.Error(), backlogDeliveryErrorKey("proj-a", "agent-1")) {
+		t.Fatalf("LastDeliveryError() = %v, want backlog-delivery error after failure", err)
+	}
+
+	rec, err := store.GetRecord("proj-a", "agent-1", 505)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordNotificationFailure("proj-a", "agent-1", 505, rec.RetryAttempts, time.Now().UTC().Add(-time.Millisecond), time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := manager.retryPendingNotifications(); err != nil {
+		t.Fatalf("second retryPendingNotifications returned unexpected error: %v", err)
+	}
+	if err := manager.LastDeliveryError(); err != nil {
+		t.Fatalf("LastDeliveryError() = %v, want nil after backlog retry success", err)
+	}
+}
+
 func TestManager_RestartsWatchAfterListenerError(t *testing.T) {
 	store := newTestStore(t)
 	if err := store.UpsertWatch(Watch{ProjectID: "proj-a", AgentName: "agent-1", Source: "hook"}); err != nil {

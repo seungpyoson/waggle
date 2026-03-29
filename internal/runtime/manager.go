@@ -356,9 +356,11 @@ func (m *Manager) handleDelivery(w Watch, d Delivery) error {
 		if err := m.recordNotificationFailure(currentRecord); err != nil {
 			return err
 		}
+		m.clearDeliveryError(backlogDeliveryErrorKey(w.ProjectID, w.AgentName))
 		m.captureDeliveryError(watchDeliveryErrorKey(w.ProjectID, w.AgentName), fmt.Errorf("notify %s/%s/%d: %w", w.ProjectID, w.AgentName, d.MessageID, err))
 		return nil
 	}
+	m.clearDeliveryError(backlogDeliveryErrorKey(w.ProjectID, w.AgentName))
 	m.clearDeliveryError(watchDeliveryErrorKey(w.ProjectID, w.AgentName))
 	return nil
 }
@@ -379,13 +381,16 @@ func (m *Manager) retryPendingNotifications() error {
 		if !ok {
 			continue
 		}
+		errorKey, staleKey := m.deliveryErrorKeys(rec.ProjectID, rec.AgentName)
 		if err := m.notifyRecord(rec.ProjectID, rec.AgentName, rec.MessageID, notificationTitle(Delivery{FromName: rec.FromName}), rec.Body); err != nil {
-			m.captureDeliveryError(watchDeliveryErrorKey(rec.ProjectID, rec.AgentName), fmt.Errorf("notify %s/%s/%d: %w", rec.ProjectID, rec.AgentName, rec.MessageID, err))
+			m.clearDeliveryError(staleKey)
+			m.captureDeliveryError(errorKey, fmt.Errorf("notify %s/%s/%d: %w", rec.ProjectID, rec.AgentName, rec.MessageID, err))
 			if recordErr := m.recordNotificationFailure(rec); recordErr != nil && firstErr == nil {
 				firstErr = recordErr
 			}
 		} else {
-			m.clearDeliveryError(watchDeliveryErrorKey(rec.ProjectID, rec.AgentName))
+			m.clearDeliveryError(errorKey)
+			m.clearDeliveryError(staleKey)
 		}
 		release()
 	}
@@ -460,6 +465,19 @@ func watchTransportErrorKey(w Watch) string {
 
 func watchDeliveryErrorKey(projectID, agentName string) string {
 	return fmt.Sprintf("watch-delivery/%s/%s", projectID, agentName)
+}
+
+func backlogDeliveryErrorKey(projectID, agentName string) string {
+	return fmt.Sprintf("backlog-delivery/%s/%s", projectID, agentName)
+}
+
+func (m *Manager) deliveryErrorKeys(projectID, agentName string) (activeKey, staleKey string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.workers[watchKey{projectID: projectID, agentName: agentName}]; ok {
+		return watchDeliveryErrorKey(projectID, agentName), backlogDeliveryErrorKey(projectID, agentName)
+	}
+	return backlogDeliveryErrorKey(projectID, agentName), watchDeliveryErrorKey(projectID, agentName)
 }
 
 func notificationTitle(d Delivery) string {
