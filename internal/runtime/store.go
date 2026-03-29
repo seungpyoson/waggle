@@ -83,6 +83,9 @@ func migrate(db *sql.DB) error {
 		sent_at TEXT NOT NULL,
 		received_at TEXT NOT NULL,
 		notified_at TEXT NOT NULL,
+		retry_attempts INTEGER NOT NULL DEFAULT 0,
+		retry_next_at TEXT NOT NULL DEFAULT '',
+		retry_exhausted_at TEXT NOT NULL DEFAULT '',
 		surfaced_at TEXT,
 		dismissed_at TEXT,
 		UNIQUE (project_id, agent_name, message_id)
@@ -97,8 +100,23 @@ func migrate(db *sql.DB) error {
 	if _, err := db.Exec(`ALTER TABLE watches ADD COLUMN expires_at TEXT`); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
 		return fmt.Errorf("add watches.expires_at column: %w", err)
 	}
+	if _, err := db.Exec(`ALTER TABLE delivery_records ADD COLUMN retry_attempts INTEGER NOT NULL DEFAULT 0`); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+		return fmt.Errorf("add delivery_records.retry_attempts column: %w", err)
+	}
+	if _, err := db.Exec(`ALTER TABLE delivery_records ADD COLUMN retry_next_at TEXT NOT NULL DEFAULT ''`); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+		return fmt.Errorf("add delivery_records.retry_next_at column: %w", err)
+	}
+	if _, err := db.Exec(`ALTER TABLE delivery_records ADD COLUMN retry_exhausted_at TEXT NOT NULL DEFAULT ''`); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+		return fmt.Errorf("add delivery_records.retry_exhausted_at column: %w", err)
+	}
 	if _, err := db.Exec(`UPDATE delivery_records SET notified_at = '' WHERE notified_at IS NULL`); err != nil {
 		return fmt.Errorf("normalize delivery_records.notified_at: %w", err)
+	}
+	if _, err := db.Exec(`UPDATE delivery_records SET retry_next_at = '' WHERE retry_next_at IS NULL`); err != nil {
+		return fmt.Errorf("normalize delivery_records.retry_next_at: %w", err)
+	}
+	if _, err := db.Exec(`UPDATE delivery_records SET retry_exhausted_at = '' WHERE retry_exhausted_at IS NULL`); err != nil {
+		return fmt.Errorf("normalize delivery_records.retry_exhausted_at: %w", err)
 	}
 	return nil
 }
@@ -206,8 +224,8 @@ func (s *Store) AddRecord(rec DeliveryRecord) error {
 	_, err := s.db.Exec(`
 		INSERT INTO delivery_records (
 			project_id, agent_name, message_id, from_name, body,
-			sent_at, received_at, notified_at, surfaced_at, dismissed_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			sent_at, received_at, notified_at, retry_attempts, retry_next_at, retry_exhausted_at, surfaced_at, dismissed_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(project_id, agent_name, message_id) DO UPDATE SET
 			from_name = excluded.from_name,
 			body = excluded.body,
@@ -217,10 +235,14 @@ func (s *Store) AddRecord(rec DeliveryRecord) error {
 				WHEN excluded.notified_at = '' THEN delivery_records.notified_at
 				ELSE excluded.notified_at
 			END,
+			retry_attempts = delivery_records.retry_attempts,
+			retry_next_at = delivery_records.retry_next_at,
+			retry_exhausted_at = delivery_records.retry_exhausted_at,
 			surfaced_at = COALESCE(excluded.surfaced_at, delivery_records.surfaced_at),
 			dismissed_at = COALESCE(excluded.dismissed_at, delivery_records.dismissed_at)
 	`, rec.ProjectID, rec.AgentName, rec.MessageID, rec.FromName, rec.Body,
 		timeValue(rec.SentAt), timeValue(rec.ReceivedAt), textTimeValue(rec.NotifiedAt),
+		rec.RetryAttempts, textTimeValue(rec.RetryNextAt), textTimeValue(rec.RetryExhaustedAt),
 		timeValue(rec.SurfacedAt), timeValue(rec.DismissedAt))
 	if err != nil {
 		return fmt.Errorf("adding delivery record: %w", err)
@@ -249,11 +271,12 @@ func (s *Store) AddRecordIfAbsent(rec DeliveryRecord) (bool, error) {
 	result, err := s.db.Exec(`
 		INSERT INTO delivery_records (
 			project_id, agent_name, message_id, from_name, body,
-			sent_at, received_at, notified_at, surfaced_at, dismissed_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			sent_at, received_at, notified_at, retry_attempts, retry_next_at, retry_exhausted_at, surfaced_at, dismissed_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(project_id, agent_name, message_id) DO NOTHING
 	`, rec.ProjectID, rec.AgentName, rec.MessageID, rec.FromName, rec.Body,
 		timeValue(rec.SentAt), timeValue(rec.ReceivedAt), textTimeValue(rec.NotifiedAt),
+		rec.RetryAttempts, textTimeValue(rec.RetryNextAt), textTimeValue(rec.RetryExhaustedAt),
 		timeValue(rec.SurfacedAt), timeValue(rec.DismissedAt))
 	if err != nil {
 		return false, fmt.Errorf("adding delivery record if absent: %w", err)
@@ -277,7 +300,7 @@ func (s *Store) GetRecord(projectID, agentName string, messageID int64) (Deliver
 
 	row := s.db.QueryRow(`
 		SELECT project_id, agent_name, message_id, from_name, body,
-		       sent_at, received_at, notified_at, surfaced_at, dismissed_at
+		       sent_at, received_at, notified_at, retry_attempts, retry_next_at, retry_exhausted_at, surfaced_at, dismissed_at
 		FROM delivery_records
 		WHERE project_id = ? AND agent_name = ? AND message_id = ?
 	`, projectID, agentName, messageID)
@@ -306,7 +329,7 @@ func (s *Store) MarkNotified(projectID, agentName string, messageID int64, notif
 
 	result, err := s.db.Exec(`
 		UPDATE delivery_records
-		SET notified_at = ?
+		SET notified_at = ?, retry_attempts = 0, retry_next_at = '', retry_exhausted_at = ''
 		WHERE project_id = ? AND agent_name = ? AND message_id = ?
 	`, textTimeValue(notifiedAt), projectID, agentName, messageID)
 	if err != nil {
@@ -331,11 +354,13 @@ func (s *Store) PendingNotifications(projectID, agentName string) ([]DeliveryRec
 
 	rows, err := s.db.Query(`
 		SELECT project_id, agent_name, message_id, from_name, body,
-		       sent_at, received_at, notified_at, surfaced_at, dismissed_at
+		       sent_at, received_at, notified_at, retry_attempts, retry_next_at, retry_exhausted_at, surfaced_at, dismissed_at
 		FROM delivery_records
 		WHERE project_id = ? AND agent_name = ? AND notified_at = '' AND dismissed_at IS NULL
+		  AND retry_exhausted_at = ''
+		  AND (retry_next_at = '' OR retry_next_at <= ?)
 		ORDER BY received_at ASC, message_id ASC
-	`, projectID, agentName)
+	`, projectID, agentName, time.Now().UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		return nil, fmt.Errorf("query pending notifications: %w", err)
 	}
@@ -365,9 +390,11 @@ func (s *Store) PendingNotificationsAll() ([]DeliveryRecord, error) {
 func (s *Store) PendingNotificationsBatch(limit int) ([]DeliveryRecord, error) {
 	query := `
 		SELECT project_id, agent_name, message_id, from_name, body,
-		       sent_at, received_at, notified_at, surfaced_at, dismissed_at
+		       sent_at, received_at, notified_at, retry_attempts, retry_next_at, retry_exhausted_at, surfaced_at, dismissed_at
 		FROM delivery_records
 		WHERE notified_at = '' AND dismissed_at IS NULL
+		  AND retry_exhausted_at = ''
+		  AND (retry_next_at = '' OR retry_next_at <= ?)
 		ORDER BY project_id ASC, agent_name ASC, message_id ASC
 	`
 
@@ -376,9 +403,9 @@ func (s *Store) PendingNotificationsBatch(limit int) ([]DeliveryRecord, error) {
 		err  error
 	)
 	if limit > 0 {
-		rows, err = s.db.Query(query+` LIMIT ?`, limit)
+		rows, err = s.db.Query(query+` LIMIT ?`, time.Now().UTC().Format(time.RFC3339Nano), limit)
 	} else {
-		rows, err = s.db.Query(query)
+		rows, err = s.db.Query(query, time.Now().UTC().Format(time.RFC3339Nano))
 	}
 	if err != nil {
 		return nil, fmt.Errorf("query pending notifications: %w", err)
@@ -407,7 +434,7 @@ func (s *Store) Unread(projectID, agentName string) ([]DeliveryRecord, error) {
 
 	rows, err := s.db.Query(`
 		SELECT project_id, agent_name, message_id, from_name, body,
-		       sent_at, received_at, notified_at, surfaced_at, dismissed_at
+		       sent_at, received_at, notified_at, retry_attempts, retry_next_at, retry_exhausted_at, surfaced_at, dismissed_at
 		FROM delivery_records
 		WHERE project_id = ? AND agent_name = ? AND surfaced_at IS NULL AND dismissed_at IS NULL
 		ORDER BY received_at ASC, message_id ASC
@@ -429,6 +456,38 @@ func (s *Store) Unread(projectID, agentName string) ([]DeliveryRecord, error) {
 		return nil, fmt.Errorf("iterate unread records: %w", err)
 	}
 	return records, nil
+}
+
+func (s *Store) RecordNotificationFailure(projectID, agentName string, messageID int64, attempts int, nextRetryAt, exhaustedAt time.Time) error {
+	if projectID == "" || agentName == "" {
+		return fmt.Errorf("project_id and agent_name required")
+	}
+	if messageID == 0 {
+		return fmt.Errorf("message_id required")
+	}
+	if attempts <= 0 {
+		return fmt.Errorf("attempts must be positive")
+	}
+	if nextRetryAt.IsZero() == exhaustedAt.IsZero() {
+		return fmt.Errorf("exactly one of nextRetryAt or exhaustedAt must be set")
+	}
+
+	result, err := s.db.Exec(`
+		UPDATE delivery_records
+		SET retry_attempts = ?, retry_next_at = ?, retry_exhausted_at = ?
+		WHERE project_id = ? AND agent_name = ? AND message_id = ?
+	`, attempts, textTimeValue(nextRetryAt), textTimeValue(exhaustedAt), projectID, agentName, messageID)
+	if err != nil {
+		return fmt.Errorf("recording notification failure: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("counting failed notification rows: %w", err)
+	}
+	if rowsAffected == 0 {
+		return ErrRecordNotFound
+	}
+	return nil
 }
 
 // MarkSurfaced marks a delivery record as surfaced to the agent.
@@ -525,6 +584,7 @@ func scanDeliveryRecord(scanner interface {
 	var (
 		rec                            DeliveryRecord
 		sentAt, receivedAt, notifiedAt sql.NullString
+		retryNextAt, retryExhaustedAt  sql.NullString
 		surfacedAt, dismissedAt        sql.NullString
 	)
 
@@ -537,6 +597,9 @@ func scanDeliveryRecord(scanner interface {
 		&sentAt,
 		&receivedAt,
 		&notifiedAt,
+		&rec.RetryAttempts,
+		&retryNextAt,
+		&retryExhaustedAt,
 		&surfacedAt,
 		&dismissedAt,
 	); err != nil {
@@ -546,6 +609,8 @@ func scanDeliveryRecord(scanner interface {
 	rec.SentAt = parseTime(sentAt)
 	rec.ReceivedAt = parseTime(receivedAt)
 	rec.NotifiedAt = parseTime(notifiedAt)
+	rec.RetryNextAt = parseTime(retryNextAt)
+	rec.RetryExhaustedAt = parseTime(retryExhaustedAt)
 	rec.SurfacedAt = parseTime(surfacedAt)
 	rec.DismissedAt = parseTime(dismissedAt)
 	return rec, nil

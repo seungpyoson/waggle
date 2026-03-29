@@ -58,14 +58,8 @@ type Manager struct {
 	wg              sync.WaitGroup
 	started         bool
 	inflight        map[deliveryKey]struct{}
-	retries         map[deliveryKey]notificationRetry
 	lastDeliveryErr error
 	workers         map[watchKey]*watchWorker
-}
-
-type notificationRetry struct {
-	attempts int
-	nextTry  time.Time
 }
 
 func NewManager(store *Store, factory ListenerFactory, notifier Notifier) *Manager {
@@ -75,7 +69,6 @@ func NewManager(store *Store, factory ListenerFactory, notifier Notifier) *Manag
 		notifier: notifier,
 		ctx:      context.Background(),
 		inflight: make(map[deliveryKey]struct{}),
-		retries:  make(map[deliveryKey]notificationRetry),
 		workers:  make(map[watchKey]*watchWorker),
 	}
 }
@@ -258,7 +251,6 @@ func (m *Manager) stopAllWorkers() {
 
 	m.mu.Lock()
 	m.inflight = make(map[deliveryKey]struct{})
-	m.retries = make(map[deliveryKey]notificationRetry)
 	m.mu.Unlock()
 }
 
@@ -324,22 +316,30 @@ func (m *Manager) handleDelivery(w Watch, d Delivery) error {
 	if err != nil {
 		return err
 	}
+	currentRecord := record
 	if !inserted {
 		existing, err := m.store.GetRecord(w.ProjectID, w.AgentName, d.MessageID)
 		if err != nil {
 			return err
 		}
+		currentRecord = existing
 		if !existing.NotifiedAt.IsZero() {
-			m.clearRetry(key)
+			return nil
+		}
+		if !existing.RetryExhaustedAt.IsZero() {
+			return nil
+		}
+		if !existing.RetryNextAt.IsZero() && existing.RetryNextAt.After(time.Now().UTC()) {
 			return nil
 		}
 	}
 	if err := m.notifyRecord(w.ProjectID, w.AgentName, d.MessageID, notificationTitle(d), d.Body); err != nil {
-		m.recordRetry(key)
+		if err := m.recordNotificationFailure(currentRecord); err != nil {
+			return err
+		}
 		m.captureDeliveryError(fmt.Errorf("notify %s/%s/%d: %w", w.ProjectID, w.AgentName, d.MessageID, err))
 		return nil
 	}
-	m.clearRetry(key)
 	return nil
 }
 
@@ -359,17 +359,13 @@ func (m *Manager) retryPendingNotifications() error {
 		if !ok {
 			continue
 		}
-		if !m.shouldRetry(key) {
-			release()
-			continue
-		}
 		if err := m.notifyRecord(rec.ProjectID, rec.AgentName, rec.MessageID, notificationTitle(Delivery{FromName: rec.FromName}), rec.Body); err != nil {
-			m.recordRetry(key)
+			if recordErr := m.recordNotificationFailure(rec); recordErr != nil && firstErr == nil {
+				firstErr = recordErr
+			}
 			if firstErr == nil {
 				firstErr = err
 			}
-		} else {
-			m.clearRetry(key)
 		}
 		release()
 	}
@@ -413,7 +409,6 @@ func (m *Manager) reset() {
 	m.ctx = context.Background()
 	m.started = false
 	m.inflight = make(map[deliveryKey]struct{})
-	m.retries = make(map[deliveryKey]notificationRetry)
 	m.workers = make(map[watchKey]*watchWorker)
 }
 
@@ -455,36 +450,6 @@ func (m *Manager) beginInflight(key deliveryKey) (func(), bool) {
 	}, true
 }
 
-func (m *Manager) shouldRetry(key deliveryKey) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	state, ok := m.retries[key]
-	if !ok {
-		return true
-	}
-	if state.attempts >= config.Defaults.RuntimeNotificationRetryLimit {
-		return false
-	}
-	return time.Now().UTC().After(state.nextTry) || time.Now().UTC().Equal(state.nextTry)
-}
-
-func (m *Manager) recordRetry(key deliveryKey) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	state := m.retries[key]
-	state.attempts++
-	state.nextTry = time.Now().UTC().Add(retryDelayForAttempt(state.attempts))
-	m.retries[key] = state
-}
-
-func (m *Manager) clearRetry(key deliveryKey) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	delete(m.retries, key)
-}
-
 func (m *Manager) clearDeliveryStateForWatch(key watchKey) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -494,11 +459,15 @@ func (m *Manager) clearDeliveryStateForWatch(key watchKey) {
 			delete(m.inflight, deliveryKey)
 		}
 	}
-	for deliveryKey := range m.retries {
-		if deliveryKey.projectID == key.projectID && deliveryKey.agentName == key.agentName {
-			delete(m.retries, deliveryKey)
-		}
+}
+
+func (m *Manager) recordNotificationFailure(rec DeliveryRecord) error {
+	attempts := rec.RetryAttempts + 1
+	now := time.Now().UTC()
+	if attempts >= config.Defaults.RuntimeNotificationRetryLimit {
+		return m.store.RecordNotificationFailure(rec.ProjectID, rec.AgentName, rec.MessageID, attempts, time.Time{}, now)
 	}
+	return m.store.RecordNotificationFailure(rec.ProjectID, rec.AgentName, rec.MessageID, attempts, now.Add(retryDelayForAttempt(attempts)), time.Time{})
 }
 
 func retryDelayForAttempt(attempt int) time.Duration {
