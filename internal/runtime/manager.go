@@ -578,11 +578,9 @@ func (m *Manager) clearDeliveryStateForWatch(key watchKey) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	for deliveryKey := range m.inflight {
-		if deliveryKey.projectID == key.projectID && deliveryKey.agentName == key.agentName {
-			delete(m.inflight, deliveryKey)
-		}
-	}
+	// stopWatch only owns worker-scoped state. A blocked retry sweep may still hold
+	// an inflight dedupe lock for the same watch/message across remove+re-add, and
+	// clearing it here would allow duplicate concurrent notifications.
 	delete(m.pendingFailures, key)
 }
 

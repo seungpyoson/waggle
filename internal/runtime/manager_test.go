@@ -405,7 +405,7 @@ func TestManager_StartReconcilesWatchesRemovedAfterStartup(t *testing.T) {
 	})
 }
 
-func TestManager_StopWatchClearsInflightState(t *testing.T) {
+func TestManager_StopWatchClearsWorkerErrorsAndPendingState(t *testing.T) {
 	store := newTestStore(t)
 	watch := Watch{ProjectID: "proj-a", AgentName: "agent-1", Source: "hook"}
 	if err := store.UpsertWatch(watch); err != nil {
@@ -426,6 +426,7 @@ func TestManager_StopWatchClearsInflightState(t *testing.T) {
 	key := deliveryKey{projectID: "proj-a", agentName: "agent-1", messageID: 99}
 	manager.mu.Lock()
 	manager.inflight[key] = struct{}{}
+	manager.pendingFailures[watchKey{projectID: watch.ProjectID, agentName: watch.AgentName}] = 1
 	manager.mu.Unlock()
 	manager.captureDeliveryError(watchTransportErrorKey(watch), errors.New("transport error"))
 	manager.captureDeliveryError(watchDeliveryErrorKey(watch.ProjectID, watch.AgentName), errors.New("delivery error"))
@@ -439,10 +440,11 @@ func TestManager_StopWatchClearsInflightState(t *testing.T) {
 		manager.mu.Lock()
 		defer manager.mu.Unlock()
 		_, inflightExists := manager.inflight[key]
+		_, pendingExists := manager.pendingFailures[watchKey{projectID: watch.ProjectID, agentName: watch.AgentName}]
 		_, transportExists := manager.lastDeliveryErr[watchTransportErrorKey(watch)]
 		_, deliveryExists := manager.lastDeliveryErr[watchDeliveryErrorKey(watch.ProjectID, watch.AgentName)]
 		_, statusExists := manager.lastDeliveryErr[refreshDeliveryStatusErrorKey(watch.ProjectID, watch.AgentName)]
-		return len(manager.workers) == 0 && !inflightExists && !transportExists && !deliveryExists && !statusExists
+		return len(manager.workers) == 0 && inflightExists && !pendingExists && !transportExists && !deliveryExists && !statusExists
 	})
 }
 
@@ -1103,6 +1105,87 @@ func TestManager_PendingRetryAndLiveDeliveryDoNotDoubleNotifySameRecord(t *testi
 	}
 	if notifier.callCount() != 1 {
 		t.Fatalf("notify count = %d, want 1", notifier.callCount())
+	}
+}
+
+func TestManager_PendingRetryPreservesInflightAcrossWatchRemoveAndReAdd(t *testing.T) {
+	store := newTestStore(t)
+	watch := Watch{ProjectID: "proj-a", AgentName: "agent-1", Source: "hook"}
+	if err := store.UpsertWatch(watch); err != nil {
+		t.Fatal(err)
+	}
+
+	notifier := &blockingNotifier{
+		started: make(chan struct{}, 1),
+		release: make(chan struct{}),
+	}
+	factory := newFakeListenerFactory()
+	manager := NewManager(store, factory, notifier)
+	setRuntimeReconcileIntervalForTest(t, 10*time.Millisecond)
+
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Stop()
+
+	originalListener := factory.waitForListener(t, watch)
+	record := DeliveryRecord{
+		ProjectID:  watch.ProjectID,
+		AgentName:  watch.AgentName,
+		MessageID:  780,
+		FromName:   "planner",
+		Body:       "same message across watch re-add",
+		SentAt:     time.Unix(108, 0).UTC(),
+		ReceivedAt: time.Unix(109, 0).UTC(),
+	}
+	if _, err := store.AddRecordIfAbsent(record); err != nil {
+		t.Fatal(err)
+	}
+
+	retryDone := make(chan error, 1)
+	go func() {
+		retryDone <- manager.retryPendingNotifications()
+	}()
+
+	<-notifier.started
+
+	if err := store.RemoveWatch(watch.ProjectID, watch.AgentName); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "watch removed during blocked retry", func() bool {
+		return manager.WatchCount() == 0
+	})
+
+	if err := store.UpsertWatch(watch); err != nil {
+		t.Fatal(err)
+	}
+	replacementListener := waitForNewListener(t, factory, watch, originalListener)
+	waitFor(t, "watch re-added during blocked retry", func() bool {
+		return manager.WatchCount() == 1
+	})
+
+	liveDone := make(chan error, 1)
+	go func() {
+		liveDone <- replacementListener.emit(Delivery{
+			MessageID:  record.MessageID,
+			FromName:   record.FromName,
+			Body:       record.Body,
+			SentAt:     record.SentAt,
+			ReceivedAt: record.ReceivedAt,
+		})
+	}()
+
+	if err := <-liveDone; err != nil {
+		t.Fatalf("replacement listener emit returned unexpected error: %v", err)
+	}
+
+	close(notifier.release)
+
+	if err := <-retryDone; err != nil {
+		t.Fatalf("retryPendingNotifications returned unexpected error: %v", err)
+	}
+	if notifier.callCount() != 1 {
+		t.Fatalf("notify count = %d, want 1 with inflight dedupe preserved across re-add", notifier.callCount())
 	}
 }
 
