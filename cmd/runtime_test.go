@@ -139,6 +139,73 @@ func TestRuntimePullReturnsUnreadRecordsAndMarksThemSurfaced(t *testing.T) {
 	}
 }
 
+func TestExecuteRootCommandForTestDoesNotLeakRuntimePullProjectID(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	store := openRuntimeStoreForTest(t)
+	now := time.Now().UTC().Round(time.Second)
+	for _, rec := range []rt.DeliveryRecord{
+		{
+			ProjectID:  "proj-flag",
+			AgentName:  "agent-a",
+			MessageID:  101,
+			FromName:   "sender-flag",
+			Body:       "from explicit project",
+			SentAt:     now.Add(-2 * time.Minute),
+			ReceivedAt: now.Add(-1 * time.Minute),
+			NotifiedAt: now.Add(-1 * time.Minute),
+		},
+		{
+			ProjectID:  "proj-env",
+			AgentName:  "agent-a",
+			MessageID:  202,
+			FromName:   "sender-env",
+			Body:       "from env project",
+			SentAt:     now.Add(-4 * time.Minute),
+			ReceivedAt: now.Add(-3 * time.Minute),
+			NotifiedAt: now.Add(-3 * time.Minute),
+		},
+	} {
+		if err := store.AddRecord(rec); err != nil {
+			t.Fatalf("add unread record: %v", err)
+		}
+	}
+
+	stdout, stderr := executeRootCommandForTest(t, "runtime", "pull", "agent-a", "--project-id", "proj-flag")
+	if stderr != "" {
+		t.Fatalf("runtime pull with explicit project stderr = %q, want empty", stderr)
+	}
+
+	var firstPull struct {
+		OK      bool                `json:"ok"`
+		Records []rt.DeliveryRecord `json:"records"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &firstPull); err != nil {
+		t.Fatalf("unmarshal first pull response: %v", err)
+	}
+	if !firstPull.OK || len(firstPull.Records) != 1 || firstPull.Records[0].MessageID != 101 {
+		t.Fatalf("first pull response = %+v, want unread record 101 only", firstPull)
+	}
+
+	t.Setenv("WAGGLE_PROJECT_ID", "proj-env")
+	stdout, stderr = executeRootCommandForTest(t, "runtime", "pull", "agent-a")
+	if stderr != "" {
+		t.Fatalf("runtime pull with env project stderr = %q, want empty", stderr)
+	}
+
+	var secondPull struct {
+		OK      bool                `json:"ok"`
+		Records []rt.DeliveryRecord `json:"records"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &secondPull); err != nil {
+		t.Fatalf("unmarshal second pull response: %v", err)
+	}
+	if !secondPull.OK || len(secondPull.Records) != 1 || secondPull.Records[0].MessageID != 202 {
+		t.Fatalf("second pull response = %+v, want unread record 202 only", secondPull)
+	}
+}
+
 func TestRuntimeStatusReportsStoppedWhenStateMissing(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
@@ -171,26 +238,161 @@ func TestExecuteRootCommandForTestDoesNotLeakInstallUninstallFlag(t *testing.T) 
 	}
 }
 
+type commandTestState struct {
+	noAutoStart               bool
+	paths                     config.Paths
+	installUninstall          bool
+	listenName                string
+	listenOutput              string
+	completeToken             string
+	listState                 string
+	listType                  string
+	listOwner                 string
+	runtimeForeground         bool
+	spawnName                 string
+	spawnType                 string
+	inboxName                 string
+	runtimePullProjectID      string
+	claimType                 string
+	claimTags                 string
+	runtimeWatchProjectID     string
+	runtimeWatchSource        string
+	runtimeUnwatchProjectID   string
+	runtimeWatchesProjectID   string
+	sendName                  string
+	sendPriority              string
+	sendTTL                   int
+	sendAwaitAck              bool
+	sendTimeout               int
+	taskType                  string
+	taskTags                  string
+	taskDependsOn             string
+	taskLease                 int
+	taskMaxRetries            int
+	taskPriority              int
+	taskIdempotencyKey        string
+	taskCreateTTL             string
+	adapterBootstrapTool      string
+	adapterBootstrapAgent     string
+	adapterBootstrapProjectID string
+	adapterBootstrapSource    string
+	adapterBootstrapFormat    string
+	failToken                 string
+	ackName                   string
+	foreground                bool
+	presenceName              string
+	connectName               string
+	updatePriority            int
+	updateTags                string
+	heartbeatToken            string
+}
+
+func captureCommandTestState() commandTestState {
+	return commandTestState{
+		noAutoStart:               noAutoStart,
+		paths:                     paths,
+		installUninstall:          installUninstall,
+		listenName:                listenName,
+		listenOutput:              listenOutput,
+		completeToken:             completeToken,
+		listState:                 listState,
+		listType:                  listType,
+		listOwner:                 listOwner,
+		runtimeForeground:         runtimeForeground,
+		spawnName:                 spawnName,
+		spawnType:                 spawnType,
+		inboxName:                 inboxName,
+		runtimePullProjectID:      runtimePullProjectID,
+		claimType:                 claimType,
+		claimTags:                 claimTags,
+		runtimeWatchProjectID:     runtimeWatchProjectID,
+		runtimeWatchSource:        runtimeWatchSource,
+		runtimeUnwatchProjectID:   runtimeUnwatchProjectID,
+		runtimeWatchesProjectID:   runtimeWatchesProjectID,
+		sendName:                  sendName,
+		sendPriority:              sendPriority,
+		sendTTL:                   sendTTL,
+		sendAwaitAck:              sendAwaitAck,
+		sendTimeout:               sendTimeout,
+		taskType:                  taskType,
+		taskTags:                  taskTags,
+		taskDependsOn:             taskDependsOn,
+		taskLease:                 taskLease,
+		taskMaxRetries:            taskMaxRetries,
+		taskPriority:              taskPriority,
+		taskIdempotencyKey:        taskIdempotencyKey,
+		taskCreateTTL:             taskCreateTTL,
+		adapterBootstrapTool:      adapterBootstrapTool,
+		adapterBootstrapAgent:     adapterBootstrapAgent,
+		adapterBootstrapProjectID: adapterBootstrapProjectID,
+		adapterBootstrapSource:    adapterBootstrapSource,
+		adapterBootstrapFormat:    adapterBootstrapFormat,
+		failToken:                 failToken,
+		ackName:                   ackName,
+		foreground:                foreground,
+		presenceName:              presenceName,
+		connectName:               connectName,
+		updatePriority:            updatePriority,
+		updateTags:                updateTags,
+		heartbeatToken:            heartbeatToken,
+	}
+}
+
+func (s commandTestState) restore() {
+	noAutoStart = s.noAutoStart
+	paths = s.paths
+	installUninstall = s.installUninstall
+	listenName = s.listenName
+	listenOutput = s.listenOutput
+	completeToken = s.completeToken
+	listState = s.listState
+	listType = s.listType
+	listOwner = s.listOwner
+	runtimeForeground = s.runtimeForeground
+	spawnName = s.spawnName
+	spawnType = s.spawnType
+	inboxName = s.inboxName
+	runtimePullProjectID = s.runtimePullProjectID
+	claimType = s.claimType
+	claimTags = s.claimTags
+	runtimeWatchProjectID = s.runtimeWatchProjectID
+	runtimeWatchSource = s.runtimeWatchSource
+	runtimeUnwatchProjectID = s.runtimeUnwatchProjectID
+	runtimeWatchesProjectID = s.runtimeWatchesProjectID
+	sendName = s.sendName
+	sendPriority = s.sendPriority
+	sendTTL = s.sendTTL
+	sendAwaitAck = s.sendAwaitAck
+	sendTimeout = s.sendTimeout
+	taskType = s.taskType
+	taskTags = s.taskTags
+	taskDependsOn = s.taskDependsOn
+	taskLease = s.taskLease
+	taskMaxRetries = s.taskMaxRetries
+	taskPriority = s.taskPriority
+	taskIdempotencyKey = s.taskIdempotencyKey
+	taskCreateTTL = s.taskCreateTTL
+	adapterBootstrapTool = s.adapterBootstrapTool
+	adapterBootstrapAgent = s.adapterBootstrapAgent
+	adapterBootstrapProjectID = s.adapterBootstrapProjectID
+	adapterBootstrapSource = s.adapterBootstrapSource
+	adapterBootstrapFormat = s.adapterBootstrapFormat
+	failToken = s.failToken
+	ackName = s.ackName
+	foreground = s.foreground
+	presenceName = s.presenceName
+	connectName = s.connectName
+	updatePriority = s.updatePriority
+	updateTags = s.updateTags
+	heartbeatToken = s.heartbeatToken
+}
+
 func executeRootCommandForTest(t *testing.T, args ...string) (string, string) {
 	t.Helper()
 
-	originalNoAutoStart := noAutoStart
-	originalPaths := paths
-	originalInstallUninstall := installUninstall
-	originalAdapterBootstrapTool := adapterBootstrapTool
-	originalAdapterBootstrapAgent := adapterBootstrapAgent
-	originalAdapterBootstrapProjectID := adapterBootstrapProjectID
-	originalAdapterBootstrapSource := adapterBootstrapSource
-	originalAdapterBootstrapFormat := adapterBootstrapFormat
+	originalState := captureCommandTestState()
 	defer func() {
-		noAutoStart = originalNoAutoStart
-		paths = originalPaths
-		installUninstall = originalInstallUninstall
-		adapterBootstrapTool = originalAdapterBootstrapTool
-		adapterBootstrapAgent = originalAdapterBootstrapAgent
-		adapterBootstrapProjectID = originalAdapterBootstrapProjectID
-		adapterBootstrapSource = originalAdapterBootstrapSource
-		adapterBootstrapFormat = originalAdapterBootstrapFormat
+		originalState.restore()
 		rootCmd.SetOut(os.Stdout)
 		rootCmd.SetErr(os.Stderr)
 		rootCmd.SetArgs(nil)
