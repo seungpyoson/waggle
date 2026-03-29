@@ -363,6 +363,56 @@ func TestStore_MarkSurfacedBatchIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestStore_MarkSurfacedBatchIgnoresMissingRowsAndSurfacesRemainingRecords(t *testing.T) {
+	store := newTestStore(t)
+
+	for _, rec := range []DeliveryRecord{
+		{
+			ProjectID:  "proj-a",
+			AgentName:  "agent-1",
+			MessageID:  41,
+			FromName:   "orchestrator",
+			Body:       "first",
+			SentAt:     time.Unix(1, 0).UTC(),
+			ReceivedAt: time.Unix(2, 0).UTC(),
+			NotifiedAt: time.Unix(3, 0).UTC(),
+		},
+		{
+			ProjectID:  "proj-a",
+			AgentName:  "agent-1",
+			MessageID:  42,
+			FromName:   "orchestrator",
+			Body:       "second",
+			SentAt:     time.Unix(4, 0).UTC(),
+			ReceivedAt: time.Unix(5, 0).UTC(),
+			NotifiedAt: time.Unix(6, 0).UTC(),
+		},
+	} {
+		if err := store.AddRecord(rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if _, err := store.db.Exec(`
+		DELETE FROM delivery_records
+		WHERE project_id = ? AND agent_name = ? AND message_id = ?
+	`, "proj-a", "agent-1", 42); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.MarkSurfacedBatch("proj-a", "agent-1", []int64{41, 42}); err != nil {
+		t.Fatal(err)
+	}
+
+	unread, err := store.Unread("proj-a", "agent-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(unread) != 0 {
+		t.Fatalf("unread count = %d, want 0 after surfacing surviving record", len(unread))
+	}
+}
+
 func TestStore_DismissedRecordsStayDismissedAndUnreadExcludesThem(t *testing.T) {
 	store := newTestStore(t)
 

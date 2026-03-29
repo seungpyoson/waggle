@@ -10,6 +10,8 @@ import (
 
 	"github.com/seungpyoson/waggle/internal/config"
 	rt "github.com/seungpyoson/waggle/internal/runtime"
+	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 func TestRuntimeSubcommandsSkipBrokerAutoStart(t *testing.T) {
@@ -239,152 +241,31 @@ func TestExecuteRootCommandForTestDoesNotLeakInstallUninstallFlag(t *testing.T) 
 }
 
 type commandTestState struct {
-	noAutoStart               bool
-	paths                     config.Paths
-	installUninstall          bool
-	listenName                string
-	listenOutput              string
-	completeToken             string
-	listState                 string
-	listType                  string
-	listOwner                 string
-	runtimeForeground         bool
-	spawnName                 string
-	spawnType                 string
-	inboxName                 string
-	runtimePullProjectID      string
-	claimType                 string
-	claimTags                 string
-	runtimeWatchProjectID     string
-	runtimeWatchSource        string
-	runtimeUnwatchProjectID   string
-	runtimeWatchesProjectID   string
-	sendName                  string
-	sendPriority              string
-	sendTTL                   int
-	sendAwaitAck              bool
-	sendTimeout               int
-	taskType                  string
-	taskTags                  string
-	taskDependsOn             string
-	taskLease                 int
-	taskMaxRetries            int
-	taskPriority              int
-	taskIdempotencyKey        string
-	taskCreateTTL             string
-	adapterBootstrapTool      string
-	adapterBootstrapAgent     string
-	adapterBootstrapProjectID string
-	adapterBootstrapSource    string
-	adapterBootstrapFormat    string
-	failToken                 string
-	ackName                   string
-	foreground                bool
-	presenceName              string
-	connectName               string
-	updatePriority            int
-	updateTags                string
-	heartbeatToken            string
+	paths config.Paths
 }
 
 func captureCommandTestState() commandTestState {
 	return commandTestState{
-		noAutoStart:               noAutoStart,
-		paths:                     paths,
-		installUninstall:          installUninstall,
-		listenName:                listenName,
-		listenOutput:              listenOutput,
-		completeToken:             completeToken,
-		listState:                 listState,
-		listType:                  listType,
-		listOwner:                 listOwner,
-		runtimeForeground:         runtimeForeground,
-		spawnName:                 spawnName,
-		spawnType:                 spawnType,
-		inboxName:                 inboxName,
-		runtimePullProjectID:      runtimePullProjectID,
-		claimType:                 claimType,
-		claimTags:                 claimTags,
-		runtimeWatchProjectID:     runtimeWatchProjectID,
-		runtimeWatchSource:        runtimeWatchSource,
-		runtimeUnwatchProjectID:   runtimeUnwatchProjectID,
-		runtimeWatchesProjectID:   runtimeWatchesProjectID,
-		sendName:                  sendName,
-		sendPriority:              sendPriority,
-		sendTTL:                   sendTTL,
-		sendAwaitAck:              sendAwaitAck,
-		sendTimeout:               sendTimeout,
-		taskType:                  taskType,
-		taskTags:                  taskTags,
-		taskDependsOn:             taskDependsOn,
-		taskLease:                 taskLease,
-		taskMaxRetries:            taskMaxRetries,
-		taskPriority:              taskPriority,
-		taskIdempotencyKey:        taskIdempotencyKey,
-		taskCreateTTL:             taskCreateTTL,
-		adapterBootstrapTool:      adapterBootstrapTool,
-		adapterBootstrapAgent:     adapterBootstrapAgent,
-		adapterBootstrapProjectID: adapterBootstrapProjectID,
-		adapterBootstrapSource:    adapterBootstrapSource,
-		adapterBootstrapFormat:    adapterBootstrapFormat,
-		failToken:                 failToken,
-		ackName:                   ackName,
-		foreground:                foreground,
-		presenceName:              presenceName,
-		connectName:               connectName,
-		updatePriority:            updatePriority,
-		updateTags:                updateTags,
-		heartbeatToken:            heartbeatToken,
+		paths: paths,
 	}
 }
 
 func (s commandTestState) restore() {
-	noAutoStart = s.noAutoStart
 	paths = s.paths
-	installUninstall = s.installUninstall
-	listenName = s.listenName
-	listenOutput = s.listenOutput
-	completeToken = s.completeToken
-	listState = s.listState
-	listType = s.listType
-	listOwner = s.listOwner
-	runtimeForeground = s.runtimeForeground
-	spawnName = s.spawnName
-	spawnType = s.spawnType
-	inboxName = s.inboxName
-	runtimePullProjectID = s.runtimePullProjectID
-	claimType = s.claimType
-	claimTags = s.claimTags
-	runtimeWatchProjectID = s.runtimeWatchProjectID
-	runtimeWatchSource = s.runtimeWatchSource
-	runtimeUnwatchProjectID = s.runtimeUnwatchProjectID
-	runtimeWatchesProjectID = s.runtimeWatchesProjectID
-	sendName = s.sendName
-	sendPriority = s.sendPriority
-	sendTTL = s.sendTTL
-	sendAwaitAck = s.sendAwaitAck
-	sendTimeout = s.sendTimeout
-	taskType = s.taskType
-	taskTags = s.taskTags
-	taskDependsOn = s.taskDependsOn
-	taskLease = s.taskLease
-	taskMaxRetries = s.taskMaxRetries
-	taskPriority = s.taskPriority
-	taskIdempotencyKey = s.taskIdempotencyKey
-	taskCreateTTL = s.taskCreateTTL
-	adapterBootstrapTool = s.adapterBootstrapTool
-	adapterBootstrapAgent = s.adapterBootstrapAgent
-	adapterBootstrapProjectID = s.adapterBootstrapProjectID
-	adapterBootstrapSource = s.adapterBootstrapSource
-	adapterBootstrapFormat = s.adapterBootstrapFormat
-	failToken = s.failToken
-	ackName = s.ackName
-	foreground = s.foreground
-	presenceName = s.presenceName
-	connectName = s.connectName
-	updatePriority = s.updatePriority
-	updateTags = s.updateTags
-	heartbeatToken = s.heartbeatToken
+	resetCommandFlagState(rootCmd)
+}
+
+func resetCommandFlagState(cmd *cobra.Command) {
+	cmd.Flags().VisitAll(resetFlagToDefault)
+	cmd.PersistentFlags().VisitAll(resetFlagToDefault)
+	for _, child := range cmd.Commands() {
+		resetCommandFlagState(child)
+	}
+}
+
+func resetFlagToDefault(flag *pflag.Flag) {
+	_ = flag.Value.Set(flag.DefValue)
+	flag.Changed = false
 }
 
 func executeRootCommandForTest(t *testing.T, args ...string) (string, string) {
@@ -398,7 +279,7 @@ func executeRootCommandForTest(t *testing.T, args ...string) (string, string) {
 		rootCmd.SetArgs(nil)
 	}()
 
-	noAutoStart = false
+	resetCommandFlagState(rootCmd)
 	paths = config.Paths{}
 
 	var stdout bytes.Buffer

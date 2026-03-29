@@ -549,7 +549,7 @@ func (s *Store) MarkSurfacedBatch(projectID, agentName string, messageIDs []int6
 
 	ids := uniquePositiveMessageIDs(messageIDs)
 	if len(ids) != len(messageIDs) {
-		return fmt.Errorf("message_id required")
+		return fmt.Errorf("message_ids must be unique and positive")
 	}
 
 	tx, err := s.db.Begin()
@@ -564,18 +564,6 @@ func (s *Store) MarkSurfacedBatch(projectID, agentName string, messageIDs []int6
 	args = append(args, projectID, agentName)
 	for _, id := range ids {
 		args = append(args, id)
-	}
-
-	var matched int
-	if err := tx.QueryRow(fmt.Sprintf(`
-		SELECT COUNT(*)
-		FROM delivery_records
-		WHERE project_id = ? AND agent_name = ? AND message_id IN (%s)
-	`, sqlPlaceholders(len(ids))), args...).Scan(&matched); err != nil {
-		return fmt.Errorf("count surfaced batch rows: %w", err)
-	}
-	if matched != len(ids) {
-		return ErrRecordNotFound
 	}
 
 	updateArgs := make([]any, 0, 3+len(ids))
