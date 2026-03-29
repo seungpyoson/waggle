@@ -206,6 +206,43 @@ func CheckCodex(homeDir string) ([]HealthIssue, AdapterState) {
 	return nil, StateHealthy
 }
 
+// CheckGemini checks the health of the Gemini integration.
+func CheckGemini(homeDir string) ([]HealthIssue, AdapterState) {
+	geminiDir := filepath.Join(homeDir, ".gemini")
+	geminiFilePath := filepath.Join(geminiDir, "GEMINI.md")
+
+	// Check if GEMINI.md exists
+	data, err := os.ReadFile(geminiFilePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, StateNotInstalled
+		}
+		return []HealthIssue{{
+			Asset:   geminiFilePath,
+			Problem: "failed to read GEMINI.md: " + err.Error(),
+			Repair:  "waggle install gemini",
+		}}, StateBroken
+	}
+
+	content := string(data)
+
+	// Check for fingerprint (begin marker)
+	if !strings.Contains(content, geminiBlockBegin) {
+		return nil, StateNotInstalled
+	}
+
+	// Fingerprint present, check if block is intact
+	if !strings.Contains(content, geminiBlockEnd) {
+		return []HealthIssue{{
+			Asset:   geminiFilePath,
+			Problem: "WAGGLE-GEMINI-BEGIN marker found but WAGGLE-GEMINI-END missing",
+			Repair:  "waggle install gemini",
+		}}, StateBroken
+	}
+
+	return nil, StateHealthy
+}
+
 // fileExists returns true if a path exists on disk (file or directory).
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
