@@ -539,6 +539,80 @@ func TestManager_BacklogRetrySuccessClearsBacklogErrorKey(t *testing.T) {
 	}
 }
 
+func TestManager_SameWatchSuccessDoesNotClearSiblingFailure(t *testing.T) {
+	store := newTestStore(t)
+	watch := Watch{ProjectID: "proj-a", AgentName: "agent-1", Source: "hook"}
+	if err := store.UpsertWatch(watch); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, rec := range []DeliveryRecord{
+		{
+			ProjectID:     "proj-a",
+			AgentName:     "agent-1",
+			MessageID:     601,
+			FromName:      "planner",
+			Body:          "first fails",
+			SentAt:        time.Unix(120, 0).UTC(),
+			ReceivedAt:    time.Unix(121, 0).UTC(),
+			RetryAttempts: 1,
+			RetryNextAt:   time.Now().UTC().Add(-time.Millisecond),
+		},
+		{
+			ProjectID:     "proj-a",
+			AgentName:     "agent-1",
+			MessageID:     602,
+			FromName:      "planner",
+			Body:          "second succeeds",
+			SentAt:        time.Unix(122, 0).UTC(),
+			ReceivedAt:    time.Unix(123, 0).UTC(),
+			RetryAttempts: 1,
+			RetryNextAt:   time.Now().UTC().Add(-time.Millisecond),
+		},
+	} {
+		if _, err := store.AddRecordIfAbsent(rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	manager := NewManager(store, newFakeListenerFactory(), &fakeNotifier{
+		errs: []error{errors.New("first still failing"), nil},
+	})
+	setRuntimeReconcileIntervalForTest(t, 10*time.Millisecond)
+
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Stop()
+
+	if err := manager.retryPendingNotifications(); err != nil {
+		t.Fatalf("retryPendingNotifications returned unexpected error: %v", err)
+	}
+
+	err := manager.LastDeliveryError()
+	if err == nil {
+		t.Fatal("LastDeliveryError() = nil, want active watch-delivery error")
+	}
+	if !strings.Contains(err.Error(), watchDeliveryErrorKey("proj-a", "agent-1")) {
+		t.Fatalf("LastDeliveryError() = %v, want watch-delivery key to remain while sibling failure exists", err)
+	}
+
+	failed, err := store.GetRecord("proj-a", "agent-1", 601)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed.NotifiedAt.IsZero() && failed.RetryAttempts == 0 {
+		t.Fatalf("failed record = %+v, want unresolved failed retry state", failed)
+	}
+	succeeded, err := store.GetRecord("proj-a", "agent-1", 602)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if succeeded.NotifiedAt.IsZero() {
+		t.Fatalf("successful record = %+v, want notified", succeeded)
+	}
+}
+
 func TestManager_RestartsWatchAfterListenerError(t *testing.T) {
 	store := newTestStore(t)
 	if err := store.UpsertWatch(Watch{ProjectID: "proj-a", AgentName: "agent-1", Source: "hook"}); err != nil {

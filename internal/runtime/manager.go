@@ -251,6 +251,9 @@ func (m *Manager) stopWatch(key watchKey) {
 	m.clearDeliveryStateForWatch(key)
 	m.clearDeliveryError(watchTransportErrorKey(worker.watch))
 	m.clearDeliveryError(watchDeliveryErrorKey(worker.watch.ProjectID, worker.watch.AgentName))
+	if err := m.refreshDeliveryErrorState(worker.watch.ProjectID, worker.watch.AgentName); err != nil {
+		m.captureDeliveryError("delivery-status", fmt.Errorf("refresh delivery status for removed watch %s/%s: %w", worker.watch.ProjectID, worker.watch.AgentName, err))
+	}
 }
 
 func (m *Manager) stopAllWorkers() {
@@ -356,12 +359,14 @@ func (m *Manager) handleDelivery(w Watch, d Delivery) error {
 		if err := m.recordNotificationFailure(currentRecord); err != nil {
 			return err
 		}
-		m.clearDeliveryError(backlogDeliveryErrorKey(w.ProjectID, w.AgentName))
-		m.captureDeliveryError(watchDeliveryErrorKey(w.ProjectID, w.AgentName), fmt.Errorf("notify %s/%s/%d: %w", w.ProjectID, w.AgentName, d.MessageID, err))
+		if err := m.refreshDeliveryErrorState(w.ProjectID, w.AgentName); err != nil {
+			return err
+		}
 		return nil
 	}
-	m.clearDeliveryError(backlogDeliveryErrorKey(w.ProjectID, w.AgentName))
-	m.clearDeliveryError(watchDeliveryErrorKey(w.ProjectID, w.AgentName))
+	if err := m.refreshDeliveryErrorState(w.ProjectID, w.AgentName); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -381,16 +386,17 @@ func (m *Manager) retryPendingNotifications() error {
 		if !ok {
 			continue
 		}
-		errorKey, staleKey := m.deliveryErrorKeys(rec.ProjectID, rec.AgentName)
 		if err := m.notifyRecord(rec.ProjectID, rec.AgentName, rec.MessageID, notificationTitle(Delivery{FromName: rec.FromName}), rec.Body); err != nil {
-			m.clearDeliveryError(staleKey)
-			m.captureDeliveryError(errorKey, fmt.Errorf("notify %s/%s/%d: %w", rec.ProjectID, rec.AgentName, rec.MessageID, err))
 			if recordErr := m.recordNotificationFailure(rec); recordErr != nil && firstErr == nil {
 				firstErr = recordErr
 			}
+			if refreshErr := m.refreshDeliveryErrorState(rec.ProjectID, rec.AgentName); refreshErr != nil && firstErr == nil {
+				firstErr = refreshErr
+			}
 		} else {
-			m.clearDeliveryError(errorKey)
-			m.clearDeliveryError(staleKey)
+			if refreshErr := m.refreshDeliveryErrorState(rec.ProjectID, rec.AgentName); refreshErr != nil && firstErr == nil {
+				firstErr = refreshErr
+			}
 		}
 		release()
 	}
@@ -471,13 +477,37 @@ func backlogDeliveryErrorKey(projectID, agentName string) string {
 	return fmt.Sprintf("backlog-delivery/%s/%s", projectID, agentName)
 }
 
-func (m *Manager) deliveryErrorKeys(projectID, agentName string) (activeKey, staleKey string) {
+func (m *Manager) watchIsActive(projectID, agentName string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.workers[watchKey{projectID: projectID, agentName: agentName}]; ok {
-		return watchDeliveryErrorKey(projectID, agentName), backlogDeliveryErrorKey(projectID, agentName)
+		return true
 	}
-	return backlogDeliveryErrorKey(projectID, agentName), watchDeliveryErrorKey(projectID, agentName)
+	return false
+}
+
+func (m *Manager) refreshDeliveryErrorState(projectID, agentName string) error {
+	hasFailures, err := m.store.HasUnresolvedFailedDeliveries(projectID, agentName)
+	if err != nil {
+		return err
+	}
+	watchKey := watchDeliveryErrorKey(projectID, agentName)
+	backlogKey := backlogDeliveryErrorKey(projectID, agentName)
+	if !hasFailures {
+		m.clearDeliveryError(watchKey)
+		m.clearDeliveryError(backlogKey)
+		return nil
+	}
+
+	errMsg := fmt.Errorf("unresolved delivery failures pending retry for %s/%s", projectID, agentName)
+	if m.watchIsActive(projectID, agentName) {
+		m.clearDeliveryError(backlogKey)
+		m.captureDeliveryError(watchKey, errMsg)
+		return nil
+	}
+	m.clearDeliveryError(watchKey)
+	m.captureDeliveryError(backlogKey, errMsg)
+	return nil
 }
 
 func notificationTitle(d Delivery) string {

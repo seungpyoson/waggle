@@ -497,6 +497,25 @@ func (s *Store) RecordNotificationFailure(projectID, agentName string, messageID
 	return nil
 }
 
+func (s *Store) HasUnresolvedFailedDeliveries(projectID, agentName string) (bool, error) {
+	if projectID == "" || agentName == "" {
+		return false, fmt.Errorf("project_id and agent_name required")
+	}
+
+	var count int
+	if err := s.db.QueryRow(`
+		SELECT COUNT(*)
+		FROM delivery_records
+		WHERE project_id = ? AND agent_name = ?
+		  AND notified_at = ''
+		  AND dismissed_at IS NULL
+		  AND retry_attempts > 0
+	`, projectID, agentName).Scan(&count); err != nil {
+		return false, fmt.Errorf("query unresolved failed deliveries: %w", err)
+	}
+	return count > 0, nil
+}
+
 // MarkSurfaced marks a delivery record as surfaced to the agent.
 func (s *Store) MarkSurfaced(projectID, agentName string, messageID int64) error {
 	if projectID == "" || agentName == "" {
@@ -559,12 +578,6 @@ func (s *Store) MarkSurfacedBatch(projectID, agentName string, messageIDs []int6
 	defer func() {
 		_ = tx.Rollback()
 	}()
-
-	args := make([]any, 0, 2+len(ids))
-	args = append(args, projectID, agentName)
-	for _, id := range ids {
-		args = append(args, id)
-	}
 
 	updateArgs := make([]any, 0, 3+len(ids))
 	updateArgs = append(updateArgs, time.Now().UTC().Format(time.RFC3339Nano), projectID, agentName)
