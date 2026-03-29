@@ -502,6 +502,7 @@ func (m *Manager) refreshDeliveryErrorState(projectID, agentName string) error {
 	if err != nil {
 		return err
 	}
+	m.clearDeliveryError("delivery-status")
 	if summary.Retrying == 0 && summary.Exhausted == 0 && m.hasPendingFailure(watchKey{projectID: projectID, agentName: agentName}) {
 		summary.Retrying = 1
 	}

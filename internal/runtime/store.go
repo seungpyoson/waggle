@@ -516,6 +516,7 @@ func (s *Store) DeliveryFailureSummary(projectID, agentName string) (DeliveryFai
 		WHERE project_id = ? AND agent_name = ?
 		  AND notified_at = ''
 		  AND dismissed_at IS NULL
+		  AND (retry_attempts > 0 OR retry_exhausted_at != '')
 	`, projectID, agentName).Scan(&summary.Retrying, &summary.Exhausted); err != nil {
 		return DeliveryFailureSummary{}, fmt.Errorf("query unresolved failed deliveries: %w", err)
 	}

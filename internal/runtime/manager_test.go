@@ -575,6 +575,20 @@ func TestManager_RefreshDeliveryErrorStateKeepsActiveErrorWhileFailureInFlight(t
 	}
 }
 
+func TestManager_RefreshDeliveryErrorStateClearsDeliveryStatusOnSuccess(t *testing.T) {
+	store := newTestStore(t)
+	manager := NewManager(store, newFakeListenerFactory(), &fakeNotifier{})
+
+	manager.captureDeliveryError("delivery-status", errors.New("stale refresh error"))
+	if err := manager.refreshDeliveryErrorState("proj-a", "agent-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := manager.LastDeliveryError(); err != nil {
+		t.Fatalf("LastDeliveryError() = %v, want nil after successful refresh", err)
+	}
+}
+
 func TestManager_SameWatchSuccessDoesNotClearSiblingFailure(t *testing.T) {
 	store := newTestStore(t)
 	watch := Watch{ProjectID: "proj-a", AgentName: "agent-1", Source: "hook"}
