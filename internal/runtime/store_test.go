@@ -652,7 +652,7 @@ func TestStore_PendingNotificationsBatchSkipsDeferredAndExhaustedRecords(t *test
 	}
 }
 
-func TestStore_PendingNotificationsBatchTreatsExactSecondRetryAsEligible(t *testing.T) {
+func TestStore_PendingNotificationsBatchUsesJuliandayForRetryEligibility(t *testing.T) {
 	store := newTestStore(t)
 
 	rec := DeliveryRecord{
@@ -660,7 +660,7 @@ func TestStore_PendingNotificationsBatchTreatsExactSecondRetryAsEligible(t *test
 		AgentName:  "agent-1",
 		MessageID:  99,
 		FromName:   "planner",
-		Body:       "exact-second retry",
+		Body:       "retry eligibility uses julianday",
 		SentAt:     time.Unix(10, 0).UTC(),
 		ReceivedAt: time.Unix(11, 0).UTC(),
 	}

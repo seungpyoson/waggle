@@ -60,6 +60,8 @@ type Manager struct {
 	wg              sync.WaitGroup
 	started         bool
 	inflight        map[deliveryKey]struct{}
+	pendingFailures map[watchKey]int
+	deliveryCauses  map[watchKey]error
 	lastDeliveryErr map[string]error
 	workers         map[watchKey]*watchWorker
 }
@@ -71,6 +73,8 @@ func NewManager(store *Store, factory ListenerFactory, notifier Notifier) *Manag
 		notifier:        notifier,
 		ctx:             context.Background(),
 		inflight:        make(map[deliveryKey]struct{}),
+		pendingFailures: make(map[watchKey]int),
+		deliveryCauses:  make(map[watchKey]error),
 		lastDeliveryErr: make(map[string]error),
 		workers:         make(map[watchKey]*watchWorker),
 	}
@@ -251,6 +255,7 @@ func (m *Manager) stopWatch(key watchKey) {
 	m.clearDeliveryStateForWatch(key)
 	m.clearDeliveryError(watchTransportErrorKey(worker.watch))
 	m.clearDeliveryError(watchDeliveryErrorKey(worker.watch.ProjectID, worker.watch.AgentName))
+	_ = m.refreshWatchDeliveryState(worker.watch.ProjectID, worker.watch.AgentName)
 }
 
 func (m *Manager) stopAllWorkers() {
@@ -353,15 +358,18 @@ func (m *Manager) handleDelivery(w Watch, d Delivery) error {
 		}
 	}
 	if err := m.notifyRecord(w.ProjectID, w.AgentName, d.MessageID, notificationTitle(d), d.Body); err != nil {
-		if err := m.recordNotificationFailure(currentRecord); err != nil {
-			return err
+		releasePending := m.beginPendingFailure(watchKey{projectID: w.ProjectID, agentName: w.AgentName})
+		recordErr := m.recordNotificationFailure(currentRecord)
+		if recordErr != nil {
+			releasePending()
+			return recordErr
 		}
-		m.clearDeliveryError(backlogDeliveryErrorKey(w.ProjectID, w.AgentName))
-		m.captureDeliveryError(watchDeliveryErrorKey(w.ProjectID, w.AgentName), fmt.Errorf("notify %s/%s/%d: %w", w.ProjectID, w.AgentName, d.MessageID, err))
+		m.setDeliveryFailureCause(watchKey{projectID: w.ProjectID, agentName: w.AgentName}, err)
+		releasePending()
+		_ = m.refreshWatchDeliveryState(w.ProjectID, w.AgentName)
 		return nil
 	}
-	m.clearDeliveryError(backlogDeliveryErrorKey(w.ProjectID, w.AgentName))
-	m.clearDeliveryError(watchDeliveryErrorKey(w.ProjectID, w.AgentName))
+	_ = m.refreshWatchDeliveryState(w.ProjectID, w.AgentName)
 	return nil
 }
 
@@ -371,28 +379,35 @@ func (m *Manager) retryPendingNotifications() error {
 		return err
 	}
 	var firstErr error
+	affected := make(map[watchKey]struct{})
 	for _, rec := range records {
 		key := deliveryKey{
 			projectID: rec.ProjectID,
 			agentName: rec.AgentName,
 			messageID: rec.MessageID,
 		}
+		watch := watchKey{projectID: rec.ProjectID, agentName: rec.AgentName}
+		affected[watch] = struct{}{}
 		release, ok := m.beginInflight(key)
 		if !ok {
 			continue
 		}
-		errorKey, staleKey := m.deliveryErrorKeys(rec.ProjectID, rec.AgentName)
 		if err := m.notifyRecord(rec.ProjectID, rec.AgentName, rec.MessageID, notificationTitle(Delivery{FromName: rec.FromName}), rec.Body); err != nil {
-			m.clearDeliveryError(staleKey)
-			m.captureDeliveryError(errorKey, fmt.Errorf("notify %s/%s/%d: %w", rec.ProjectID, rec.AgentName, rec.MessageID, err))
-			if recordErr := m.recordNotificationFailure(rec); recordErr != nil && firstErr == nil {
-				firstErr = recordErr
+			releasePending := m.beginPendingFailure(watch)
+			recordErr := m.recordNotificationFailure(rec)
+			if recordErr != nil {
+				if firstErr == nil {
+					firstErr = recordErr
+				}
+			} else {
+				m.setDeliveryFailureCause(watch, err)
 			}
-		} else {
-			m.clearDeliveryError(errorKey)
-			m.clearDeliveryError(staleKey)
+			releasePending()
 		}
 		release()
+	}
+	for watch := range affected {
+		_ = m.refreshWatchDeliveryState(watch.projectID, watch.agentName)
 	}
 	if firstErr == nil {
 		m.clearDeliveryError("retry-sweep")
@@ -437,6 +452,8 @@ func (m *Manager) reset() {
 	m.ctx = context.Background()
 	m.started = false
 	m.inflight = make(map[deliveryKey]struct{})
+	m.pendingFailures = make(map[watchKey]int)
+	m.deliveryCauses = make(map[watchKey]error)
 	m.lastDeliveryErr = make(map[string]error)
 	m.workers = make(map[watchKey]*watchWorker)
 }
@@ -471,13 +488,56 @@ func backlogDeliveryErrorKey(projectID, agentName string) string {
 	return fmt.Sprintf("backlog-delivery/%s/%s", projectID, agentName)
 }
 
-func (m *Manager) deliveryErrorKeys(projectID, agentName string) (activeKey, staleKey string) {
+func refreshDeliveryStatusErrorKey(projectID, agentName string) string {
+	return fmt.Sprintf("delivery-status/%s/%s", projectID, agentName)
+}
+
+func (m *Manager) refreshDeliveryErrorState(projectID, agentName string) error {
+	key := watchKey{projectID: projectID, agentName: agentName}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.workers[watchKey{projectID: projectID, agentName: agentName}]; ok {
-		return watchDeliveryErrorKey(projectID, agentName), backlogDeliveryErrorKey(projectID, agentName)
+
+	summary, err := m.store.DeliveryFailureSummary(projectID, agentName)
+	if err != nil {
+		return err
 	}
-	return backlogDeliveryErrorKey(projectID, agentName), watchDeliveryErrorKey(projectID, agentName)
+	if summary.Retrying == 0 && summary.Exhausted == 0 && m.pendingFailures[key] > 0 {
+		summary.Retrying = 1
+	}
+	watchKey := watchDeliveryErrorKey(projectID, agentName)
+	backlogKey := backlogDeliveryErrorKey(projectID, agentName)
+	if summary.Retrying == 0 && summary.Exhausted == 0 {
+		delete(m.lastDeliveryErr, watchKey)
+		delete(m.lastDeliveryErr, backlogKey)
+		delete(m.deliveryCauses, key)
+		return nil
+	}
+
+	errText := fmt.Sprintf("%d unresolved delivery failures for %s/%s (%d retrying, %d exhausted)", summary.Retrying+summary.Exhausted, projectID, agentName, summary.Retrying, summary.Exhausted)
+	if cause := m.deliveryCauses[key]; cause != nil {
+		errText = fmt.Sprintf("%s; last notifier error: %v", errText, cause)
+	}
+	errMsg := fmt.Errorf("%s", errText)
+	if _, active := m.workers[key]; active {
+		delete(m.lastDeliveryErr, backlogKey)
+		m.lastDeliveryErr[watchKey] = errMsg
+		return nil
+	}
+	delete(m.lastDeliveryErr, watchKey)
+	m.lastDeliveryErr[backlogKey] = errMsg
+	return nil
+}
+
+func (m *Manager) refreshWatchDeliveryState(projectID, agentName string) error {
+	err := m.refreshDeliveryErrorState(projectID, agentName)
+	refreshKey := refreshDeliveryStatusErrorKey(projectID, agentName)
+	if err != nil {
+		m.captureDeliveryError(refreshKey, fmt.Errorf("refresh delivery status for %s/%s: %w", projectID, agentName, err))
+		return err
+	}
+	m.clearDeliveryError(refreshKey)
+	return nil
 }
 
 func notificationTitle(d Delivery) string {
@@ -513,11 +573,9 @@ func (m *Manager) clearDeliveryStateForWatch(key watchKey) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	for deliveryKey := range m.inflight {
-		if deliveryKey.projectID == key.projectID && deliveryKey.agentName == key.agentName {
-			delete(m.inflight, deliveryKey)
-		}
-	}
+	// stopWatch only owns worker-scoped state. Detached retry-sweep state may still
+	// hold inflight dedupe or pending-failure bookkeeping for the same watch/message,
+	// and clearing it here would corrupt state owned by another active path.
 }
 
 func (m *Manager) recordNotificationFailure(rec DeliveryRecord) error {
@@ -527,6 +585,76 @@ func (m *Manager) recordNotificationFailure(rec DeliveryRecord) error {
 		return m.store.RecordNotificationFailure(rec.ProjectID, rec.AgentName, rec.MessageID, attempts, time.Time{}, now)
 	}
 	return m.store.RecordNotificationFailure(rec.ProjectID, rec.AgentName, rec.MessageID, attempts, now.Add(retryDelayForAttempt(attempts)), time.Time{})
+}
+
+func (m *Manager) beginPendingFailure(key watchKey) func() {
+	m.mu.Lock()
+	m.pendingFailures[key]++
+	m.mu.Unlock()
+
+	return func() {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		if m.pendingFailures[key] <= 1 {
+			delete(m.pendingFailures, key)
+			return
+		}
+		m.pendingFailures[key]--
+	}
+}
+
+func (m *Manager) setDeliveryFailureCause(key watchKey, err error) {
+	if err == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.deliveryCauses[key] = err
+}
+
+func (m *Manager) trackedDeliveryStatusWatches() []watchKey {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	seen := make(map[watchKey]struct{})
+	for key := range m.deliveryCauses {
+		seen[key] = struct{}{}
+	}
+	for errKey := range m.lastDeliveryErr {
+		if key, ok := trackedDeliveryStatusWatch(errKey); ok {
+			seen[key] = struct{}{}
+		}
+	}
+
+	watches := make([]watchKey, 0, len(seen))
+	for key := range seen {
+		watches = append(watches, key)
+	}
+	return watches
+}
+
+func trackedDeliveryStatusWatch(errKey string) (watchKey, bool) {
+	for _, prefix := range []string{"watch-delivery/", "backlog-delivery/", "delivery-status/"} {
+		if !strings.HasPrefix(errKey, prefix) {
+			continue
+		}
+		parts := strings.SplitN(strings.TrimPrefix(errKey, prefix), "/", 2)
+		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+			return watchKey{}, false
+		}
+		return watchKey{projectID: parts[0], agentName: parts[1]}, true
+	}
+	return watchKey{}, false
+}
+
+func (m *Manager) refreshTrackedDeliveryStates() error {
+	var firstErr error
+	for _, key := range m.trackedDeliveryStatusWatches() {
+		if err := m.refreshWatchDeliveryState(key.projectID, key.agentName); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }
 
 func retryDelayForAttempt(attempt int) time.Duration {
@@ -579,6 +707,10 @@ func (m *Manager) runMaintenanceLoop(ctx context.Context) {
 			if _, err := m.store.PruneDeliveryRecords(now.Add(-config.Defaults.RuntimeDeliveryRetention)); err != nil {
 				hadErr = true
 				m.captureDeliveryError("maintenance", fmt.Errorf("prune delivery records: %w", err))
+			}
+			if err := m.refreshTrackedDeliveryStates(); err != nil {
+				hadErr = true
+				m.captureDeliveryError("maintenance", fmt.Errorf("refresh tracked delivery states: %w", err))
 			}
 			if !hadErr {
 				m.clearDeliveryError("maintenance")

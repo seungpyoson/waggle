@@ -405,7 +405,7 @@ func TestManager_StartReconcilesWatchesRemovedAfterStartup(t *testing.T) {
 	})
 }
 
-func TestManager_StopWatchClearsInflightState(t *testing.T) {
+func TestManager_StopWatchClearsWorkerErrorsButPreservesDetachedInflightState(t *testing.T) {
 	store := newTestStore(t)
 	watch := Watch{ProjectID: "proj-a", AgentName: "agent-1", Source: "hook"}
 	if err := store.UpsertWatch(watch); err != nil {
@@ -429,6 +429,7 @@ func TestManager_StopWatchClearsInflightState(t *testing.T) {
 	manager.mu.Unlock()
 	manager.captureDeliveryError(watchTransportErrorKey(watch), errors.New("transport error"))
 	manager.captureDeliveryError(watchDeliveryErrorKey(watch.ProjectID, watch.AgentName), errors.New("delivery error"))
+	manager.captureDeliveryError(refreshDeliveryStatusErrorKey(watch.ProjectID, watch.AgentName), errors.New("status refresh error"))
 
 	if err := store.RemoveWatch(watch.ProjectID, watch.AgentName); err != nil {
 		t.Fatal(err)
@@ -440,7 +441,8 @@ func TestManager_StopWatchClearsInflightState(t *testing.T) {
 		_, inflightExists := manager.inflight[key]
 		_, transportExists := manager.lastDeliveryErr[watchTransportErrorKey(watch)]
 		_, deliveryExists := manager.lastDeliveryErr[watchDeliveryErrorKey(watch.ProjectID, watch.AgentName)]
-		return len(manager.workers) == 0 && !inflightExists && !transportExists && !deliveryExists
+		_, statusExists := manager.lastDeliveryErr[refreshDeliveryStatusErrorKey(watch.ProjectID, watch.AgentName)]
+		return len(manager.workers) == 0 && inflightExists && !transportExists && !deliveryExists && !statusExists
 	})
 }
 
@@ -494,6 +496,157 @@ func TestManager_RetryPendingNotificationsUsesBacklogErrorKeyAfterWatchRemoval(t
 	if !strings.Contains(err.Error(), backlogDeliveryErrorKey("proj-a", "agent-1")) {
 		t.Fatalf("LastDeliveryError() = %v, want backlog-delivery key", err)
 	}
+	if !strings.Contains(err.Error(), "notify failed") {
+		t.Fatalf("LastDeliveryError() = %v, want preserved notifier failure detail", err)
+	}
+}
+
+func TestManager_RetryPendingNotificationsClassifiesBlockedFailureAfterConcurrentWatchRemoval(t *testing.T) {
+	store := newTestStore(t)
+	watch := Watch{ProjectID: "proj-a", AgentName: "agent-1", Source: "hook"}
+	if err := store.UpsertWatch(watch); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AddRecordIfAbsent(DeliveryRecord{
+		ProjectID:     "proj-a",
+		AgentName:     "agent-1",
+		MessageID:     406,
+		FromName:      "planner",
+		Body:          "retry while watch is removed",
+		SentAt:        time.Unix(102, 0).UTC(),
+		ReceivedAt:    time.Unix(103, 0).UTC(),
+		RetryAttempts: 1,
+		RetryNextAt:   time.Now().UTC().Add(-time.Millisecond),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	factory := newFakeListenerFactory()
+	notifier := &blockingResultNotifier{
+		started: make(chan struct{}, 1),
+		release: make(chan error, 1),
+	}
+	manager := NewManager(store, factory, notifier)
+	setRuntimeReconcileIntervalForTest(t, 10*time.Millisecond)
+
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Stop()
+
+	_ = factory.waitForListener(t, watch)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- manager.retryPendingNotifications()
+	}()
+
+	<-notifier.started
+
+	if err := store.RemoveWatch(watch.ProjectID, watch.AgentName); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "watch removed during retry notify", func() bool {
+		return manager.WatchCount() == 0
+	})
+
+	notifier.release <- errors.New("blocked retry notify failed")
+
+	if err := <-done; err != nil {
+		t.Fatalf("retryPendingNotifications returned unexpected error: %v", err)
+	}
+
+	err := manager.LastDeliveryError()
+	if err == nil {
+		t.Fatal("LastDeliveryError() = nil, want backlog delivery error after concurrent watch removal")
+	}
+	if strings.Contains(err.Error(), watchDeliveryErrorKey("proj-a", "agent-1")) {
+		t.Fatalf("LastDeliveryError() = %v, want no watch-delivery key after concurrent watch removal", err)
+	}
+	if !strings.Contains(err.Error(), backlogDeliveryErrorKey("proj-a", "agent-1")) {
+		t.Fatalf("LastDeliveryError() = %v, want backlog-delivery key after concurrent watch removal", err)
+	}
+	if !strings.Contains(err.Error(), "blocked retry notify failed") {
+		t.Fatalf("LastDeliveryError() = %v, want blocked notifier failure detail", err)
+	}
+}
+
+func TestManager_RetryPendingNotificationsClassifiesBlockedFailureAfterConcurrentWatchReAdd(t *testing.T) {
+	store := newTestStore(t)
+	watch := Watch{ProjectID: "proj-a", AgentName: "agent-1", Source: "hook"}
+	if err := store.UpsertWatch(watch); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AddRecordIfAbsent(DeliveryRecord{
+		ProjectID:     "proj-a",
+		AgentName:     "agent-1",
+		MessageID:     407,
+		FromName:      "planner",
+		Body:          "retry while watch is re-added",
+		SentAt:        time.Unix(104, 0).UTC(),
+		ReceivedAt:    time.Unix(105, 0).UTC(),
+		RetryAttempts: 1,
+		RetryNextAt:   time.Now().UTC().Add(-time.Millisecond),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	factory := newFakeListenerFactory()
+	notifier := &blockingResultNotifier{
+		started: make(chan struct{}, 1),
+		release: make(chan error, 1),
+	}
+	manager := NewManager(store, factory, notifier)
+	setRuntimeReconcileIntervalForTest(t, 10*time.Millisecond)
+
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Stop()
+
+	originalListener := factory.waitForListener(t, watch)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- manager.retryPendingNotifications()
+	}()
+
+	<-notifier.started
+
+	if err := store.RemoveWatch(watch.ProjectID, watch.AgentName); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "watch removed during retry notify before re-add", func() bool {
+		return manager.WatchCount() == 0
+	})
+
+	if err := store.UpsertWatch(watch); err != nil {
+		t.Fatal(err)
+	}
+	waitForNewListener(t, factory, watch, originalListener)
+	waitFor(t, "watch re-added during retry notify", func() bool {
+		return manager.WatchCount() == 1
+	})
+
+	notifier.release <- errors.New("blocked retry notify failed after re-add")
+
+	if err := <-done; err != nil {
+		t.Fatalf("retryPendingNotifications returned unexpected error: %v", err)
+	}
+
+	err := manager.LastDeliveryError()
+	if err == nil {
+		t.Fatal("LastDeliveryError() = nil, want watch delivery error after concurrent watch re-add")
+	}
+	if strings.Contains(err.Error(), backlogDeliveryErrorKey("proj-a", "agent-1")) {
+		t.Fatalf("LastDeliveryError() = %v, want no backlog-delivery key after concurrent watch re-add", err)
+	}
+	if !strings.Contains(err.Error(), watchDeliveryErrorKey("proj-a", "agent-1")) {
+		t.Fatalf("LastDeliveryError() = %v, want watch-delivery key after concurrent watch re-add", err)
+	}
+	if !strings.Contains(err.Error(), "blocked retry notify failed after re-add") {
+		t.Fatalf("LastDeliveryError() = %v, want blocked notifier failure detail", err)
+	}
 }
 
 func TestManager_BacklogRetrySuccessClearsBacklogErrorKey(t *testing.T) {
@@ -536,6 +689,206 @@ func TestManager_BacklogRetrySuccessClearsBacklogErrorKey(t *testing.T) {
 	}
 	if err := manager.LastDeliveryError(); err != nil {
 		t.Fatalf("LastDeliveryError() = %v, want nil after backlog retry success", err)
+	}
+}
+
+func TestManager_MaintenanceClearsRemovedWatchBacklogErrorAfterDismiss(t *testing.T) {
+	store := newTestStore(t)
+	exhausted := DeliveryRecord{
+		ProjectID:        "proj-a",
+		AgentName:        "agent-1",
+		MessageID:        506,
+		FromName:         "planner",
+		Body:             "dismissed after watch removal",
+		SentAt:           time.Unix(112, 0).UTC(),
+		ReceivedAt:       time.Unix(113, 0).UTC(),
+		RetryAttempts:    config.Defaults.RuntimeNotificationRetryLimit,
+		RetryExhaustedAt: time.Now().UTC(),
+	}
+	if err := store.AddRecord(exhausted); err != nil {
+		t.Fatal(err)
+	}
+
+	manager := NewManager(store, newFakeListenerFactory(), &fakeNotifier{})
+	setTTLCheckPeriodForTest(t, 10*time.Millisecond)
+	manager.captureDeliveryError(backlogDeliveryErrorKey("proj-a", "agent-1"), errors.New("stale backlog error"))
+	manager.setDeliveryFailureCause(watchKey{projectID: "proj-a", agentName: "agent-1"}, errors.New("stale notifier cause"))
+
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Stop()
+
+	dismissed := exhausted
+	dismissed.DismissedAt = time.Now().UTC()
+	if err := store.AddRecord(dismissed); err != nil {
+		t.Fatal(err)
+	}
+
+	waitFor(t, "dismissed backlog error cleared", func() bool {
+		return manager.LastDeliveryError() == nil
+	})
+}
+
+func TestManager_RefreshDeliveryErrorStateKeepsActiveErrorWhileFailureInFlight(t *testing.T) {
+	store := newTestStore(t)
+	watch := Watch{ProjectID: "proj-a", AgentName: "agent-1", Source: "hook"}
+	if err := store.UpsertWatch(watch); err != nil {
+		t.Fatal(err)
+	}
+
+	factory := newFakeListenerFactory()
+	manager := NewManager(store, factory, &fakeNotifier{})
+	setRuntimeReconcileIntervalForTest(t, 10*time.Millisecond)
+
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Stop()
+
+	_ = factory.waitForListener(t, watch)
+
+	releasePending := manager.beginPendingFailure(watchKey{projectID: "proj-a", agentName: "agent-1"})
+	defer releasePending()
+
+	if err := manager.refreshDeliveryErrorState("proj-a", "agent-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	err := manager.LastDeliveryError()
+	if err == nil {
+		t.Fatal("LastDeliveryError() = nil, want active watch-delivery error while failure is in flight")
+	}
+	if !strings.Contains(err.Error(), watchDeliveryErrorKey("proj-a", "agent-1")) {
+		t.Fatalf("LastDeliveryError() = %v, want watch-delivery key", err)
+	}
+}
+
+func TestManager_RefreshDeliveryErrorStateClearsDeliveryStatusOnSuccess(t *testing.T) {
+	store := newTestStore(t)
+	manager := NewManager(store, newFakeListenerFactory(), &fakeNotifier{})
+
+	manager.captureDeliveryError(refreshDeliveryStatusErrorKey("proj-a", "agent-1"), errors.New("stale refresh error"))
+	if err := manager.refreshWatchDeliveryState("proj-a", "agent-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := manager.LastDeliveryError(); err != nil {
+		t.Fatalf("LastDeliveryError() = %v, want nil after successful refresh", err)
+	}
+}
+
+func TestManager_StopWatchRefreshErrorKeyDoesNotClearSiblingRefreshError(t *testing.T) {
+	store := newTestStore(t)
+	watchA := Watch{ProjectID: "proj-a", AgentName: "agent-1", Source: "hook"}
+	watchB := Watch{ProjectID: "proj-b", AgentName: "agent-2", Source: "hook"}
+	if err := store.UpsertWatch(watchA); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertWatch(watchB); err != nil {
+		t.Fatal(err)
+	}
+
+	factory := newFakeListenerFactory()
+	manager := NewManager(store, factory, &fakeNotifier{})
+	setRuntimeReconcileIntervalForTest(t, 10*time.Millisecond)
+
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Stop()
+
+	_ = factory.waitForListener(t, watchA)
+	_ = factory.waitForListener(t, watchB)
+
+	manager.captureDeliveryError(refreshDeliveryStatusErrorKey(watchA.ProjectID, watchA.AgentName), errors.New("watch a refresh failed"))
+
+	if err := store.RemoveWatch(watchB.ProjectID, watchB.AgentName); err != nil {
+		t.Fatal(err)
+	}
+
+	waitFor(t, "watch b removed without clearing watch a refresh error", func() bool {
+		manager.mu.Lock()
+		defer manager.mu.Unlock()
+		_, exists := manager.lastDeliveryErr[refreshDeliveryStatusErrorKey(watchA.ProjectID, watchA.AgentName)]
+		return len(manager.workers) == 1 && exists
+	})
+}
+
+func TestManager_SameWatchSuccessDoesNotClearSiblingFailure(t *testing.T) {
+	store := newTestStore(t)
+	watch := Watch{ProjectID: "proj-a", AgentName: "agent-1", Source: "hook"}
+	if err := store.UpsertWatch(watch); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, rec := range []DeliveryRecord{
+		{
+			ProjectID:     "proj-a",
+			AgentName:     "agent-1",
+			MessageID:     601,
+			FromName:      "planner",
+			Body:          "first fails",
+			SentAt:        time.Unix(120, 0).UTC(),
+			ReceivedAt:    time.Unix(121, 0).UTC(),
+			RetryAttempts: 1,
+			RetryNextAt:   time.Now().UTC().Add(-time.Millisecond),
+		},
+		{
+			ProjectID:     "proj-a",
+			AgentName:     "agent-1",
+			MessageID:     602,
+			FromName:      "planner",
+			Body:          "second succeeds",
+			SentAt:        time.Unix(122, 0).UTC(),
+			ReceivedAt:    time.Unix(123, 0).UTC(),
+			RetryAttempts: 1,
+			RetryNextAt:   time.Now().UTC().Add(-time.Millisecond),
+		},
+	} {
+		if _, err := store.AddRecordIfAbsent(rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	manager := NewManager(store, newFakeListenerFactory(), &fakeNotifier{
+		errs: []error{errors.New("first still failing"), nil},
+	})
+	setRuntimeReconcileIntervalForTest(t, 10*time.Millisecond)
+
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Stop()
+
+	if err := manager.retryPendingNotifications(); err != nil {
+		t.Fatalf("retryPendingNotifications returned unexpected error: %v", err)
+	}
+
+	err := manager.LastDeliveryError()
+	if err == nil {
+		t.Fatal("LastDeliveryError() = nil, want active watch-delivery error")
+	}
+	if !strings.Contains(err.Error(), watchDeliveryErrorKey("proj-a", "agent-1")) {
+		t.Fatalf("LastDeliveryError() = %v, want watch-delivery key to remain while sibling failure exists", err)
+	}
+	if !strings.Contains(err.Error(), "first still failing") {
+		t.Fatalf("LastDeliveryError() = %v, want preserved notifier failure detail", err)
+	}
+
+	failed, err := store.GetRecord("proj-a", "agent-1", 601)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed.NotifiedAt.IsZero() && failed.RetryAttempts == 0 {
+		t.Fatalf("failed record = %+v, want unresolved failed retry state", failed)
+	}
+	succeeded, err := store.GetRecord("proj-a", "agent-1", 602)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if succeeded.NotifiedAt.IsZero() {
+		t.Fatalf("successful record = %+v, want notified", succeeded)
 	}
 }
 
@@ -750,6 +1103,225 @@ func TestManager_PendingRetryAndLiveDeliveryDoNotDoubleNotifySameRecord(t *testi
 	}
 	if notifier.callCount() != 1 {
 		t.Fatalf("notify count = %d, want 1", notifier.callCount())
+	}
+}
+
+func TestManager_PendingRetryPreservesInflightAcrossWatchRemoveAndReAdd(t *testing.T) {
+	store := newTestStore(t)
+	watch := Watch{ProjectID: "proj-a", AgentName: "agent-1", Source: "hook"}
+	if err := store.UpsertWatch(watch); err != nil {
+		t.Fatal(err)
+	}
+
+	notifier := &blockingNotifier{
+		started: make(chan struct{}, 1),
+		release: make(chan struct{}),
+	}
+	factory := newFakeListenerFactory()
+	manager := NewManager(store, factory, notifier)
+	setRuntimeReconcileIntervalForTest(t, 10*time.Millisecond)
+
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Stop()
+
+	originalListener := factory.waitForListener(t, watch)
+	record := DeliveryRecord{
+		ProjectID:  watch.ProjectID,
+		AgentName:  watch.AgentName,
+		MessageID:  780,
+		FromName:   "planner",
+		Body:       "same message across watch re-add",
+		SentAt:     time.Unix(108, 0).UTC(),
+		ReceivedAt: time.Unix(109, 0).UTC(),
+	}
+	if _, err := store.AddRecordIfAbsent(record); err != nil {
+		t.Fatal(err)
+	}
+
+	retryDone := make(chan error, 1)
+	go func() {
+		retryDone <- manager.retryPendingNotifications()
+	}()
+
+	<-notifier.started
+
+	if err := store.RemoveWatch(watch.ProjectID, watch.AgentName); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "watch removed during blocked retry", func() bool {
+		return manager.WatchCount() == 0
+	})
+
+	if err := store.UpsertWatch(watch); err != nil {
+		t.Fatal(err)
+	}
+	replacementListener := waitForNewListener(t, factory, watch, originalListener)
+	waitFor(t, "watch re-added during blocked retry", func() bool {
+		return manager.WatchCount() == 1
+	})
+
+	liveDone := make(chan error, 1)
+	go func() {
+		liveDone <- replacementListener.emit(Delivery{
+			MessageID:  record.MessageID,
+			FromName:   record.FromName,
+			Body:       record.Body,
+			SentAt:     record.SentAt,
+			ReceivedAt: record.ReceivedAt,
+		})
+	}()
+
+	if err := <-liveDone; err != nil {
+		t.Fatalf("replacement listener emit returned unexpected error: %v", err)
+	}
+
+	close(notifier.release)
+
+	if err := <-retryDone; err != nil {
+		t.Fatalf("retryPendingNotifications returned unexpected error: %v", err)
+	}
+	if notifier.callCount() != 1 {
+		t.Fatalf("notify count = %d, want 1 with inflight dedupe preserved across re-add", notifier.callCount())
+	}
+}
+
+func TestManager_HandleDeliveryClassifiesBlockedFailureAfterConcurrentWatchRemoval(t *testing.T) {
+	store := newTestStore(t)
+	watch := Watch{ProjectID: "proj-a", AgentName: "agent-1", Source: "hook"}
+	if err := store.UpsertWatch(watch); err != nil {
+		t.Fatal(err)
+	}
+
+	factory := newFakeListenerFactory()
+	notifier := &blockingResultNotifier{
+		started: make(chan struct{}, 1),
+		release: make(chan error, 1),
+	}
+	manager := NewManager(store, factory, notifier)
+	setRuntimeReconcileIntervalForTest(t, 10*time.Millisecond)
+
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Stop()
+
+	listener := factory.waitForListener(t, watch)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- listener.emit(Delivery{
+			MessageID:  778,
+			FromName:   "planner",
+			Body:       "live delivery while watch is removed",
+			SentAt:     time.Unix(104, 0).UTC(),
+			ReceivedAt: time.Unix(105, 0).UTC(),
+		})
+	}()
+
+	<-notifier.started
+
+	if err := store.RemoveWatch(watch.ProjectID, watch.AgentName); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "watch removed during live notify", func() bool {
+		return manager.WatchCount() == 0
+	})
+
+	notifier.release <- errors.New("blocked live notify failed")
+
+	if err := <-done; err != nil {
+		t.Fatalf("listener emit returned unexpected error: %v", err)
+	}
+
+	err := manager.LastDeliveryError()
+	if err == nil {
+		t.Fatal("LastDeliveryError() = nil, want backlog delivery error after concurrent watch removal")
+	}
+	if strings.Contains(err.Error(), watchDeliveryErrorKey("proj-a", "agent-1")) {
+		t.Fatalf("LastDeliveryError() = %v, want no watch-delivery key after concurrent watch removal", err)
+	}
+	if !strings.Contains(err.Error(), backlogDeliveryErrorKey("proj-a", "agent-1")) {
+		t.Fatalf("LastDeliveryError() = %v, want backlog-delivery key after concurrent watch removal", err)
+	}
+	if !strings.Contains(err.Error(), "blocked live notify failed") {
+		t.Fatalf("LastDeliveryError() = %v, want blocked notifier failure detail", err)
+	}
+}
+
+func TestManager_HandleDeliveryClassifiesBlockedFailureAfterConcurrentWatchReAdd(t *testing.T) {
+	store := newTestStore(t)
+	watch := Watch{ProjectID: "proj-a", AgentName: "agent-1", Source: "hook"}
+	if err := store.UpsertWatch(watch); err != nil {
+		t.Fatal(err)
+	}
+
+	factory := newFakeListenerFactory()
+	notifier := &blockingResultNotifier{
+		started: make(chan struct{}, 1),
+		release: make(chan error, 1),
+	}
+	manager := NewManager(store, factory, notifier)
+	setRuntimeReconcileIntervalForTest(t, 10*time.Millisecond)
+
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Stop()
+
+	_ = factory.waitForListener(t, watch)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- manager.handleDelivery(watch, Delivery{
+			MessageID:  779,
+			FromName:   "planner",
+			Body:       "live delivery while watch is re-added",
+			SentAt:     time.Unix(106, 0).UTC(),
+			ReceivedAt: time.Unix(107, 0).UTC(),
+		})
+	}()
+
+	<-notifier.started
+
+	if err := store.RemoveWatch(watch.ProjectID, watch.AgentName); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "watch removed during live notify before re-add", func() bool {
+		return manager.WatchCount() == 0
+	})
+
+	if err := store.UpsertWatch(watch); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "watch listener present after re-add", func() bool {
+		factory.mu.Lock()
+		defer factory.mu.Unlock()
+		return factory.listeners[watchKey{projectID: watch.ProjectID, agentName: watch.AgentName}] != nil
+	})
+	waitFor(t, "watch re-added during live notify", func() bool {
+		return manager.WatchCount() == 1
+	})
+
+	notifier.release <- errors.New("blocked live notify failed after re-add")
+
+	if err := <-done; err != nil {
+		t.Fatalf("listener emit returned unexpected error: %v", err)
+	}
+
+	err := manager.LastDeliveryError()
+	if err == nil {
+		t.Fatal("LastDeliveryError() = nil, want watch delivery error after concurrent watch re-add")
+	}
+	if strings.Contains(err.Error(), backlogDeliveryErrorKey("proj-a", "agent-1")) {
+		t.Fatalf("LastDeliveryError() = %v, want no backlog-delivery key after concurrent watch re-add", err)
+	}
+	if !strings.Contains(err.Error(), watchDeliveryErrorKey("proj-a", "agent-1")) {
+		t.Fatalf("LastDeliveryError() = %v, want watch-delivery key after concurrent watch re-add", err)
+	}
+	if !strings.Contains(err.Error(), "blocked live notify failed after re-add") {
+		t.Fatalf("LastDeliveryError() = %v, want blocked notifier failure detail", err)
 	}
 }
 
@@ -1004,6 +1576,13 @@ type blockingNotifier struct {
 	release chan struct{}
 }
 
+type blockingResultNotifier struct {
+	mu      sync.Mutex
+	calls   int
+	started chan struct{}
+	release chan error
+}
+
 func (n *blockingNotifier) Notify(_ context.Context, _, _ string) error {
 	n.mu.Lock()
 	n.calls++
@@ -1020,6 +1599,22 @@ func (n *blockingNotifier) callCount() int {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	return n.calls
+}
+
+func (n *blockingResultNotifier) Notify(ctx context.Context, _, _ string) error {
+	n.mu.Lock()
+	n.calls++
+	n.mu.Unlock()
+	select {
+	case n.started <- struct{}{}:
+	default:
+	}
+	select {
+	case err := <-n.release:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 type notifyCall struct {
@@ -1095,6 +1690,19 @@ func (f *fakeListenerFactory) waitForListener(t *testing.T, watch Watch) *fakeLi
 			t.Fatalf("listener for %+v was not created", watch)
 		}
 	}
+}
+
+func waitForNewListener(t *testing.T, f *fakeListenerFactory, watch Watch, prior *fakeListener) *fakeListener {
+	t.Helper()
+
+	var next *fakeListener
+	waitFor(t, "replacement listener", func() bool {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		next = f.listeners[watchKey{projectID: watch.ProjectID, agentName: watch.AgentName}]
+		return next != nil && next != prior
+	})
+	return next
 }
 
 type fakeListener struct {
@@ -1295,5 +1903,15 @@ func setRuntimeRetrySweepIntervalForTest(t *testing.T, d time.Duration) {
 	config.Defaults.RuntimeNotificationRetrySweepInterval = d
 	t.Cleanup(func() {
 		config.Defaults.RuntimeNotificationRetrySweepInterval = orig
+	})
+}
+
+func setTTLCheckPeriodForTest(t *testing.T, d time.Duration) {
+	t.Helper()
+
+	orig := config.Defaults.TTLCheckPeriod
+	config.Defaults.TTLCheckPeriod = d
+	t.Cleanup(func() {
+		config.Defaults.TTLCheckPeriod = orig
 	})
 }

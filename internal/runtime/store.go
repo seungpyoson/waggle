@@ -497,6 +497,32 @@ func (s *Store) RecordNotificationFailure(projectID, agentName string, messageID
 	return nil
 }
 
+type DeliveryFailureSummary struct {
+	Retrying  int
+	Exhausted int
+}
+
+func (s *Store) DeliveryFailureSummary(projectID, agentName string) (DeliveryFailureSummary, error) {
+	if projectID == "" || agentName == "" {
+		return DeliveryFailureSummary{}, fmt.Errorf("project_id and agent_name required")
+	}
+
+	var summary DeliveryFailureSummary
+	if err := s.db.QueryRow(`
+		SELECT
+			COALESCE(SUM(CASE WHEN retry_attempts > 0 AND retry_exhausted_at = '' THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN retry_exhausted_at != '' THEN 1 ELSE 0 END), 0)
+		FROM delivery_records
+		WHERE project_id = ? AND agent_name = ?
+		  AND notified_at = ''
+		  AND dismissed_at IS NULL
+		  AND (retry_attempts > 0 OR retry_exhausted_at != '')
+	`, projectID, agentName).Scan(&summary.Retrying, &summary.Exhausted); err != nil {
+		return DeliveryFailureSummary{}, fmt.Errorf("query unresolved failed deliveries: %w", err)
+	}
+	return summary, nil
+}
+
 // MarkSurfaced marks a delivery record as surfaced to the agent.
 func (s *Store) MarkSurfaced(projectID, agentName string, messageID int64) error {
 	if projectID == "" || agentName == "" {
@@ -559,12 +585,6 @@ func (s *Store) MarkSurfacedBatch(projectID, agentName string, messageIDs []int6
 	defer func() {
 		_ = tx.Rollback()
 	}()
-
-	args := make([]any, 0, 2+len(ids))
-	args = append(args, projectID, agentName)
-	for _, id := range ids {
-		args = append(args, id)
-	}
 
 	updateArgs := make([]any, 0, 3+len(ids))
 	updateArgs = append(updateArgs, time.Now().UTC().Format(time.RFC3339Nano), projectID, agentName)
