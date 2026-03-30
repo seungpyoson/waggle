@@ -311,12 +311,9 @@ func TestRuntimeBrokerRestartReconnect(t *testing.T) {
 		return true
 	})
 
-	// Step 10: Wait a bit longer to ensure manager's reconnect loop picks up the new broker
-	// Manager's reconnect backoff starts at PollInterval (500ms) and it needs to retry
-	time.Sleep(2 * time.Second)
-
-	// Step 10: Manager should automatically reconnect
-	// Verify by sending a message via broker #2 and checking it arrives
+	// Step 10: Send message #2 via broker #2 immediately after restart.
+	// This should land in broker storage even if the manager push session has
+	// not reconnected yet; catch-up after reconnect must recover it.
 	sender2, err := client.Connect(paths.Socket, 5*time.Second)
 	if err != nil {
 		t.Fatal(err)
@@ -339,7 +336,7 @@ func TestRuntimeBrokerRestartReconnect(t *testing.T) {
 		t.Fatalf("send message #2 failed: %s", resp.Error)
 	}
 
-	// Step 11: Verify message #2 is in store (with 15s timeout for reconnect)
+	// Step 11: Verify message #2 is in store after reconnect catch-up.
 	waitForConditionWithTimeout(t, "message #2 in store", 15*time.Second, func() bool {
 		rec, err := store.GetRecord("proj-reconnect", "agent-reconnect", 2)
 		return err == nil && !rec.NotifiedAt.IsZero() && rec.Body == "message after restart"
@@ -362,7 +359,7 @@ func TestRuntimeBrokerRestartReconnect(t *testing.T) {
 		t.Fatalf("message #2 body = %q, want 'message after restart'", rec2.Body)
 	}
 
-	// Verify watch count is still 1 (no duplicates)
+	// Step 13: Verify watch count is still 1 (no duplicates)
 	if count := manager.WatchCount(); count != 1 {
 		t.Fatalf("watch count = %d, want 1", count)
 	}

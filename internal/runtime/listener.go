@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -33,6 +34,73 @@ func (f *BrokerListenerFactory) NewListener(w Watch) (Listener, error) {
 		socketPath: paths.Socket,
 		name:       w.AgentName + "-push",
 	}, nil
+}
+
+func (f *BrokerListenerFactory) CatchUp(w Watch, handler DeliveryHandler) error {
+	if w.ProjectID == "" || w.AgentName == "" {
+		return fmt.Errorf("project_id and agent_name required")
+	}
+
+	paths := config.NewPaths(w.ProjectID)
+	if paths.Socket == "" {
+		return fmt.Errorf("cannot determine broker socket path")
+	}
+
+	c, err := client.Connect(paths.Socket, config.Defaults.ConnectTimeout)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+
+	if err := c.SetDeadline(config.Defaults.ConnectTimeout); err != nil {
+		return fmt.Errorf("set deadline: %w", err)
+	}
+	resp, err := c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: w.AgentName})
+	if err != nil {
+		return err
+	}
+	if !resp.OK {
+		return fmt.Errorf("%s: %s", resp.Code, resp.Error)
+	}
+	if err := c.ClearDeadline(); err != nil {
+		return fmt.Errorf("clear deadline: %w", err)
+	}
+
+	resp, err = c.Send(protocol.Request{Cmd: protocol.CmdInbox})
+	if err != nil {
+		return err
+	}
+	if !resp.OK {
+		return fmt.Errorf("inbox: %s: %s", resp.Code, resp.Error)
+	}
+
+	var msgs []struct {
+		ID        int64  `json:"id"`
+		From      string `json:"from"`
+		Body      string `json:"body"`
+		CreatedAt string `json:"created_at"`
+	}
+	if err := json.Unmarshal(resp.Data, &msgs); err != nil {
+		return fmt.Errorf("parse inbox: %w", err)
+	}
+
+	for _, msg := range msgs {
+		sentAt, err := time.Parse(time.RFC3339, msg.CreatedAt)
+		if err != nil {
+			continue
+		}
+		if err := handler(Delivery{
+			MessageID:  msg.ID,
+			FromName:   msg.From,
+			Body:       msg.Body,
+			SentAt:     sentAt,
+			ReceivedAt: time.Now().UTC(),
+		}); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 type brokerListener struct {

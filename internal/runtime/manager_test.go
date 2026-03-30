@@ -1672,6 +1672,10 @@ func (f *fakeListenerFactory) NewListener(w Watch) (Listener, error) {
 	return listener, nil
 }
 
+func (f *fakeListenerFactory) CatchUp(w Watch, handler DeliveryHandler) error {
+	return nil
+}
+
 func (f *fakeListenerFactory) waitForListener(t *testing.T, watch Watch) *fakeListener {
 	t.Helper()
 
@@ -1785,6 +1789,10 @@ func (f *restartingListenerFactory) NewListener(_ Watch) (Listener, error) {
 	f.listeners = append(f.listeners, l)
 	f.created <- l
 	return l, nil
+}
+
+func (f *restartingListenerFactory) CatchUp(w Watch, handler DeliveryHandler) error {
+	return nil
 }
 
 func (f *restartingListenerFactory) waitForCreated(t *testing.T, want int) *restartableListener {

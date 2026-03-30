@@ -36,6 +36,7 @@ type Listener interface {
 // ListenerFactory creates listeners for persisted watches.
 type ListenerFactory interface {
 	NewListener(w Watch) (Listener, error)
+	CatchUp(w Watch, handler DeliveryHandler) error
 }
 
 type watchKey struct {
@@ -293,6 +294,15 @@ func (m *Manager) runWatch(ctx context.Context, w Watch) {
 			continue
 		}
 		m.clearDeliveryError(watchTransportErrorKey(w))
+		// Catch up on messages queued in the broker during disconnect.
+		// handleDelivery deduplicates via AddRecordIfAbsent, so overlaps with
+		// push delivery are harmless.
+		if err := m.factory.CatchUp(w, func(d Delivery) error {
+			return m.handleDelivery(w, d)
+		}); err != nil {
+			// CatchUp failure is non-fatal — push stream still works.
+			m.captureDeliveryError(watchTransportErrorKey(w), fmt.Errorf("catch-up inbox for %s/%s: %w", w.ProjectID, w.AgentName, err))
+		}
 
 		err = listener.Listen(ctx, func(d Delivery) error {
 			return m.handleDelivery(w, d)
