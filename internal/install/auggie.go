@@ -8,16 +8,11 @@ import (
 	"strings"
 )
 
-const (
-	auggieBlockBegin = "<!-- WAGGLE-AUGGIE-BEGIN -->"
-	auggieBlockEnd   = "<!-- WAGGLE-AUGGIE-END -->"
-)
-
-// The canonical Auggie integration assets live in integrations/auggie/.
-// This mirrored copy exists in-package so go:embed can bundle them for install.
-//
 //go:embed all:auggie
 var auggieFiles embed.FS
+
+// auggieHeader marks the file as managed by waggle.
+const auggieHeader = "<!-- Managed by waggle. Do not edit. Custom rules go in a separate file. -->\n"
 
 func InstallAuggie() error {
 	home, err := os.UserHomeDir()
@@ -42,104 +37,28 @@ func installAuggie(homeDir string) error {
 	}
 	rulesPath := filepath.Join(rulesDir, "waggle.md")
 
-	blockData, err := auggieFiles.ReadFile("auggie/RULE-block.md")
+	content, err := canonicalAuggieFile()
 	if err != nil {
-		return fmt.Errorf("reading embedded Auggie rule block: %w", err)
-	}
-
-	if err := repairTruncatedAuggieBlock(rulesPath, string(blockData)); err != nil {
-		return fmt.Errorf("repairing truncated Auggie waggle rule: %w", err)
-	}
-
-	if err := upsertManagedBlock(rulesPath, auggieBlockBegin, auggieBlockEnd, string(blockData)); err != nil {
-		return fmt.Errorf("updating Auggie waggle rule: %w", err)
-	}
-
-	return nil
-}
-
-func repairTruncatedAuggieBlock(path, blockBody string) error {
-	current, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
 		return err
 	}
 
-	content := string(current)
-	idx := strings.Index(content, auggieBlockBegin)
-	if idx < 0 {
-		return nil
-	}
-	if strings.Contains(content[idx:], auggieBlockEnd) {
-		return nil
-	}
-
-	canonicalBlock := canonicalManagedBlock(auggieBlockBegin, auggieBlockEnd, blockBody)
-	truncatedSuffix := content[idx:]
-	remainder, ok := safeAuggieRepairRemainder(canonicalBlock, truncatedSuffix)
-	if !ok {
-		return fmt.Errorf("managed block start found without end marker in %s; refusing to repair non-canonical Auggie block", path)
-	}
-
-	repaired := content[:idx] + canonicalBlock + remainder
-	return os.WriteFile(path, managedBlockBytes(repaired, remainder == ""), 0644)
-}
-
-func longestMatchingPrefix(want, got string) int {
-	max := len(want)
-	if len(got) < max {
-		max = len(got)
-	}
-
-	for i := 0; i < max; i++ {
-		if want[i] != got[i] {
-			return i
-		}
-	}
-
-	return max
-}
-
-func safeAuggieRepairRemainder(canonicalBlock, truncatedSuffix string) (string, bool) {
-	if strings.HasPrefix(canonicalBlock, truncatedSuffix) {
-		return "", true
-	}
-
-	endStart := strings.LastIndex(canonicalBlock, auggieBlockEnd)
-	if endStart < 0 {
-		return "", false
-	}
-	if !strings.HasPrefix(truncatedSuffix, canonicalBlock[:endStart]) {
-		return "", false
-	}
-
-	remainder := truncatedSuffix[endStart:]
-	if remainder == "" {
-		return "", true
-	}
-	if !strings.HasPrefix(remainder, "\n") {
-		return "", false
-	}
-
-	return remainder, true
+	return os.WriteFile(rulesPath, []byte(content), 0644)
 }
 
 func uninstallAuggie(homeDir string) error {
 	rulesPath := filepath.Join(homeDir, ".augment", "rules", "waggle.md")
+	err := os.Remove(rulesPath)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	return err
+}
 
+// canonicalAuggieFile returns the exact content waggle writes to waggle.md.
+func canonicalAuggieFile() (string, error) {
 	blockData, err := auggieFiles.ReadFile("auggie/RULE-block.md")
 	if err != nil {
-		return fmt.Errorf("reading embedded Auggie rule block: %w", err)
+		return "", fmt.Errorf("reading embedded Auggie rule block: %w", err)
 	}
-	if err := repairTruncatedAuggieBlock(rulesPath, string(blockData)); err != nil {
-		return fmt.Errorf("repairing truncated Auggie waggle rule: %w", err)
-	}
-
-	if err := removeManagedBlock(rulesPath, auggieBlockBegin, auggieBlockEnd); err != nil {
-		return fmt.Errorf("updating Auggie waggle rule: %w", err)
-	}
-
-	return nil
+	return auggieHeader + strings.TrimSpace(string(blockData)) + "\n", nil
 }

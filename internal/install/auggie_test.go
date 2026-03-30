@@ -8,7 +8,21 @@ import (
 	"testing"
 )
 
-func TestInstallAuggie_RuleCreated(t *testing.T) {
+// canonicalAuggieFileForTest returns the canonical waggle.md content, failing the test on error.
+func canonicalAuggieFileForTest(t *testing.T) string {
+	t.Helper()
+	content, err := canonicalAuggieFile()
+	if err != nil {
+		t.Fatalf("canonicalAuggieFile: %v", err)
+	}
+	return content
+}
+
+// ---------------------------------------------------------------------------
+// Install tests
+// ---------------------------------------------------------------------------
+
+func TestInstallAuggie_CreatesFile(t *testing.T) {
 	tmpHome := t.TempDir()
 
 	if err := installAuggie(tmpHome); err != nil {
@@ -21,24 +35,33 @@ func TestInstallAuggie_RuleCreated(t *testing.T) {
 	}
 }
 
-func TestInstallAuggie_ManagedBlockCreated(t *testing.T) {
+func TestInstallAuggie_CorrectContent(t *testing.T) {
 	tmpHome := t.TempDir()
 
 	if err := installAuggie(tmpHome); err != nil {
 		t.Fatalf("install failed: %v", err)
 	}
 
-	data, err := os.ReadFile(filepath.Join(tmpHome, ".augment", "rules", "waggle.md"))
+	rulesPath := filepath.Join(tmpHome, ".augment", "rules", "waggle.md")
+	data, err := os.ReadFile(rulesPath)
 	if err != nil {
 		t.Fatalf("read waggle.md: %v", err)
 	}
 
-	content := string(data)
-	if !strings.Contains(content, auggieBlockBegin) || !strings.Contains(content, auggieBlockEnd) {
-		t.Fatalf("managed block markers missing:\n%s", content)
+	canonical := canonicalAuggieFileForTest(t)
+	if string(data) != canonical {
+		t.Fatalf("content mismatch:\nwant: %q\ngot:  %q", canonical, string(data))
 	}
-	if !strings.Contains(content, "waggle adapter bootstrap auggie --format markdown") {
-		t.Fatalf("expected waggle adapter bootstrap command in rule block:\n%s", content)
+
+	// Verify structure: header + rule body + trailing newline
+	if !strings.HasPrefix(string(data), auggieHeader) {
+		t.Fatalf("file does not start with managed header:\n%s", string(data))
+	}
+	if !strings.HasSuffix(string(data), "\n") {
+		t.Fatal("file does not end with trailing newline")
+	}
+	if !strings.Contains(string(data), "waggle adapter bootstrap auggie --format markdown") {
+		t.Fatalf("expected waggle adapter bootstrap command in content:\n%s", string(data))
 	}
 }
 
@@ -48,258 +71,162 @@ func TestInstallAuggie_Idempotent(t *testing.T) {
 	if err := installAuggie(tmpHome); err != nil {
 		t.Fatalf("first install failed: %v", err)
 	}
+
+	first, err := os.ReadFile(filepath.Join(tmpHome, ".augment", "rules", "waggle.md"))
+	if err != nil {
+		t.Fatalf("read after first install: %v", err)
+	}
+
 	if err := installAuggie(tmpHome); err != nil {
 		t.Fatalf("second install failed: %v", err)
 	}
 
-	data, err := os.ReadFile(filepath.Join(tmpHome, ".augment", "rules", "waggle.md"))
+	second, err := os.ReadFile(filepath.Join(tmpHome, ".augment", "rules", "waggle.md"))
 	if err != nil {
-		t.Fatalf("read waggle.md: %v", err)
+		t.Fatalf("read after second install: %v", err)
 	}
 
-	if got := strings.Count(string(data), auggieBlockBegin); got != 1 {
-		t.Fatalf("expected 1 managed block, got %d", got)
+	if !bytes.Equal(first, second) {
+		t.Fatalf("second install produced different content:\nfirst:  %q\nsecond: %q", string(first), string(second))
 	}
 }
 
-func TestInstallAuggie_PreservesExistingRules(t *testing.T) {
+func TestInstallAuggie_CreatesParentDir(t *testing.T) {
 	tmpHome := t.TempDir()
-	rulesDir := filepath.Join(tmpHome, ".augment", "rules")
-	if err := os.MkdirAll(rulesDir, 0755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
 
-	original := "# Existing Rules\n- keep this\n"
-	if err := os.WriteFile(filepath.Join(rulesDir, "waggle.md"), []byte(original), 0644); err != nil {
-		t.Fatalf("write waggle.md: %v", err)
+	// Ensure ~/.augment/rules/ does NOT exist
+	rulesDir := filepath.Join(tmpHome, ".augment", "rules")
+	if _, err := os.Stat(rulesDir); err == nil {
+		t.Fatal("rules dir already exists before install")
 	}
 
 	if err := installAuggie(tmpHome); err != nil {
 		t.Fatalf("install failed: %v", err)
 	}
 
-	data, err := os.ReadFile(filepath.Join(rulesDir, "waggle.md"))
+	info, err := os.Stat(rulesDir)
 	if err != nil {
-		t.Fatalf("read waggle.md: %v", err)
+		t.Fatalf("rules dir not created: %v", err)
 	}
-
-	content := string(data)
-	if !strings.Contains(content, "# Existing Rules") {
-		t.Fatalf("existing content removed:\n%s", content)
-	}
-	if !strings.Contains(content, auggieBlockBegin) {
-		t.Fatalf("managed block missing:\n%s", content)
+	if !info.IsDir() {
+		t.Fatal("rules path is not a directory")
 	}
 }
 
-func TestInstallAuggie_PreservesRepeatedBlankLinesOutsideManagedBlock(t *testing.T) {
+func TestInstallAuggie_OverwritesStaleContent(t *testing.T) {
 	tmpHome := t.TempDir()
 	rulesDir := filepath.Join(tmpHome, ".augment", "rules")
 	if err := os.MkdirAll(rulesDir, 0755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
 
-	original := "# Leading\n\n\nAlpha\n\n\nOmega\n"
 	rulesPath := filepath.Join(rulesDir, "waggle.md")
-	if err := os.WriteFile(rulesPath, []byte(original), 0644); err != nil {
-		t.Fatalf("write waggle.md: %v", err)
+	stale := "# Old stale content from a previous version\n"
+	if err := os.WriteFile(rulesPath, []byte(stale), 0644); err != nil {
+		t.Fatalf("write stale: %v", err)
 	}
 
 	if err := installAuggie(tmpHome); err != nil {
 		t.Fatalf("install failed: %v", err)
 	}
 
-	after, err := os.ReadFile(rulesPath)
-	if err != nil {
-		t.Fatalf("read waggle.md: %v", err)
-	}
-
-	if !strings.HasPrefix(string(after), original) {
-		t.Fatalf("install changed surrounding content unexpectedly:\nwant prefix:\n%s\ngot:\n%s", original, string(after))
-	}
-}
-
-func TestInstallAuggie_RepairTruncatedBlockPreservesTrailingRules(t *testing.T) {
-	tmpHome := t.TempDir()
-
-	if err := installAuggie(tmpHome); err != nil {
-		t.Fatalf("install failed: %v", err)
-	}
-
-	rulesPath := filepath.Join(tmpHome, ".augment", "rules", "waggle.md")
 	data, err := os.ReadFile(rulesPath)
 	if err != nil {
-		t.Fatalf("read waggle.md: %v", err)
+		t.Fatalf("read: %v", err)
 	}
 
-	broken := strings.Replace(string(data), auggieBlockEnd, "", 1) + "\n# Personal Rules\n- keep this\n"
-	if err := os.WriteFile(rulesPath, []byte(broken), 0644); err != nil {
-		t.Fatalf("write broken waggle.md: %v", err)
-	}
-
-	if err := installAuggie(tmpHome); err != nil {
-		t.Fatalf("repair install failed: %v", err)
-	}
-
-	after, err := os.ReadFile(rulesPath)
-	if err != nil {
-		t.Fatalf("read waggle.md after repair: %v", err)
-	}
-
-	canonicalBlock := canonicalAuggieManagedBlock(t)
-	brokenSuffix := broken[strings.Index(broken, auggieBlockBegin):]
-	want := string(managedBlockBytes(canonicalBlock+brokenSuffix[longestMatchingPrefix(canonicalBlock, brokenSuffix):], false))
-	if string(after) != want {
-		t.Fatalf("reinstall did not preserve trailing rules as expected:\nwant:\n%s\ngot:\n%s", want, string(after))
-	}
-	if !strings.Contains(string(after), "# Personal Rules\n- keep this") {
-		t.Fatalf("trailing personal rules missing after repair:\n%s", string(after))
+	canonical := canonicalAuggieFileForTest(t)
+	if string(data) != canonical {
+		t.Fatalf("stale content not overwritten:\nwant: %q\ngot:  %q", canonical, string(data))
 	}
 }
 
-func TestInstallAuggie_RepairTruncatedBlockAtEOF(t *testing.T) {
+// ---------------------------------------------------------------------------
+// Uninstall tests
+// ---------------------------------------------------------------------------
+
+func TestUninstallAuggie_DeletesFile(t *testing.T) {
 	tmpHome := t.TempDir()
 
 	if err := installAuggie(tmpHome); err != nil {
 		t.Fatalf("install failed: %v", err)
+	}
+
+	if err := uninstallAuggie(tmpHome); err != nil {
+		t.Fatalf("uninstall failed: %v", err)
 	}
 
 	rulesPath := filepath.Join(tmpHome, ".augment", "rules", "waggle.md")
-	original, err := os.ReadFile(rulesPath)
-	if err != nil {
-		t.Fatalf("read waggle.md: %v", err)
-	}
-
-	broken := strings.TrimSuffix(string(original), auggieBlockEnd+"\n")
-	if err := os.WriteFile(rulesPath, []byte(broken), 0644); err != nil {
-		t.Fatalf("write broken waggle.md: %v", err)
-	}
-
-	if err := installAuggie(tmpHome); err != nil {
-		t.Fatalf("repair install failed: %v", err)
-	}
-
-	after, err := os.ReadFile(rulesPath)
-	if err != nil {
-		t.Fatalf("read waggle.md after repair: %v", err)
-	}
-	if string(after) != string(original) {
-		t.Fatalf("EOF truncation repair changed content unexpectedly:\nwant:\n%s\ngot:\n%s", string(original), string(after))
+	if _, err := os.Stat(rulesPath); !os.IsNotExist(err) {
+		t.Fatalf("waggle.md still exists after uninstall (err=%v)", err)
 	}
 }
 
-func TestUninstallAuggie_RemovesManagedBlock(t *testing.T) {
+func TestUninstallAuggie_IdempotentOnMissing(t *testing.T) {
 	tmpHome := t.TempDir()
 
-	if err := installAuggie(tmpHome); err != nil {
-		t.Fatalf("install failed: %v", err)
-	}
+	// Uninstall without prior install — should not error
 	if err := uninstallAuggie(tmpHome); err != nil {
-		t.Fatalf("uninstall failed: %v", err)
-	}
-
-	data, err := os.ReadFile(filepath.Join(tmpHome, ".augment", "rules", "waggle.md"))
-	if err != nil && !os.IsNotExist(err) {
-		t.Fatalf("read waggle.md: %v", err)
-	}
-	if err == nil && strings.Contains(string(data), auggieBlockBegin) {
-		t.Fatalf("managed block still present after uninstall:\n%s", string(data))
+		t.Fatalf("uninstall on missing file failed: %v", err)
 	}
 }
 
-func TestUninstallAuggie_PreservesOtherRulesContent(t *testing.T) {
-	tmpHome := t.TempDir()
-	rulesDir := filepath.Join(tmpHome, ".augment", "rules")
-	if err := os.MkdirAll(rulesDir, 0755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-
-	original := "# Existing Rules\n- keep this\n"
-	if err := os.WriteFile(filepath.Join(rulesDir, "waggle.md"), []byte(original), 0644); err != nil {
-		t.Fatalf("write waggle.md: %v", err)
-	}
-
-	if err := installAuggie(tmpHome); err != nil {
-		t.Fatalf("install failed: %v", err)
-	}
-	if err := uninstallAuggie(tmpHome); err != nil {
-		t.Fatalf("uninstall failed: %v", err)
-	}
-
-	data, err := os.ReadFile(filepath.Join(rulesDir, "waggle.md"))
-	if err != nil {
-		t.Fatalf("read waggle.md: %v", err)
-	}
-	if string(data) != original {
-		t.Fatalf("waggle.md content changed unexpectedly:\nwant:\n%s\ngot:\n%s", original, string(data))
-	}
-}
-
-func TestUninstallAuggie_PreservesRepeatedBlankLinesOutsideManagedBlock(t *testing.T) {
-	tmpHome := t.TempDir()
-	rulesDir := filepath.Join(tmpHome, ".augment", "rules")
-	if err := os.MkdirAll(rulesDir, 0755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-
-	prefix := "# Leading\n\n\nAlpha\n\n\n"
-	suffix := "# Trailing\n\n\nOmega\n"
-	rulesPath := filepath.Join(rulesDir, "waggle.md")
-	content := prefix + canonicalAuggieManagedBlock(t) + "\n" + suffix
-	if err := os.WriteFile(rulesPath, []byte(content), 0644); err != nil {
-		t.Fatalf("write waggle.md: %v", err)
-	}
-
-	if err := uninstallAuggie(tmpHome); err != nil {
-		t.Fatalf("uninstall failed: %v", err)
-	}
-
-	after, err := os.ReadFile(rulesPath)
-	if err != nil {
-		t.Fatalf("read waggle.md: %v", err)
-	}
-
-	want := prefix + suffix
-	if string(after) != want {
-		t.Fatalf("uninstall changed surrounding content unexpectedly:\nwant:\n%s\ngot:\n%s", want, string(after))
-	}
-}
-
-func TestUninstallAuggie_RepairsTruncatedBlockFirst(t *testing.T) {
+func TestUninstallAuggie_RoundTrip(t *testing.T) {
 	tmpHome := t.TempDir()
 
 	if err := installAuggie(tmpHome); err != nil {
 		t.Fatalf("install failed: %v", err)
 	}
 
+	// Verify file exists after install
 	rulesPath := filepath.Join(tmpHome, ".augment", "rules", "waggle.md")
-	data, err := os.ReadFile(rulesPath)
-	if err != nil {
-		t.Fatalf("read waggle.md: %v", err)
-	}
-
-	broken := strings.Replace(string(data), auggieBlockEnd, "", 1) + "\n# Personal Rules\n- keep this\n"
-	if err := os.WriteFile(rulesPath, []byte(broken), 0644); err != nil {
-		t.Fatalf("write waggle.md: %v", err)
+	if _, err := os.Stat(rulesPath); err != nil {
+		t.Fatalf("waggle.md missing after install: %v", err)
 	}
 
 	if err := uninstallAuggie(tmpHome); err != nil {
 		t.Fatalf("uninstall failed: %v", err)
 	}
 
-	after, err := os.ReadFile(rulesPath)
-	if err != nil {
-		t.Fatalf("read waggle.md: %v", err)
-	}
-	if strings.Contains(string(after), auggieBlockBegin) || strings.Contains(string(after), auggieBlockEnd) {
-		t.Fatalf("managed block markers still present after uninstall repair:\n%s", string(after))
-	}
-	if !strings.Contains(string(after), "# Personal Rules\n- keep this") {
-		t.Fatalf("trailing personal rules missing after uninstall repair:\n%s", string(after))
+	// File must be completely gone
+	if _, err := os.Stat(rulesPath); !os.IsNotExist(err) {
+		t.Fatalf("waggle.md still exists after round-trip (err=%v)", err)
 	}
 }
 
-func TestInstallAuggie_RejectsCorruptedManagedBodyDuringRepair(t *testing.T) {
+// ---------------------------------------------------------------------------
+// Health tests
+// ---------------------------------------------------------------------------
+
+func TestCheckAuggie_NotInstalled(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	issues, state := CheckAuggie(tmpHome)
+	if state != StateNotInstalled {
+		t.Errorf("expected StateNotInstalled, got %q", state)
+	}
+	if len(issues) != 0 {
+		t.Errorf("expected no issues, got %d", len(issues))
+	}
+}
+
+func TestCheckAuggie_Healthy(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	if err := installAuggie(tmpHome); err != nil {
+		t.Fatalf("install failed: %v", err)
+	}
+
+	issues, state := CheckAuggie(tmpHome)
+	if state != StateHealthy {
+		t.Errorf("expected StateHealthy, got %q", state)
+		for _, issue := range issues {
+			t.Errorf("  issue: %s: %s", issue.Asset, issue.Problem)
+		}
+	}
+}
+
+func TestCheckAuggie_BrokenWrongContent(t *testing.T) {
 	tmpHome := t.TempDir()
 	rulesDir := filepath.Join(tmpHome, ".augment", "rules")
 	if err := os.MkdirAll(rulesDir, 0755); err != nil {
@@ -307,27 +234,47 @@ func TestInstallAuggie_RejectsCorruptedManagedBodyDuringRepair(t *testing.T) {
 	}
 
 	rulesPath := filepath.Join(rulesDir, "waggle.md")
-	broken := auggieBlockBegin + "\nthis is corrupted body text\n# Personal Rules\n- keep this\n"
-	if err := os.WriteFile(rulesPath, []byte(broken), 0644); err != nil {
-		t.Fatalf("write waggle.md: %v", err)
+	if err := os.WriteFile(rulesPath, []byte("wrong content\n"), 0644); err != nil {
+		t.Fatalf("write: %v", err)
 	}
 
-	err := installAuggie(tmpHome)
-	if err == nil {
-		t.Fatal("expected install to fail closed for corrupted managed-body repair")
+	issues, state := CheckAuggie(tmpHome)
+	if state != StateBroken {
+		t.Errorf("expected StateBroken, got %q", state)
 	}
-	if !strings.Contains(err.Error(), "refusing to repair non-canonical Auggie block") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	after, err := os.ReadFile(rulesPath)
-	if err != nil {
-		t.Fatalf("read waggle.md: %v", err)
-	}
-	if string(after) != broken {
-		t.Fatalf("corrupted file changed unexpectedly:\nwant:\n%s\ngot:\n%s", broken, string(after))
+	if len(issues) == 0 {
+		t.Error("expected health issues for wrong content, got none")
 	}
 }
+
+func TestCheckAuggie_BrokenReadError(t *testing.T) {
+	tmpHome := t.TempDir()
+	rulesDir := filepath.Join(tmpHome, ".augment", "rules")
+	if err := os.MkdirAll(rulesDir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	rulesPath := filepath.Join(rulesDir, "waggle.md")
+	if err := os.WriteFile(rulesPath, []byte("content"), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := os.Chmod(rulesPath, 0000); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { os.Chmod(rulesPath, 0644) })
+
+	issues, state := CheckAuggie(tmpHome)
+	if state != StateBroken {
+		t.Errorf("expected StateBroken for unreadable file, got %q", state)
+	}
+	if len(issues) == 0 {
+		t.Error("expected health issues for unreadable file, got none")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Asset sync test
+// ---------------------------------------------------------------------------
 
 func TestEmbeddedAuggieFilesMatchSource(t *testing.T) {
 	sourceDir := filepath.Join("..", "..", "integrations", "auggie")
@@ -393,15 +340,4 @@ func TestEmbeddedAuggieFilesMatchSource(t *testing.T) {
 			t.Errorf("file %s exists in internal/install/auggie/ but not in integrations/auggie/", name)
 		}
 	}
-}
-
-func canonicalAuggieManagedBlock(t *testing.T) string {
-	t.Helper()
-
-	blockData, err := auggieFiles.ReadFile("auggie/RULE-block.md")
-	if err != nil {
-		t.Fatalf("read embedded Auggie block: %v", err)
-	}
-
-	return strings.TrimSpace(strings.Join([]string{auggieBlockBegin, strings.TrimSpace(string(blockData)), auggieBlockEnd}, "\n"))
 }

@@ -207,7 +207,8 @@ func CheckCodex(homeDir string) ([]HealthIssue, AdapterState) {
 }
 
 // CheckAuggie checks the health of the Auggie integration.
-// Health is derived from the managed block state in ~/.augment/rules/waggle.md.
+// Auggie reads all files in ~/.augment/rules/, so waggle owns waggle.md entirely.
+// Health is determined by whether the file exists and matches canonical content.
 func CheckAuggie(homeDir string) ([]HealthIssue, AdapterState) {
 	rulesPath := filepath.Join(homeDir, ".augment", "rules", "waggle.md")
 	const repairCmd = "waggle install auggie"
@@ -224,86 +225,24 @@ func CheckAuggie(homeDir string) ([]HealthIssue, AdapterState) {
 		}}, StateBroken
 	}
 
-	content := string(data)
-	beginCount := strings.Count(content, auggieBlockBegin)
-	endCount := strings.Count(content, auggieBlockEnd)
-
-	if beginCount == 0 && endCount == 0 {
-		return nil, StateNotInstalled
-	}
-
-	if beginCount == 0 {
-		return []HealthIssue{{
-			Asset:   rulesPath,
-			Problem: "managed block end marker found without begin marker",
-			Repair:  repairCmd,
-		}}, StateBroken
-	}
-
-	if endCount == 0 {
-		return []HealthIssue{{
-			Asset:   rulesPath,
-			Problem: "managed block truncated (begin marker without end marker)",
-			Repair:  repairCmd,
-		}}, StateBroken
-	}
-
-	if beginCount != 1 || endCount != 1 {
-		return []HealthIssue{{
-			Asset:   rulesPath,
-			Problem: "managed block markers are duplicated or malformed",
-			Repair:  repairCmd,
-		}}, StateBroken
-	}
-
-	idx := strings.Index(content, auggieBlockBegin)
-	endIdx := strings.Index(content[idx:], auggieBlockEnd)
-	if endIdx < 0 {
-		return []HealthIssue{{
-			Asset:   rulesPath,
-			Problem: "managed block truncated (begin marker without end marker)",
-			Repair:  repairCmd,
-		}}, StateBroken
-	}
-
-	blockData, err := auggieFiles.ReadFile("auggie/RULE-block.md")
+	canonical, err := canonicalAuggieFile()
 	if err != nil {
 		return []HealthIssue{{
 			Asset:   rulesPath,
-			Problem: "unable to read embedded Auggie rule block: " + err.Error(),
+			Problem: "unable to determine canonical content: " + err.Error(),
 			Repair:  repairCmd,
 		}}, StateBroken
 	}
 
-	canonicalBlock := canonicalManagedBlock(auggieBlockBegin, auggieBlockEnd, string(blockData))
-	endAbs := idx + endIdx + len(auggieBlockEnd)
-	if !hasManagedBlockLineBoundaries(content, idx, endAbs) {
+	if string(data) != canonical {
 		return []HealthIssue{{
 			Asset:   rulesPath,
-			Problem: "managed block boundaries are malformed",
-			Repair:  repairCmd,
-		}}, StateBroken
-	}
-	installedBlock := strings.TrimSpace(content[idx:endAbs])
-	if installedBlock != canonicalBlock {
-		return []HealthIssue{{
-			Asset:   rulesPath,
-			Problem: "managed block content does not match canonical Auggie rule block",
+			Problem: "content does not match expected; may need update",
 			Repair:  repairCmd,
 		}}, StateBroken
 	}
 
 	return nil, StateHealthy
-}
-
-func hasManagedBlockLineBoundaries(content string, beginIdx, endAbs int) bool {
-	if beginIdx > 0 && content[beginIdx-1] != '\n' {
-		return false
-	}
-	if endAbs < len(content) && content[endAbs] != '\n' {
-		return false
-	}
-	return true
 }
 
 // fileExists returns true if a path exists on disk (file or directory).
