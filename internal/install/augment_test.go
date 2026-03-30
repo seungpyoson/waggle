@@ -173,6 +173,9 @@ func TestCheckAugment_Broken(t *testing.T) {
 }
 
 func TestCheckAugment_ReadError(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("test not meaningful when running as root")
+	}
 	tmpHome := t.TempDir()
 	augmentDir := filepath.Join(tmpHome, ".augment", "skills")
 	os.MkdirAll(augmentDir, 0755)
