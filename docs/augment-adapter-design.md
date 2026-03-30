@@ -29,11 +29,9 @@ The detection is passive and file-based, not dynamic. It does not require Augmen
 ## 4. Fallback Path & Temporary Tracking
 
 If the skill file is missing or malformed:
-- User can manually run `waggle adapter bootstrap augment --format markdown`
-- This is a **temporary workaround**, not the normal path
+- `waggle status` reports the adapter as `broken` or `not_installed` with repair guidance: `waggle install augment`
+- User can manually run `waggle adapter bootstrap augment --format markdown` as a temporary workaround
 - Manual runs are not tracked or encouraged — they indicate installation failure
-
-Fallback is documented in error messages but requires explicit user action, reinforcing that install is the correct path.
 
 ## 5. No Dual Transport
 

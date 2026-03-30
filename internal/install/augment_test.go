@@ -78,6 +78,45 @@ func TestInstall_AugmentUninstall(t *testing.T) {
 	}
 }
 
+func TestInstall_AugmentUninstallIdempotent(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	if err := installAugment(tmpHome); err != nil {
+		t.Fatalf("install failed: %v", err)
+	}
+	if err := uninstallAugment(tmpHome); err != nil {
+		t.Fatalf("first uninstall failed: %v", err)
+	}
+	if err := uninstallAugment(tmpHome); err != nil {
+		t.Fatalf("second uninstall failed: %v", err)
+	}
+}
+
+func TestInstall_AugmentUninstallMissingFile(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	if err := uninstallAugment(tmpHome); err != nil {
+		t.Fatalf("uninstall on missing file failed: %v", err)
+	}
+}
+
+func TestInstall_AugmentUninstallTruncatedBlock(t *testing.T) {
+	tmpHome := t.TempDir()
+	augmentDir := filepath.Join(tmpHome, ".augment", "skills")
+	os.MkdirAll(augmentDir, 0755)
+
+	skillPath := filepath.Join(augmentDir, "waggle.md")
+	os.WriteFile(skillPath, []byte(augmentBlockBegin+"\ntruncated block\n"), 0644)
+
+	err := uninstallAugment(tmpHome)
+	if err == nil {
+		t.Fatal("expected error for truncated block, got nil")
+	}
+	if !strings.Contains(err.Error(), "managed block start found without end marker") {
+		t.Errorf("expected truncation error, got: %v", err)
+	}
+}
+
 func TestInstall_AugmentPreservesOtherContent(t *testing.T) {
 	tmpHome := t.TempDir()
 	augmentDir := filepath.Join(tmpHome, ".augment", "skills")
