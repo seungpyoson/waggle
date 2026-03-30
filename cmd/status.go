@@ -151,6 +151,10 @@ func buildAdapterStatus(homeDir string) map[string]any {
 	cxIssues, cxState := install.CheckCodex(homeDir)
 	result["codex"] = formatAdapterState(cxState, cxIssues, "waggle install codex")
 
+	// Check Gemini
+	gmIssues, gmState := install.CheckGemini(homeDir)
+	result["gemini"] = formatAdapterState(gmState, gmIssues, "waggle install gemini")
+
 	// Check Auggie
 	agIssues, agState := install.CheckAuggie(homeDir)
 	result["auggie"] = formatAdapterState(agState, agIssues, "waggle install auggie")

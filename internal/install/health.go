@@ -229,6 +229,65 @@ func CheckCodex(homeDir string) ([]HealthIssue, AdapterState) {
 	return nil, StateHealthy
 }
 
+// CheckGemini checks the health of the Gemini integration.
+// Same topology-aware flow as CheckCodex: detect any marker, validate topology,
+// then derive state. This ensures health never reports "not_installed" or "healthy"
+// for a file that upsertManagedBlock would reject.
+func CheckGemini(homeDir string) ([]HealthIssue, AdapterState) {
+	const repairCmd = "waggle install gemini"
+	var issues []HealthIssue
+	geminiDir := filepath.Join(homeDir, ".gemini")
+	geminiFilePath := filepath.Join(geminiDir, "GEMINI.md")
+
+	// Step 1: Read file
+	data, err := os.ReadFile(geminiFilePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, StateNotInstalled
+		}
+		return []HealthIssue{{
+			Asset:   geminiFilePath,
+			Problem: "failed to read GEMINI.md: " + err.Error(),
+			Repair:  repairCmd,
+		}}, StateBroken
+	}
+
+	content := string(data)
+	hasBeginMarker := strings.Contains(content, geminiBlockBegin)
+	hasEndMarker := strings.Contains(content, geminiBlockEnd)
+
+	// Step 2: Validate marker topology before deriving state.
+	// Any marker presence (begin OR end) means the file has waggle artifacts.
+	hasAnyMarker := hasBeginMarker || hasEndMarker
+	if hasAnyMarker {
+		if topErr := validateMarkerTopology(content, geminiBlockBegin, geminiBlockEnd); topErr != nil {
+			issues = append(issues, HealthIssue{
+				Asset:   geminiFilePath,
+				Problem: "managed block has invalid topology: " + topErr.Error(),
+				Repair:  repairCmd,
+			})
+		}
+	}
+
+	// Step 3: Derive state
+	if !hasAnyMarker {
+		return nil, StateNotInstalled
+	}
+
+	if hasBeginMarker && !hasEndMarker && len(issues) == 0 {
+		issues = append(issues, HealthIssue{
+			Asset:   geminiFilePath,
+			Problem: "managed block truncated (begin marker without end marker)",
+			Repair:  repairCmd,
+		})
+	}
+
+	if len(issues) > 0 {
+		return issues, StateBroken
+	}
+	return nil, StateHealthy
+}
+
 // CheckAuggie checks the health of the Auggie integration.
 // Auggie reads all files in ~/.augment/rules/, so waggle owns waggle.md entirely.
 // Health is determined by whether the file exists and matches canonical content.
