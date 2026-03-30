@@ -491,3 +491,116 @@ func TestCheckCodex_BrokenOrphanedInstall(t *testing.T) {
 	}
 }
 
+func TestCheckAuggie_NotInstalled(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	issues, state := CheckAuggie(tmpHome)
+	if state != StateNotInstalled {
+		t.Errorf("expected StateNotInstalled, got %q", state)
+	}
+	if len(issues) != 0 {
+		t.Errorf("expected 0 issues for not_installed, got %d: %+v", len(issues), issues)
+	}
+}
+
+func TestCheckAuggie_NotInstalled_NoMarkers(t *testing.T) {
+	tmpHome := t.TempDir()
+	rulesDir := filepath.Join(tmpHome, ".augment", "rules")
+	if err := os.MkdirAll(rulesDir, 0755); err != nil {
+		t.Fatalf("failed to create rules dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(rulesDir, "waggle.md"), []byte("# Existing rule\nNo managed block here\n"), 0644); err != nil {
+		t.Fatalf("failed to write waggle.md: %v", err)
+	}
+
+	issues, state := CheckAuggie(tmpHome)
+	if state != StateNotInstalled {
+		t.Errorf("expected StateNotInstalled, got %q", state)
+	}
+	if len(issues) != 0 {
+		t.Errorf("expected 0 issues for not_installed, got %d: %+v", len(issues), issues)
+	}
+}
+
+func TestCheckAuggie_BrokenTruncatedBlock(t *testing.T) {
+	tmpHome := t.TempDir()
+	rulesDir := filepath.Join(tmpHome, ".augment", "rules")
+	if err := os.MkdirAll(rulesDir, 0755); err != nil {
+		t.Fatalf("failed to create rules dir: %v", err)
+	}
+	rulesPath := filepath.Join(rulesDir, "waggle.md")
+	truncated := auggieBlockBegin + "\n## Waggle Runtime\n"
+	if err := os.WriteFile(rulesPath, []byte(truncated), 0644); err != nil {
+		t.Fatalf("failed to write truncated waggle.md: %v", err)
+	}
+
+	issues, state := CheckAuggie(tmpHome)
+	if state != StateBroken {
+		t.Errorf("expected StateBroken, got %q", state)
+	}
+	if len(issues) == 0 {
+		t.Fatal("expected issues for truncated block, got none")
+	}
+
+	foundTruncation := false
+	for _, issue := range issues {
+		if issue.Asset == rulesPath && issue.Problem == "managed block truncated (begin marker without end marker)" {
+			foundTruncation = true
+			if issue.Repair != "waggle install auggie" {
+				t.Errorf("expected repair 'waggle install auggie', got %q", issue.Repair)
+			}
+		}
+	}
+	if !foundTruncation {
+		t.Errorf("did not find truncation issue in: %+v", issues)
+	}
+}
+
+func TestCheckAuggie_Healthy(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	if err := installAuggie(tmpHome); err != nil {
+		t.Fatalf("install failed: %v", err)
+	}
+
+	issues, state := CheckAuggie(tmpHome)
+	if state != StateHealthy {
+		t.Errorf("expected StateHealthy, got %q", state)
+	}
+	if len(issues) != 0 {
+		t.Errorf("expected 0 issues, got %d: %+v", len(issues), issues)
+	}
+}
+
+func TestCheckAuggie_RepairIdempotent(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	if err := installAuggie(tmpHome); err != nil {
+		t.Fatalf("install failed: %v", err)
+	}
+
+	rulesPath := filepath.Join(tmpHome, ".augment", "rules", "waggle.md")
+	if err := os.WriteFile(rulesPath, []byte(auggieBlockBegin+"\n## Waggle Runtime\n"), 0644); err != nil {
+		t.Fatalf("failed to break waggle.md: %v", err)
+	}
+
+	issues, state := CheckAuggie(tmpHome)
+	if state != StateBroken {
+		t.Errorf("expected StateBroken, got %q", state)
+	}
+	if len(issues) == 0 {
+		t.Fatal("expected issues after breaking, got none")
+	}
+
+	if err := installAuggie(tmpHome); err != nil {
+		t.Fatalf("repair failed: %v", err)
+	}
+
+	issues, state = CheckAuggie(tmpHome)
+	if state != StateHealthy {
+		t.Errorf("expected StateHealthy after repair, got %q", state)
+	}
+	if len(issues) != 0 {
+		t.Errorf("expected 0 issues after repair, got %d: %+v", len(issues), issues)
+	}
+}

@@ -206,9 +206,45 @@ func CheckCodex(homeDir string) ([]HealthIssue, AdapterState) {
 	return nil, StateHealthy
 }
 
+// CheckAuggie checks the health of the Auggie integration.
+// Health is derived from the managed block state in ~/.augment/rules/waggle.md.
+func CheckAuggie(homeDir string) ([]HealthIssue, AdapterState) {
+	rulesPath := filepath.Join(homeDir, ".augment", "rules", "waggle.md")
+	const repairCmd = "waggle install auggie"
+
+	data, err := os.ReadFile(rulesPath)
+	if os.IsNotExist(err) {
+		return nil, StateNotInstalled
+	}
+	if err != nil {
+		return []HealthIssue{{
+			Asset:   rulesPath,
+			Problem: "unable to read rules file: " + err.Error(),
+			Repair:  repairCmd,
+		}}, StateBroken
+	}
+
+	content := string(data)
+	hasBeginMarker := strings.Contains(content, auggieBlockBegin)
+	hasEndMarker := strings.Contains(content, auggieBlockEnd)
+
+	if !hasBeginMarker {
+		return nil, StateNotInstalled
+	}
+
+	if !hasEndMarker {
+		return []HealthIssue{{
+			Asset:   rulesPath,
+			Problem: "managed block truncated (begin marker without end marker)",
+			Repair:  repairCmd,
+		}}, StateBroken
+	}
+
+	return nil, StateHealthy
+}
+
 // fileExists returns true if a path exists on disk (file or directory).
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
 }
-
