@@ -42,6 +42,78 @@ func TestCheckClaudeCode_NotInstalled_NoFingerprint(t *testing.T) {
 	}
 }
 
+func TestCheckClaudeCode_BrokenStaleReference(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	// settings.json has a non-canonical waggle reference, no files on disk
+	claudeDir := filepath.Join(tmpHome, ".claude")
+	if err := os.MkdirAll(claudeDir, 0755); err != nil {
+		t.Fatalf("failed to create .claude: %v", err)
+	}
+	staleSettings := `{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"bash /tmp/stale/waggle-connect.sh"}]}]}}`
+	if err := os.WriteFile(filepath.Join(claudeDir, "settings.json"), []byte(staleSettings), 0644); err != nil {
+		t.Fatalf("failed to write settings.json: %v", err)
+	}
+
+	issues, state := CheckClaudeCode(tmpHome)
+	if state != StateBroken {
+		t.Errorf("expected StateBroken (stale reference), got %q", state)
+	}
+	if len(issues) == 0 {
+		t.Fatal("expected issues for stale reference, got none")
+	}
+
+	foundStale := false
+	for _, issue := range issues {
+		if issue.Asset == filepath.Join(claudeDir, "settings.json") &&
+			issue.Problem == "stale waggle hook reference in settings.json: bash /tmp/stale/waggle-connect.sh" {
+			foundStale = true
+			if issue.Repair != "waggle install claude-code" {
+				t.Errorf("expected repair 'waggle install claude-code', got %q", issue.Repair)
+			}
+		}
+	}
+	if !foundStale {
+		t.Errorf("did not find stale reference issue in: %+v", issues)
+	}
+}
+
+func TestCheckClaudeCode_HealthyWithStaleReference(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	// Install normally — canonical fingerprint + all files
+	if err := installClaudeCode(tmpHome); err != nil {
+		t.Fatalf("install failed: %v", err)
+	}
+
+	// Rewrite settings.json to include both canonical and stale entries
+	claudeDir := filepath.Join(tmpHome, ".claude")
+	settingsPath := filepath.Join(claudeDir, "settings.json")
+	bothHooks := `{"hooks":{"SessionStart":[` +
+		`{"hooks":[{"type":"command","command":"` + waggleHookCommand + `"}]},` +
+		`{"hooks":[{"type":"command","command":"bash /old/path/waggle-connect.sh"}]}` +
+		`]}}`
+	if err := os.WriteFile(settingsPath, []byte(bothHooks), 0644); err != nil {
+		t.Fatalf("failed to write settings.json: %v", err)
+	}
+
+	// Canonical fingerprint + all files + stale reference → StateBroken (stale ref is an issue)
+	issues, state := CheckClaudeCode(tmpHome)
+	if state != StateBroken {
+		t.Errorf("expected StateBroken (stale reference alongside canonical), got %q", state)
+	}
+
+	foundStale := false
+	for _, issue := range issues {
+		if issue.Problem == "stale waggle hook reference in settings.json: bash /old/path/waggle-connect.sh" {
+			foundStale = true
+		}
+	}
+	if !foundStale {
+		t.Errorf("did not find stale reference issue in: %+v", issues)
+	}
+}
+
 func TestCheckClaudeCode_Healthy(t *testing.T) {
 	tmpHome := t.TempDir()
 

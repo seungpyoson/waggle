@@ -37,11 +37,14 @@ func CheckClaudeCode(homeDir string) ([]HealthIssue, AdapterState) {
 	const repairCmd = "waggle install claude-code"
 
 	// Step 1: Check for fingerprint (waggle hook registration in settings.json).
-	// Uses exact canonical command match — same string the installer writes.
+	// Only the exact canonical command counts as a waggle fingerprint.
+	// Non-canonical references (e.g., user-edited paths) are detected separately
+	// as stale references and surfaced with repair guidance.
 	settingsPath := filepath.Join(claudeDir, "settings.json")
 	settings, _ := readSettingsJSON(settingsPath)
 
 	hookRegistered := false
+	var staleRef string // non-canonical command containing "waggle-connect.sh"
 	if hooks, ok := settings["hooks"].(map[string]interface{}); ok {
 		if sessionStart, ok := hooks["SessionStart"].([]interface{}); ok {
 			for _, entry := range sessionStart {
@@ -53,6 +56,8 @@ func CheckClaudeCode(homeDir string) ([]HealthIssue, AdapterState) {
 									if cmd == waggleHookCommand {
 										hookRegistered = true
 										break
+									} else if strings.Contains(cmd, "waggle-connect.sh") {
+										staleRef = cmd
 									}
 								}
 							}
@@ -75,6 +80,15 @@ func CheckClaudeCode(homeDir string) ([]HealthIssue, AdapterState) {
 
 	// Step 3: Derive state from fingerprint × files matrix
 	if !hookRegistered && !anyFileExists {
+		if staleRef != "" {
+			// No canonical fingerprint, no files, but a stale waggle reference
+			// exists in settings.json — surface it with repair guidance
+			return []HealthIssue{{
+				Asset:   settingsPath,
+				Problem: "stale waggle hook reference in settings.json: " + staleRef,
+				Repair:  repairCmd,
+			}}, StateBroken
+		}
 		return nil, StateNotInstalled
 	}
 
@@ -83,6 +97,15 @@ func CheckClaudeCode(homeDir string) ([]HealthIssue, AdapterState) {
 		issues = append(issues, HealthIssue{
 			Asset:   settingsPath,
 			Problem: "hook registration missing from settings.json",
+			Repair:  repairCmd,
+		})
+	}
+
+	if staleRef != "" {
+		// Canonical fingerprint exists, but there's also a stale reference
+		issues = append(issues, HealthIssue{
+			Asset:   settingsPath,
+			Problem: "stale waggle hook reference in settings.json: " + staleRef,
 			Repair:  repairCmd,
 		})
 	}
