@@ -486,6 +486,30 @@ func TestCheckAuggie_BrokenAncestorSymlink(t *testing.T) {
 	}
 }
 
+func TestCheckAuggie_BrokenAncestorSymlinkMissingRules(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	// Create an empty target directory — no rules/ inside
+	emptyTarget := filepath.Join(tmpHome, "empty-target")
+	if err := os.MkdirAll(emptyTarget, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Symlink ~/.augment to the empty target
+	if err := os.Symlink(emptyTarget, filepath.Join(tmpHome, ".augment")); err != nil {
+		t.Fatal(err)
+	}
+
+	// Health must report broken (ancestor symlink), NOT not_installed
+	issues, state := CheckAuggie(tmpHome)
+	if state != StateBroken {
+		t.Errorf("expected StateBroken for ancestor symlink with missing rules/, got %q", state)
+	}
+	if len(issues) == 0 {
+		t.Error("expected issues for ancestor symlink")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Asset sync test
 // ---------------------------------------------------------------------------

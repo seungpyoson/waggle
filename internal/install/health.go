@@ -214,17 +214,16 @@ func CheckAuggie(homeDir string) ([]HealthIssue, AdapterState) {
 	rulesPath := filepath.Join(homeDir, ".augment", "rules", "waggle.md")
 	const repairCmd = "waggle install auggie"
 
-	// Validate ancestor path — symlinked parent directories are broken
+	// Validate ancestor path — symlinked parent directories are broken.
+	// Uses the same validateAncestorPath as install/uninstall to ensure
+	// consistent classification regardless of whether rules/ exists yet.
 	rulesDir := filepath.Dir(rulesPath)
-	if resolved, err := filepath.EvalSymlinks(rulesDir); err == nil {
-		expected, _ := filepath.EvalSymlinks(homeDir)
-		if expected != "" && resolved != filepath.Join(expected, ".augment", "rules") {
-			return []HealthIssue{{
-				Asset:   rulesDir,
-				Problem: fmt.Sprintf("directory resolves to %s (expected under %s); symlink in ancestor path", resolved, expected),
-				Repair:  "rm the symlink and re-run " + repairCmd,
-			}}, StateBroken
-		}
+	if err := validateAncestorPath(rulesDir, homeDir); err != nil {
+		return []HealthIssue{{
+			Asset:   rulesDir,
+			Problem: "symlink in ancestor path: " + err.Error(),
+			Repair:  "rm the symlink and re-run " + repairCmd,
+		}}, StateBroken
 	}
 
 	// Reject symlinks and non-regular files to maintain owned-file integrity
