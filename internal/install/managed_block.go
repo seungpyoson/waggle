@@ -6,6 +6,11 @@ import (
 	"strings"
 )
 
+// isLineBreakChar returns true for characters that indicate a line boundary (\n or \r).
+func isLineBreakChar(c byte) bool {
+	return c == '\n' || c == '\r'
+}
+
 // validateMarkerTopology checks that a file's managed-block markers are in a
 // sane state before any mutation. This prevents upsert/remove from silently
 // producing a file that the health check would reject.
@@ -13,7 +18,7 @@ import (
 // Rules:
 //  1. At most one begin marker and one end marker.
 //  2. An end marker without a begin marker is always invalid (orphaned end).
-//  3. A begin marker without an end marker is tolerable (repair handles it),
+//  3. A begin marker without an end marker is tolerable (upsert/remove self-heal it),
 //     but the begin marker must be at the start of a line.
 //  4. If both exist: begin must be at start of line, end must be at end of
 //     line (followed only by \n or EOF).
@@ -33,7 +38,7 @@ func validateMarkerTopology(content, begin, end string) error {
 
 	if beginCount == 1 {
 		idx := strings.Index(content, begin)
-		if idx > 0 && content[idx-1] != '\n' {
+		if idx > 0 && !isLineBreakChar(content[idx-1]) {
 			return fmt.Errorf("begin marker not at start of line; refusing to mutate")
 		}
 	}
@@ -41,7 +46,7 @@ func validateMarkerTopology(content, begin, end string) error {
 	if endCount == 1 {
 		idx := strings.Index(content, end)
 		endAbs := idx + len(end)
-		if endAbs < len(content) && content[endAbs] != '\n' {
+		if endAbs < len(content) && !isLineBreakChar(content[endAbs]) {
 			return fmt.Errorf("end marker not at end of line; refusing to mutate")
 		}
 	}
@@ -73,7 +78,10 @@ func upsertManagedBlock(path, begin, end, body string) error {
 	if idx := strings.Index(content, begin); idx >= 0 {
 		endIdx := strings.Index(content[idx:], end)
 		if endIdx < 0 {
-			return fmt.Errorf("managed block start found without end marker in %s", path)
+			// Begin without end — replace everything from begin to EOF with canonical block.
+			// This self-heals truncated files (e.g., OS crash during write).
+			replaced := content[:idx] + block
+			return os.WriteFile(path, managedBlockBytes(replaced, true), 0644)
 		}
 		endAbs := idx + endIdx + len(end)
 		replaced := content[:idx] + block + content[endAbs:]
@@ -119,7 +127,10 @@ func removeManagedBlock(path, begin, end string) error {
 	}
 	endIdx := strings.Index(content[idx:], end)
 	if endIdx < 0 {
-		return fmt.Errorf("managed block start found without end marker in %s", path)
+		// Begin without end — remove everything from begin to EOF.
+		// This self-heals truncated files.
+		updated := content[:idx]
+		return os.WriteFile(path, []byte(updated), 0644)
 	}
 	endAbs := idx + endIdx + len(end)
 	after := content[endAbs:]

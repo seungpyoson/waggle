@@ -3,6 +3,7 @@ package install
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -235,5 +236,40 @@ func TestAdversarial_OwnedFile_ConcurrentInstall(t *testing.T) {
 		for _, issue := range issues {
 			t.Errorf("  issue: %s: %s", issue.Asset, issue.Problem)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// SymlinkProtection — symlink waggle.md must not overwrite target
+// ---------------------------------------------------------------------------
+func TestAdversarial_OwnedFile_SymlinkProtection(t *testing.T) {
+	tmpHome := t.TempDir()
+	rulesDir := filepath.Join(tmpHome, ".augment", "rules")
+	if err := os.MkdirAll(rulesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	target := filepath.Join(tmpHome, "innocent-file.md")
+	original := "innocent content that must not be modified"
+	if err := os.WriteFile(target, []byte(original), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	rulesPath := filepath.Join(rulesDir, "waggle.md")
+	if err := os.Symlink(target, rulesPath); err != nil {
+		t.Fatal(err)
+	}
+
+	// Install must refuse
+	if err := installAuggie(tmpHome); err == nil {
+		t.Fatal("install should reject symlink")
+	} else if !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Target must be untouched
+	data, _ := os.ReadFile(target)
+	if string(data) != original {
+		t.Fatalf("symlink attack succeeded — target modified to: %q", string(data))
 	}
 }

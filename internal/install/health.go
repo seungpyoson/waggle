@@ -1,6 +1,7 @@
 package install
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -212,6 +213,15 @@ func CheckCodex(homeDir string) ([]HealthIssue, AdapterState) {
 func CheckAuggie(homeDir string) ([]HealthIssue, AdapterState) {
 	rulesPath := filepath.Join(homeDir, ".augment", "rules", "waggle.md")
 	const repairCmd = "waggle install auggie"
+
+	// Reject symlinks and non-regular files to maintain owned-file integrity
+	if info, err := os.Lstat(rulesPath); err == nil && info.Mode()&os.ModeType != 0 {
+		return []HealthIssue{{
+			Asset:   rulesPath,
+			Problem: fmt.Sprintf("not a regular file (mode: %s); remove it manually", info.Mode().Type()),
+			Repair:  "rm " + rulesPath + " && " + repairCmd,
+		}}, StateBroken
+	}
 
 	data, err := os.ReadFile(rulesPath)
 	if os.IsNotExist(err) {

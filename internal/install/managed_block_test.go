@@ -193,17 +193,76 @@ func TestUpsertAcceptsBeginOnlyWithLineStart(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.md")
 
-	// Begin marker alone (no end) at start of line is valid (repair handles it)
 	content := "existing\n" + testBegin + "\npartial body"
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		t.Fatal(err)
 	}
 
-	// This will fail at the "start found without end" check inside upsert,
-	// not at topology validation. Topology allows begin-without-end.
+	// Should self-heal: replace from begin to EOF with canonical block
 	err := upsertManagedBlock(path, testBegin, testEnd, testBody)
-	if err != nil && strings.Contains(err.Error(), "topology") {
-		t.Fatalf("topology validation should not reject begin-without-end: %v", err)
+	if err != nil {
+		t.Fatalf("expected self-heal for begin-without-end, got error: %v", err)
+	}
+
+	after, _ := os.ReadFile(path)
+	if !strings.Contains(string(after), testEnd) {
+		t.Fatalf("end marker missing after self-heal: %s", string(after))
+	}
+}
+
+func TestUpsertSelfHealsBeginWithoutEnd(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.md")
+
+	// File with begin marker but no end marker (truncated)
+	content := "prefix\n" + testBegin + "\npartial body content"
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := upsertManagedBlock(path, testBegin, testEnd, testBody)
+	if err != nil {
+		t.Fatalf("expected self-heal, got error: %v", err)
+	}
+
+	after, _ := os.ReadFile(path)
+	result := string(after)
+
+	// Prefix must be preserved
+	if !strings.HasPrefix(result, "prefix\n") {
+		t.Fatalf("prefix not preserved: %s", result)
+	}
+	// Must contain both markers now
+	if !strings.Contains(result, testBegin) || !strings.Contains(result, testEnd) {
+		t.Fatalf("markers missing after self-heal: %s", result)
+	}
+	// Must contain the new body
+	if !strings.Contains(result, testBody) {
+		t.Fatalf("body missing after self-heal: %s", result)
+	}
+}
+
+func TestRemoveSelfHealsBeginWithoutEnd(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.md")
+
+	// File with begin marker but no end marker
+	content := "prefix\n" + testBegin + "\npartial body content"
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := removeManagedBlock(path, testBegin, testEnd)
+	if err != nil {
+		t.Fatalf("expected self-heal, got error: %v", err)
+	}
+
+	after, _ := os.ReadFile(path)
+	result := string(after)
+
+	// Prefix preserved, markers gone
+	if result != "prefix\n" {
+		t.Fatalf("expected only prefix after remove, got: %q", result)
 	}
 }
 
@@ -305,4 +364,53 @@ func TestRoundTripNewlineBehavior(t *testing.T) {
 			t.Fatalf("expected POSIX-normalized output:\nwant: %q\ngot:  %q", original+"\n", string(after))
 		}
 	})
+}
+
+// --- Class 3: CRLF line ending handling ---
+
+func TestUpsertAcceptsCRLFLineEndings(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.md")
+
+	// CRLF file with valid block
+	content := "header\r\n" + testBegin + "\r\nbody\r\n" + testEnd + "\r\nfooter\r\n"
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := upsertManagedBlock(path, testBegin, testEnd, testBody)
+	if err != nil {
+		t.Fatalf("CRLF file should be accepted: %v", err)
+	}
+}
+
+func TestRemoveAcceptsCRLFLineEndings(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.md")
+
+	content := "header\r\n" + testBegin + "\r\nbody\r\n" + testEnd + "\r\nfooter\r\n"
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := removeManagedBlock(path, testBegin, testEnd)
+	if err != nil {
+		t.Fatalf("CRLF file should be accepted: %v", err)
+	}
+}
+
+func TestTopologyRejectsGluedBeginEvenWithCR(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.md")
+
+	// \r before begin is a line break — should be accepted
+	content := "header\r" + testBegin + "\nbody\n" + testEnd + "\n"
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := upsertManagedBlock(path, testBegin, testEnd, testBody)
+	if err != nil {
+		t.Fatalf("bare CR before begin should be accepted as line break: %v", err)
+	}
 }

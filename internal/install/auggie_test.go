@@ -273,6 +273,101 @@ func TestCheckAuggie_BrokenReadError(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Symlink protection tests
+// ---------------------------------------------------------------------------
+
+func TestInstallAuggie_RejectsSymlink(t *testing.T) {
+	tmpHome := t.TempDir()
+	rulesDir := filepath.Join(tmpHome, ".augment", "rules")
+	if err := os.MkdirAll(rulesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a target file and symlink waggle.md to it
+	target := filepath.Join(tmpHome, "target.md")
+	if err := os.WriteFile(target, []byte("target content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	rulesPath := filepath.Join(rulesDir, "waggle.md")
+	if err := os.Symlink(target, rulesPath); err != nil {
+		t.Fatal(err)
+	}
+
+	err := installAuggie(tmpHome)
+	if err == nil {
+		t.Fatal("expected error for symlinked waggle.md, got nil")
+	}
+	if !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Target must be unchanged
+	data, _ := os.ReadFile(target)
+	if string(data) != "target content" {
+		t.Fatalf("target file was modified: %q", string(data))
+	}
+}
+
+func TestUninstallAuggie_RejectsSymlink(t *testing.T) {
+	tmpHome := t.TempDir()
+	rulesDir := filepath.Join(tmpHome, ".augment", "rules")
+	if err := os.MkdirAll(rulesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	target := filepath.Join(tmpHome, "target.md")
+	if err := os.WriteFile(target, []byte("target content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	rulesPath := filepath.Join(rulesDir, "waggle.md")
+	if err := os.Symlink(target, rulesPath); err != nil {
+		t.Fatal(err)
+	}
+
+	err := uninstallAuggie(tmpHome)
+	if err == nil {
+		t.Fatal("expected error for symlinked waggle.md, got nil")
+	}
+
+	// Symlink and target must both still exist
+	if _, err := os.Lstat(rulesPath); err != nil {
+		t.Fatalf("symlink was removed: %v", err)
+	}
+	data, _ := os.ReadFile(target)
+	if string(data) != "target content" {
+		t.Fatalf("target file was modified: %q", string(data))
+	}
+}
+
+func TestCheckAuggie_BrokenSymlink(t *testing.T) {
+	tmpHome := t.TempDir()
+	rulesDir := filepath.Join(tmpHome, ".augment", "rules")
+	if err := os.MkdirAll(rulesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create canonical content at target, symlink waggle.md to it
+	canonical := canonicalAuggieFileForTest(t)
+	target := filepath.Join(tmpHome, "target.md")
+	if err := os.WriteFile(target, []byte(canonical), 0644); err != nil {
+		t.Fatal(err)
+	}
+	rulesPath := filepath.Join(rulesDir, "waggle.md")
+	if err := os.Symlink(target, rulesPath); err != nil {
+		t.Fatal(err)
+	}
+
+	// Even though content matches, symlink should be reported as broken
+	issues, state := CheckAuggie(tmpHome)
+	if state != StateBroken {
+		t.Errorf("expected StateBroken for symlinked waggle.md, got %q", state)
+	}
+	if len(issues) == 0 || !strings.Contains(issues[0].Problem, "not a regular file") {
+		t.Errorf("expected symlink issue, got: %v", issues)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Asset sync test
 // ---------------------------------------------------------------------------
 
