@@ -314,6 +314,7 @@ func (m *Manager) runWatch(ctx context.Context, w Watch) {
 			m.clearDeliveryError(watchListenerErrorKey(w))
 			break
 		}
+		m.clearDeliveryError(watchListenerErrorKey(w))
 
 		err = listener.Listen(ctx, func(d Delivery) error {
 			return m.handleDelivery(w, d)

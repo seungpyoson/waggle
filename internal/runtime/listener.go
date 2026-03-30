@@ -91,7 +91,7 @@ func (f *BrokerListenerFactory) CatchUp(w Watch, handler DeliveryHandler) error 
 	for _, msg := range msgs {
 		sentAt, err := time.Parse(time.RFC3339, msg.CreatedAt)
 		if err != nil {
-			continue
+			return fmt.Errorf("parse created_at for message %d: %w", msg.ID, err)
 		}
 		if err := handler(Delivery{
 			MessageID:  msg.ID,

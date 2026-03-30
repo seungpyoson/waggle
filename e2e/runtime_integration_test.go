@@ -3,6 +3,7 @@ package e2e
 import (
 	"context"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -16,12 +17,19 @@ import (
 
 type catchUpCounter struct {
 	rt.ListenerFactory
-	count int64
+	count  int64
+	mu     sync.Mutex
+	bodies []string
 }
 
 func (c *catchUpCounter) CatchUp(w rt.Watch, handler rt.DeliveryHandler) error {
 	atomic.AddInt64(&c.count, 1)
-	return c.ListenerFactory.CatchUp(w, handler)
+	return c.ListenerFactory.CatchUp(w, func(d rt.Delivery) error {
+		c.mu.Lock()
+		c.bodies = append(c.bodies, d.Body)
+		c.mu.Unlock()
+		return handler(d)
+	})
 }
 
 func TestRuntimeEndToEndPushStoreAndPull(t *testing.T) {
@@ -344,6 +352,19 @@ func TestRuntimeBrokerRestartReconnect(t *testing.T) {
 	})
 	if n := atomic.LoadInt64(&factory.count); n == 0 {
 		t.Fatal("CatchUp was never called — message #2 may have arrived via push instead of catch-up")
+	}
+
+	// Verify message #2 was specifically delivered by CatchUp, not push.
+	factory.mu.Lock()
+	var catchUpDeliveredMsg2 bool
+	for _, body := range factory.bodies {
+		if body == "message after restart" {
+			catchUpDeliveredMsg2 = true
+		}
+	}
+	factory.mu.Unlock()
+	if !catchUpDeliveredMsg2 {
+		t.Fatal("message #2 was not delivered by CatchUp — arrived via push instead")
 	}
 
 	// Step 12: Verify both messages are in store
