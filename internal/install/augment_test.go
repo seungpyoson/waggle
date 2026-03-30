@@ -108,12 +108,18 @@ func TestInstall_AugmentUninstallTruncatedBlock(t *testing.T) {
 	skillPath := filepath.Join(augmentDir, "waggle.md")
 	os.WriteFile(skillPath, []byte(augmentBlockBegin+"\ntruncated block\n"), 0644)
 
-	err := uninstallAugment(tmpHome)
-	if err == nil {
-		t.Fatal("expected error for truncated block, got nil")
+	// removeManagedBlock self-heals truncated blocks (begin without end)
+	// by removing everything from begin marker to EOF
+	if err := uninstallAugment(tmpHome); err != nil {
+		t.Fatalf("expected self-healing uninstall, got error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "managed block start found without end marker") {
-		t.Errorf("expected truncation error, got: %v", err)
+
+	data, err := os.ReadFile(skillPath)
+	if err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+	if strings.Contains(string(data), augmentBlockBegin) {
+		t.Errorf("begin marker still present after self-healing uninstall")
 	}
 }
 
