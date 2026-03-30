@@ -201,8 +201,12 @@ func TestCheckGemini_BrokenTruncated(t *testing.T) {
 	if len(issues) == 0 {
 		t.Fatal("expected at least one issue")
 	}
-	if !strings.Contains(issues[0].Problem, "managed block truncated") {
-		t.Fatalf("expected truncation message, got: %s", issues[0].Problem)
+	expected := "managed block truncated (begin marker without end marker)"
+	if issues[0].Problem != expected {
+		t.Fatalf("expected %q, got %q", expected, issues[0].Problem)
+	}
+	if issues[0].Repair != "waggle install gemini" {
+		t.Fatalf("expected repair 'waggle install gemini', got %q", issues[0].Repair)
 	}
 }
 
@@ -244,7 +248,7 @@ func TestCheckGemini_BrokenDuplicateBegin(t *testing.T) {
 	}
 
 	geminiFilePath := filepath.Join(geminiDir, "GEMINI.md")
-	content := geminiBlockBegin + "\nfirst\n" + geminiBlockEnd + "\n" + geminiBlockBegin + "\nsecond\n" + geminiBlockEnd + "\n"
+	content := geminiBlockBegin + "\nfirst\n" + geminiBlockBegin + "\nsecond\n" + geminiBlockEnd + "\n"
 	if err := os.WriteFile(geminiFilePath, []byte(content), 0644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -259,6 +263,9 @@ func TestCheckGemini_BrokenDuplicateBegin(t *testing.T) {
 	expected := "managed block has invalid topology: duplicate begin markers (2 found); refusing to mutate"
 	if issues[0].Problem != expected {
 		t.Fatalf("expected %q, got %q", expected, issues[0].Problem)
+	}
+	if issues[0].Repair != "waggle install gemini" {
+		t.Fatalf("expected repair 'waggle install gemini', got %q", issues[0].Repair)
 	}
 }
 
@@ -286,6 +293,9 @@ func TestCheckGemini_BrokenDuplicateEnd(t *testing.T) {
 	if issues[0].Problem != expected {
 		t.Fatalf("expected %q, got %q", expected, issues[0].Problem)
 	}
+	if issues[0].Repair != "waggle install gemini" {
+		t.Fatalf("expected repair 'waggle install gemini', got %q", issues[0].Repair)
+	}
 }
 
 func TestCheckGemini_BrokenReversedMarkers(t *testing.T) {
@@ -311,6 +321,9 @@ func TestCheckGemini_BrokenReversedMarkers(t *testing.T) {
 	expected := "managed block has invalid topology: end marker appears before begin marker; refusing to mutate"
 	if issues[0].Problem != expected {
 		t.Fatalf("expected %q, got %q", expected, issues[0].Problem)
+	}
+	if issues[0].Repair != "waggle install gemini" {
+		t.Fatalf("expected repair 'waggle install gemini', got %q", issues[0].Repair)
 	}
 }
 
@@ -338,6 +351,9 @@ func TestCheckGemini_BrokenBeginNotAtLineStart(t *testing.T) {
 	if issues[0].Problem != expected {
 		t.Fatalf("expected %q, got %q", expected, issues[0].Problem)
 	}
+	if issues[0].Repair != "waggle install gemini" {
+		t.Fatalf("expected repair 'waggle install gemini', got %q", issues[0].Repair)
+	}
 }
 
 func TestCheckGemini_BrokenReadError(t *testing.T) {
@@ -362,6 +378,9 @@ func TestCheckGemini_BrokenReadError(t *testing.T) {
 	}
 	if !strings.Contains(issues[0].Problem, "failed to read GEMINI.md") {
 		t.Fatalf("expected read error message, got: %s", issues[0].Problem)
+	}
+	if issues[0].Repair != "waggle install gemini" {
+		t.Fatalf("expected repair 'waggle install gemini', got %q", issues[0].Repair)
 	}
 }
 
