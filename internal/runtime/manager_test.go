@@ -340,6 +340,49 @@ func TestManager_ReconcileClearsOnlyReconcileErrorOnSuccess(t *testing.T) {
 	}
 }
 
+func TestManager_CatchUpAndListenErrorsVisibleSimultaneously(t *testing.T) {
+	store := newTestStore(t)
+	manager := NewManager(store, newFakeListenerFactory(), &fakeNotifier{})
+
+	w := Watch{ProjectID: "proj-x", AgentName: "agent-y"}
+
+	// Inject both error keys simultaneously.
+	manager.captureDeliveryError(watchCatchUpErrorKey(w), errors.New("catch-up failed"))
+	manager.captureDeliveryError(watchListenerErrorKey(w), errors.New("listen failed"))
+
+	err := manager.LastDeliveryError()
+	if err == nil {
+		t.Fatal("LastDeliveryError() = nil, want both errors")
+	}
+	errStr := err.Error()
+	if !strings.Contains(errStr, "watch-catchup/") {
+		t.Fatalf("LastDeliveryError() = %v, want catch-up error present", err)
+	}
+	if !strings.Contains(errStr, "watch-listener/") {
+		t.Fatalf("LastDeliveryError() = %v, want listener error present", err)
+	}
+
+	// Clear only catch-up — listener error must survive.
+	manager.clearDeliveryError(watchCatchUpErrorKey(w))
+	err = manager.LastDeliveryError()
+	if err == nil {
+		t.Fatal("LastDeliveryError() = nil after clearing catch-up, want listener error")
+	}
+	errStr = err.Error()
+	if strings.Contains(errStr, "watch-catchup/") {
+		t.Fatalf("LastDeliveryError() = %v, want catch-up error gone", err)
+	}
+	if !strings.Contains(errStr, "watch-listener/") {
+		t.Fatalf("LastDeliveryError() = %v, want listener error still present", err)
+	}
+
+	// Clear listener — no errors remain.
+	manager.clearDeliveryError(watchListenerErrorKey(w))
+	if err := manager.LastDeliveryError(); err != nil {
+		t.Fatalf("LastDeliveryError() = %v, want nil", err)
+	}
+}
+
 func TestManager_UsesRuntimeReconcileIntervalForWatchReconciliation(t *testing.T) {
 	store := newTestStore(t)
 	factory := newFakeListenerFactory()
