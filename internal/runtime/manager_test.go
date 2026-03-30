@@ -324,7 +324,7 @@ func TestManager_ReconcileClearsOnlyReconcileErrorOnSuccess(t *testing.T) {
 	manager := NewManager(store, newFakeListenerFactory(), &fakeNotifier{})
 
 	manager.captureDeliveryError("reconcile", errors.New("stale reconcile error"))
-	manager.captureDeliveryError(watchTransportErrorKey(Watch{ProjectID: "proj-a", AgentName: "agent-1"}), errors.New("live watch error"))
+	manager.captureDeliveryError(watchListenerErrorKey(Watch{ProjectID: "proj-a", AgentName: "agent-1"}), errors.New("live watch error"))
 	if err := manager.reconcile(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -335,7 +335,7 @@ func TestManager_ReconcileClearsOnlyReconcileErrorOnSuccess(t *testing.T) {
 	if strings.Contains(err.Error(), "reconcile") {
 		t.Fatalf("LastDeliveryError() = %v, want reconcile error cleared", err)
 	}
-	if !strings.Contains(err.Error(), "watch-transport/proj-a/agent-1") {
+	if !strings.Contains(err.Error(), "watch-listener/proj-a/agent-1") {
 		t.Fatalf("LastDeliveryError() = %v, want remaining watch error", err)
 	}
 }
@@ -427,7 +427,7 @@ func TestManager_StopWatchClearsWorkerErrorsButPreservesDetachedInflightState(t 
 	manager.mu.Lock()
 	manager.inflight[key] = struct{}{}
 	manager.mu.Unlock()
-	manager.captureDeliveryError(watchTransportErrorKey(watch), errors.New("transport error"))
+	manager.captureDeliveryError(watchListenerErrorKey(watch), errors.New("transport error"))
 	manager.captureDeliveryError(watchDeliveryErrorKey(watch.ProjectID, watch.AgentName), errors.New("delivery error"))
 	manager.captureDeliveryError(refreshDeliveryStatusErrorKey(watch.ProjectID, watch.AgentName), errors.New("status refresh error"))
 
@@ -439,7 +439,7 @@ func TestManager_StopWatchClearsWorkerErrorsButPreservesDetachedInflightState(t 
 		manager.mu.Lock()
 		defer manager.mu.Unlock()
 		_, inflightExists := manager.inflight[key]
-		_, transportExists := manager.lastDeliveryErr[watchTransportErrorKey(watch)]
+		_, transportExists := manager.lastDeliveryErr[watchListenerErrorKey(watch)]
 		_, deliveryExists := manager.lastDeliveryErr[watchDeliveryErrorKey(watch.ProjectID, watch.AgentName)]
 		_, statusExists := manager.lastDeliveryErr[refreshDeliveryStatusErrorKey(watch.ProjectID, watch.AgentName)]
 		return len(manager.workers) == 0 && inflightExists && !transportExists && !deliveryExists && !statusExists
@@ -1040,9 +1040,9 @@ func TestManager_RetriesCatchUpBeforeListening(t *testing.T) {
 		return factory.catchUpCallCount() == 3
 	})
 
-	if err := manager.LastDeliveryError(); err != nil {
-		t.Fatalf("LastDeliveryError() = %v, want nil after catch-up retry success", err)
-	}
+	waitFor(t, "catch-up error cleared", func() bool {
+		return manager.LastDeliveryError() == nil
+	})
 }
 
 func TestManager_RetryPendingNotificationsContinuesPastFailedRecord(t *testing.T) {

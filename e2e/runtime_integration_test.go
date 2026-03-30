@@ -2,7 +2,6 @@ package e2e
 
 import (
 	"context"
-	"os"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
@@ -26,13 +25,8 @@ func (c *catchUpCounter) CatchUp(w rt.Watch, handler rt.DeliveryHandler) error {
 }
 
 func TestRuntimeEndToEndPushStoreAndPull(t *testing.T) {
-	home, err := os.MkdirTemp("/tmp", "wg-e2e-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_ = os.RemoveAll(home)
-	})
+	t.Setenv("GOTMPDIR", "/tmp") // keep socket path under macOS 104-byte limit
+	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("WAGGLE_PROJECT_ID", "proj-e2e")
 
@@ -160,13 +154,8 @@ func pullUnreadRecords(store *rt.Store, projectID, agentName string) ([]rt.Deliv
 }
 
 func TestRuntimeBrokerRestartReconnect(t *testing.T) {
-	home, err := os.MkdirTemp("/tmp", "wg-e2e-reconnect-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_ = os.RemoveAll(home)
-	})
+	t.Setenv("GOTMPDIR", "/tmp") // keep socket path under macOS 104-byte limit
+	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("WAGGLE_PROJECT_ID", "proj-reconnect")
 
@@ -382,15 +371,7 @@ func TestRuntimeBrokerRestartReconnect(t *testing.T) {
 
 func waitForCondition(t *testing.T, name string, fn func() bool) {
 	t.Helper()
-
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if fn() {
-			return
-		}
-		time.Sleep(25 * time.Millisecond)
-	}
-	t.Fatalf("timeout waiting for %s", name)
+	waitForConditionWithTimeout(t, name, 5*time.Second, fn)
 }
 
 func waitForConditionWithTimeout(t *testing.T, name string, timeout time.Duration, fn func() bool) {
