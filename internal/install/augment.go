@@ -57,7 +57,7 @@ func uninstallAugment(homeDir string) error {
 	skillPath := filepath.Join(augmentDir, "skills", "waggle.md")
 
 	if err := removeManagedBlock(skillPath, augmentBlockBegin, augmentBlockEnd); err != nil {
-		return fmt.Errorf("updating Augment waggle.md: %w", err)
+		return fmt.Errorf("removing managed block from Augment waggle.md: %w", err)
 	}
 
 	return nil

@@ -28,6 +28,9 @@ func TestInstall_AugmentCreatesBlock(t *testing.T) {
 	if !strings.Contains(content, augmentBlockEnd) {
 		t.Errorf("end marker not found in waggle.md")
 	}
+	if !strings.Contains(content, "waggle adapter bootstrap augment") {
+		t.Errorf("expected waggle adapter bootstrap command in skill block:\n%s", content)
+	}
 }
 
 func TestInstall_AugmentIdempotent(t *testing.T) {
@@ -157,7 +160,7 @@ func TestCheckAugment_Broken(t *testing.T) {
 
 	// Create skill file with begin marker but missing end marker
 	skillPath := filepath.Join(augmentDir, "waggle.md")
-	os.WriteFile(skillPath, []byte("<!-- WAGGLE-AUGMENT-BEGIN -->\nBroken block\n"), 0644)
+	os.WriteFile(skillPath, []byte(augmentBlockBegin+"\nBroken block\n"), 0644)
 
 	issues, state := CheckAugment(tmpHome)
 
@@ -166,6 +169,27 @@ func TestCheckAugment_Broken(t *testing.T) {
 	}
 	if len(issues) == 0 {
 		t.Errorf("expected issues for broken block, got none")
+	}
+}
+
+func TestCheckAugment_ReadError(t *testing.T) {
+	tmpHome := t.TempDir()
+	augmentDir := filepath.Join(tmpHome, ".augment", "skills")
+	os.MkdirAll(augmentDir, 0755)
+
+	// Create skill file then remove read permission
+	skillPath := filepath.Join(augmentDir, "waggle.md")
+	os.WriteFile(skillPath, []byte(augmentBlockBegin+"\ncontent\n"+augmentBlockEnd+"\n"), 0644)
+	os.Chmod(skillPath, 0000)
+	t.Cleanup(func() { os.Chmod(skillPath, 0644) })
+
+	issues, state := CheckAugment(tmpHome)
+
+	if state != StateBroken {
+		t.Errorf("expected StateBroken for unreadable file, got %q", state)
+	}
+	if len(issues) == 0 {
+		t.Errorf("expected issues for unreadable file, got none")
 	}
 }
 

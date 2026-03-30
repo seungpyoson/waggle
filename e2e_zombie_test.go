@@ -198,7 +198,7 @@ func TestE2E_ZombieFailFast_NoAutoStart(t *testing.T) {
 		if !strings.Contains(output, `"adapters"`) {
 			t.Errorf("expected adapters in output, got:\n%s", output)
 		}
-		if !strings.Contains(output, `"augment"`) {
+		if !strings.Contains(output, `"augment":`) {
 			t.Errorf("expected augment adapter status in output, got:\n%s", output)
 		}
 	case <-time.After(10 * time.Second):
@@ -311,6 +311,7 @@ func TestE2E_HelpFromNonGitDir(t *testing.T) {
 		{"task", "--help"},
 		{"lock", "--help"},
 		{"events", "--help"},
+		{"install", "--help"},
 		{"listen", "-h"},
 	}
 

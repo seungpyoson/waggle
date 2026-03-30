@@ -354,7 +354,14 @@ func CheckAugment(homeDir string) ([]HealthIssue, AdapterState) {
 	skillPath := filepath.Join(homeDir, ".augment", "skills", "waggle.md")
 	data, err := os.ReadFile(skillPath)
 	if err != nil {
-		return nil, StateNotInstalled
+		if os.IsNotExist(err) {
+			return nil, StateNotInstalled
+		}
+		return []HealthIssue{{
+			Asset:   skillPath,
+			Problem: "cannot read skill file: " + err.Error(),
+			Repair:  repairCmd,
+		}}, StateBroken
 	}
 
 	content := string(data)
