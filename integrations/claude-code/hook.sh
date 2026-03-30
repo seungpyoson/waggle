@@ -4,7 +4,7 @@
 # can package the integration assets for `waggle install claude-code`.
 # waggle-connect.sh — safe SessionStart hook for Claude Code
 # Registers the Claude session with the machine runtime and surfaces unread
-# runtime records. Silent exit (<2s best effort) if waggle is unavailable.
+# runtime records. Silent exit (≤3s best effort) if waggle is unavailable.
 
 set -euo pipefail
 
@@ -27,24 +27,11 @@ elif [ -n "${HOME:-}" ]; then
     export WAGGLE_ROOT="${HOME}"
 fi
 
-AGENT_NAME="${WAGGLE_AGENT_NAME:-claude-$$}"
-
-# Ensure the machine runtime is available, then register this Claude session.
-$TIMEOUT_CMD 2 waggle runtime start >/dev/null 2>&1 || true
-$TIMEOUT_CMD 2 waggle runtime watch "$AGENT_NAME" --source claude-session-start >/dev/null 2>&1 || true
-
-UNREAD=$($TIMEOUT_CMD 2 waggle runtime pull "$AGENT_NAME" 2>/dev/null) || UNREAD=""
-UNREAD_COUNT=0
-if [ -n "$UNREAD" ]; then
-    UNREAD_COUNT=$(echo "$UNREAD" | jq -r '.records | length' 2>/dev/null || echo "0")
-fi
-
-if [ "$UNREAD_COUNT" != "0" ]; then
+# Bootstrap this Claude session into the waggle mesh.
+# The adapter bootstrap command is the single authoritative path for tool registration.
+OUTPUT=$($TIMEOUT_CMD 3 waggle adapter bootstrap claude-code --format markdown 2>/dev/null) || OUTPUT=""
+if [ -n "$OUTPUT" ]; then
     echo ""
-    echo "## Waggle Agent: ${AGENT_NAME}"
+    echo "$OUTPUT"
     echo ""
-    echo "### Unread Messages (${UNREAD_COUNT})"
-    echo "$UNREAD" | jq -r '.records[] | "- **\(.from_name):** \(.body)"' 2>/dev/null || true
-    echo ""
-    echo "Use \`/waggle\` commands to interact. Agent name: \`${AGENT_NAME}\`"
 fi
