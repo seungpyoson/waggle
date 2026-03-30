@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -83,8 +84,18 @@ func TestVersionCommand(t *testing.T) {
 				t.Errorf("built field: got %v, want %v", result["built"], tt.buildTime)
 			}
 
-			// Check for human-readable line (should be after JSON or part of it)
-			// The command should output both JSON and a readable line
+			// Check platform/arch fields
+			if osField, exists := result["os"].(string); !exists || osField != runtime.GOOS {
+				t.Errorf("os field: got %v, want %v", result["os"], runtime.GOOS)
+			}
+			if archField, exists := result["arch"].(string); !exists || archField != runtime.GOARCH {
+				t.Errorf("arch field: got %v, want %v", result["arch"], runtime.GOARCH)
+			}
+			if goField, exists := result["go"].(string); !exists || goField != runtime.Version() {
+				t.Errorf("go field: got %v, want %v", result["go"], runtime.Version())
+			}
+
+			// Verify JSON output contains the version string
 			if !strings.Contains(output, tt.version) {
 				t.Errorf("output should contain version %q: %s", tt.version, output)
 			}

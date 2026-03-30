@@ -133,12 +133,24 @@ func CheckCodex(homeDir string) ([]HealthIssue, AdapterState) {
 	}
 
 	// Check for waggle managed block marker
-	if !strings.Contains(string(data), codexBlockBegin) {
+	content := string(data)
+	if !strings.Contains(content, codexBlockBegin) {
 		// No fingerprint
 		return nil, StateNotInstalled
 	}
 
-	// Step 2: Fingerprint found — check if all files are present
+	// Step 2: Fingerprint found — check managed block integrity.
+	// The installer treats a missing end marker as corruption (see managed_block.go),
+	// so health must detect the same state.
+	if !strings.Contains(content, codexBlockEnd) {
+		issues = append(issues, HealthIssue{
+			Asset:   agentsPath,
+			Problem: "managed block truncated (begin marker without end marker)",
+			Repair:  "waggle install codex",
+		})
+	}
+
+	// Step 3: Check if all files are present
 	skillPath := filepath.Join(codexDir, "skills", "waggle-runtime", "SKILL.md")
 	if _, err := os.Stat(skillPath); os.IsNotExist(err) {
 		issues = append(issues, HealthIssue{

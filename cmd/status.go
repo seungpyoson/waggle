@@ -72,12 +72,32 @@ var statusCmd = &cobra.Command{
 
 		// Connect handshake
 		if err := c.SetDeadline(config.Defaults.ConnectTimeout); err != nil {
-			printJSON(map[string]any{"ok": true, "broker": map[string]any{"running": false}, "adapters": adapters})
+			// Socket opened but can't set deadline — broker process exists but connection is broken
+			printJSON(map[string]any{
+				"ok":       false,
+				"code":     "BROKER_DEGRADED",
+				"error":    err.Error(),
+				"broker":   map[string]any{"running": false},
+				"adapters": adapters,
+			})
+			os.Exit(1)
 			return nil
 		}
 		resp, err := c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "waggle-status"})
 		if err != nil || !resp.OK {
-			printJSON(map[string]any{"ok": true, "broker": map[string]any{"running": false}, "adapters": adapters})
+			// Socket opened but handshake failed — zombie broker (listening but not accepting)
+			errMsg := "handshake failed"
+			if err != nil {
+				errMsg = err.Error()
+			}
+			printJSON(map[string]any{
+				"ok":       false,
+				"code":     "BROKER_UNRESPONSIVE",
+				"error":    errMsg,
+				"broker":   map[string]any{"running": false},
+				"adapters": adapters,
+			})
+			os.Exit(1)
 			return nil
 		}
 		if err := c.ClearDeadline(); err != nil {
@@ -87,7 +107,12 @@ var statusCmd = &cobra.Command{
 		// 4. Get broker status
 		resp, err = c.Send(protocol.Request{Cmd: protocol.CmdStatus})
 		if err != nil || !resp.OK {
-			printJSON(map[string]any{"ok": true, "broker": map[string]any{"running": true}, "adapters": adapters})
+			// Connected and handshake OK but status RPC failed — broker running but degraded
+			printJSON(map[string]any{
+				"ok":     true,
+				"broker": map[string]any{"running": true, "status": "degraded"},
+				"adapters": adapters,
+			})
 			return nil
 		}
 
@@ -110,42 +135,37 @@ func buildAdapterStatus(homeDir string) map[string]any {
 
 	// Check Claude Code
 	ccIssues, ccState := install.CheckClaudeCode(homeDir)
-	switch ccState {
-	case install.StateNotInstalled:
-		result["claude-code"] = map[string]any{"status": "not_installed"}
-	case install.StateHealthy:
-		result["claude-code"] = map[string]any{"status": "healthy"}
-	case install.StateBroken:
-		problems := make([]string, len(ccIssues))
-		for i, iss := range ccIssues {
-			problems[i] = iss.Problem
-		}
-		result["claude-code"] = map[string]any{
-			"status": "broken",
-			"issues": problems,
-			"repair": "waggle install claude-code",
-		}
-	}
+	result["claude-code"] = formatAdapterState(ccState, ccIssues, "waggle install claude-code")
 
 	// Check Codex
 	cxIssues, cxState := install.CheckCodex(homeDir)
-	switch cxState {
-	case install.StateNotInstalled:
-		result["codex"] = map[string]any{"status": "not_installed"}
-	case install.StateHealthy:
-		result["codex"] = map[string]any{"status": "healthy"}
-	case install.StateBroken:
-		problems := make([]string, len(cxIssues))
-		for i, iss := range cxIssues {
-			problems[i] = iss.Problem
-		}
-		result["codex"] = map[string]any{
-			"status": "broken",
-			"issues": problems,
-			"repair": "waggle install codex",
-		}
-	}
+	result["codex"] = formatAdapterState(cxState, cxIssues, "waggle install codex")
 
 	return result
+}
+
+func formatAdapterState(state install.AdapterState, issues []install.HealthIssue, repairCmd string) map[string]any {
+	switch state {
+	case install.StateNotInstalled:
+		return map[string]any{"status": "not_installed"}
+	case install.StateHealthy:
+		return map[string]any{"status": "healthy"}
+	case install.StateBroken:
+		issueList := make([]map[string]any, len(issues))
+		for i, iss := range issues {
+			issueList[i] = map[string]any{
+				"asset":   iss.Asset,
+				"problem": iss.Problem,
+				"repair":  iss.Repair,
+			}
+		}
+		return map[string]any{
+			"status": "broken",
+			"issues": issueList,
+			"repair": repairCmd,
+		}
+	default:
+		return map[string]any{"status": string(state)}
+	}
 }
 

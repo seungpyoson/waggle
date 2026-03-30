@@ -322,6 +322,51 @@ func TestCheckCodex_Broken(t *testing.T) {
 	}
 }
 
+func TestCheckCodex_BrokenTruncatedBlock(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	// Install normally first
+	if err := installCodex(tmpHome); err != nil {
+		t.Fatalf("install failed: %v", err)
+	}
+
+	// Truncate AGENTS.md: keep BEGIN marker but remove END marker
+	agentsPath := filepath.Join(tmpHome, ".codex", "AGENTS.md")
+	data, err := os.ReadFile(agentsPath)
+	if err != nil {
+		t.Fatalf("read AGENTS.md: %v", err)
+	}
+	// Write only the begin marker with some content, no end marker
+	truncated := "<!-- WAGGLE-CODEX-BEGIN -->\n## Waggle Runtime\nSome content here\n"
+	if err := os.WriteFile(agentsPath, []byte(truncated), 0644); err != nil {
+		t.Fatalf("write truncated AGENTS.md: %v", err)
+	}
+	_ = data // original data not needed
+
+	// Check health — should detect truncated block
+	issues, state := CheckCodex(tmpHome)
+	if state != StateBroken {
+		t.Errorf("expected StateBroken for truncated block, got %q", state)
+	}
+	if len(issues) == 0 {
+		t.Fatal("expected issues for truncated block, got none")
+	}
+
+	// Verify we found the truncation issue
+	foundTruncation := false
+	for _, issue := range issues {
+		if issue.Asset == agentsPath && issue.Problem == "managed block truncated (begin marker without end marker)" {
+			foundTruncation = true
+			if issue.Repair != "waggle install codex" {
+				t.Errorf("expected repair 'waggle install codex', got %q", issue.Repair)
+			}
+		}
+	}
+	if !foundTruncation {
+		t.Errorf("did not find truncation issue in: %+v", issues)
+	}
+}
+
 func TestCheckCodex_BrokenMissingAgentsFile(t *testing.T) {
 	tmpHome := t.TempDir()
 

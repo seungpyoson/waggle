@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"runtime"
+
 	"github.com/spf13/cobra"
 )
 
@@ -26,6 +28,9 @@ var versionCmd = &cobra.Command{
 			"version": Version,
 			"commit":  Commit,
 			"built":   BuildTime,
+			"os":      runtime.GOOS,
+			"arch":    runtime.GOARCH,
+			"go":      runtime.Version(),
 		}
 		printJSON(result)
 		return nil
