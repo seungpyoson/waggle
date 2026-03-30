@@ -83,6 +83,15 @@ func TestMarkDismissed_DoesNotDismissUnread(t *testing.T) {
 	}
 }
 
+func TestMarkDismissed_NotFound(t *testing.T) {
+	store := newTestStore(t)
+
+	err := store.MarkDismissed("proj-a", "agent-1", 999)
+	if err != ErrRecordNotFound {
+		t.Fatalf("MarkDismissed missing record err = %v, want %v", err, ErrRecordNotFound)
+	}
+}
+
 func TestMarkDismissed_Idempotent(t *testing.T) {
 	store := newTestStore(t)
 

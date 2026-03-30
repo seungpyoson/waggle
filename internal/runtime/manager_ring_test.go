@@ -119,11 +119,28 @@ func TestRingBuffer_Snapshot(t *testing.T) {
 
 	manager.captureDeliveryError("key-1", errors.New("error 1"))
 	snapshot1 := manager.RecentErrors()
+	if len(snapshot1) != 1 {
+		t.Fatalf("snapshot1 length = %d, want 1", len(snapshot1))
+	}
+
+	snapshot1[0].WatchKey = "mutated"
+	snapshot1[0].Error = "mutated"
+
+	freshSnapshot := manager.RecentErrors()
+	if len(freshSnapshot) != 1 {
+		t.Fatalf("fresh snapshot length = %d, want 1", len(freshSnapshot))
+	}
+	if freshSnapshot[0].WatchKey != "key-1" {
+		t.Fatalf("fresh snapshot watch key = %q, want key-1", freshSnapshot[0].WatchKey)
+	}
+	if freshSnapshot[0].Error != "error 1" {
+		t.Fatalf("fresh snapshot error = %q, want error 1", freshSnapshot[0].Error)
+	}
 
 	manager.captureDeliveryError("key-2", errors.New("error 2"))
 	snapshot2 := manager.RecentErrors()
 
-	// Modifying snapshot1 should not affect snapshot2
+	// Mutating snapshot1 should not affect later snapshots.
 	if len(snapshot1) >= 1 && len(snapshot2) >= 2 {
 		if snapshot1[0].WatchKey == snapshot2[1].WatchKey {
 			t.Fatalf("snapshots should be independent copies")
