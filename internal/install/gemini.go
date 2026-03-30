@@ -18,7 +18,23 @@ const (
 //go:embed all:gemini
 var geminiFiles embed.FS
 
-func InstallGemini(homeDir string) error {
+func InstallGemini() error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("getting home dir: %w", err)
+	}
+	return installGemini(home)
+}
+
+func UninstallGemini() error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("getting home dir: %w", err)
+	}
+	return uninstallGemini(home)
+}
+
+func installGemini(homeDir string) error {
 	geminiDir := filepath.Join(homeDir, ".gemini")
 	if err := os.MkdirAll(geminiDir, 0755); err != nil {
 		return fmt.Errorf("creating Gemini dir: %w", err)
@@ -35,7 +51,7 @@ func InstallGemini(homeDir string) error {
 	return nil
 }
 
-func UninstallGemini(homeDir string) error {
+func uninstallGemini(homeDir string) error {
 	geminiDir := filepath.Join(homeDir, ".gemini")
 
 	if err := removeManagedBlock(filepath.Join(geminiDir, "GEMINI.md"), geminiBlockBegin, geminiBlockEnd); err != nil {

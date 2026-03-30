@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/seungpyoson/waggle/internal/install"
 	"github.com/spf13/cobra"
@@ -52,13 +51,13 @@ var installCmd = &cobra.Command{
 			}
 		case "gemini":
 			if installUninstall {
-				if err := install.UninstallGemini(os.ExpandEnv("$HOME")); err != nil {
+				if err := install.UninstallGemini(); err != nil {
 					printErr("INSTALL_ERROR", err.Error())
 					return nil
 				}
 				printJSON(map[string]any{"ok": true, "message": "Gemini integration removed"})
 			} else {
-				if err := install.InstallGemini(os.ExpandEnv("$HOME")); err != nil {
+				if err := install.InstallGemini(); err != nil {
 					printErr("INSTALL_ERROR", err.Error())
 					return nil
 				}

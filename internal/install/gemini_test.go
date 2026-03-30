@@ -11,7 +11,7 @@ import (
 func TestInstall_GeminiCreatesBlock(t *testing.T) {
 	tmpHome := t.TempDir()
 
-	if err := InstallGemini(tmpHome); err != nil {
+	if err := installGemini(tmpHome); err != nil {
 		t.Fatalf("install failed: %v", err)
 	}
 
@@ -29,10 +29,10 @@ func TestInstall_GeminiCreatesBlock(t *testing.T) {
 func TestInstall_GeminiIdempotent(t *testing.T) {
 	tmpHome := t.TempDir()
 
-	if err := InstallGemini(tmpHome); err != nil {
+	if err := installGemini(tmpHome); err != nil {
 		t.Fatalf("first install failed: %v", err)
 	}
-	if err := InstallGemini(tmpHome); err != nil {
+	if err := installGemini(tmpHome); err != nil {
 		t.Fatalf("second install failed: %v", err)
 	}
 
@@ -49,10 +49,10 @@ func TestInstall_GeminiIdempotent(t *testing.T) {
 func TestInstall_GeminiUninstall(t *testing.T) {
 	tmpHome := t.TempDir()
 
-	if err := InstallGemini(tmpHome); err != nil {
+	if err := installGemini(tmpHome); err != nil {
 		t.Fatalf("install failed: %v", err)
 	}
-	if err := UninstallGemini(tmpHome); err != nil {
+	if err := uninstallGemini(tmpHome); err != nil {
 		t.Fatalf("uninstall failed: %v", err)
 	}
 
@@ -77,7 +77,7 @@ func TestInstall_GeminiPreservesOtherContent(t *testing.T) {
 		t.Fatalf("write GEMINI.md: %v", err)
 	}
 
-	if err := InstallGemini(tmpHome); err != nil {
+	if err := installGemini(tmpHome); err != nil {
 		t.Fatalf("install failed: %v", err)
 	}
 
@@ -92,6 +92,34 @@ func TestInstall_GeminiPreservesOtherContent(t *testing.T) {
 	}
 	if !strings.Contains(content, geminiBlockBegin) {
 		t.Fatalf("managed block missing:\n%s", content)
+	}
+}
+
+func TestUninstall_GeminiPreservesOtherContent(t *testing.T) {
+	tmpHome := t.TempDir()
+	geminiDir := filepath.Join(tmpHome, ".gemini")
+	if err := os.MkdirAll(geminiDir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	original := "# My Gemini Config\n- keep this\n"
+	if err := os.WriteFile(filepath.Join(geminiDir, "GEMINI.md"), []byte(original), 0644); err != nil {
+		t.Fatalf("write GEMINI.md: %v", err)
+	}
+
+	if err := installGemini(tmpHome); err != nil {
+		t.Fatalf("install failed: %v", err)
+	}
+	if err := uninstallGemini(tmpHome); err != nil {
+		t.Fatalf("uninstall failed: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(geminiDir, "GEMINI.md"))
+	if err != nil {
+		t.Fatalf("read GEMINI.md: %v", err)
+	}
+	if string(data) != original {
+		t.Fatalf("GEMINI.md content changed unexpectedly:\nwant:\n%s\ngot:\n%s", original, string(data))
 	}
 }
 
@@ -131,7 +159,7 @@ func TestCheckGemini_NotInstalledNoMarker(t *testing.T) {
 func TestCheckGemini_Healthy(t *testing.T) {
 	tmpHome := t.TempDir()
 
-	if err := InstallGemini(tmpHome); err != nil {
+	if err := installGemini(tmpHome); err != nil {
 		t.Fatalf("install failed: %v", err)
 	}
 
@@ -147,7 +175,7 @@ func TestCheckGemini_Healthy(t *testing.T) {
 func TestCheckGemini_Broken(t *testing.T) {
 	tmpHome := t.TempDir()
 
-	if err := InstallGemini(tmpHome); err != nil {
+	if err := installGemini(tmpHome); err != nil {
 		t.Fatalf("install failed: %v", err)
 	}
 

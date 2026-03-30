@@ -208,6 +208,7 @@ func CheckCodex(homeDir string) ([]HealthIssue, AdapterState) {
 
 // CheckGemini checks the health of the Gemini integration.
 func CheckGemini(homeDir string) ([]HealthIssue, AdapterState) {
+	const repairCmd = "waggle install gemini"
 	geminiDir := filepath.Join(homeDir, ".gemini")
 	geminiFilePath := filepath.Join(geminiDir, "GEMINI.md")
 
@@ -220,7 +221,7 @@ func CheckGemini(homeDir string) ([]HealthIssue, AdapterState) {
 		return []HealthIssue{{
 			Asset:   geminiFilePath,
 			Problem: "failed to read GEMINI.md: " + err.Error(),
-			Repair:  "waggle install gemini",
+			Repair:  repairCmd,
 		}}, StateBroken
 	}
 
@@ -236,7 +237,7 @@ func CheckGemini(homeDir string) ([]HealthIssue, AdapterState) {
 		return []HealthIssue{{
 			Asset:   geminiFilePath,
 			Problem: "WAGGLE-GEMINI-BEGIN marker found but WAGGLE-GEMINI-END missing",
-			Repair:  "waggle install gemini",
+			Repair:  repairCmd,
 		}}, StateBroken
 	}
 
