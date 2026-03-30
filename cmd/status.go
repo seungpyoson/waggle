@@ -31,10 +31,10 @@ var statusCmd = &cobra.Command{
 		if err != nil {
 			// Cannot determine project ID — no git repo, WAGGLE_PROJECT_ID, or WAGGLE_ROOT
 			printJSON(map[string]any{
-				"ok":      false,
-				"code":    "NO_PROJECT_CONTEXT",
-				"error":   err.Error(),
-				"broker":  map[string]any{"running": false, "reason": "no project context"},
+				"ok":       false,
+				"code":     "NO_PROJECT_CONTEXT",
+				"error":    err.Error(),
+				"broker":   map[string]any{"running": false, "reason": "no project context"},
 				"adapters": adapters,
 			})
 			os.Exit(1)
@@ -45,10 +45,10 @@ var statusCmd = &cobra.Command{
 		if localPaths.Socket == "" {
 			// Cannot determine socket path — HOME not set
 			printJSON(map[string]any{
-				"ok":      false,
-				"code":    "NO_HOME",
-				"error":   "cannot determine socket path: HOME not set",
-				"broker":  map[string]any{"running": false, "reason": "HOME not set"},
+				"ok":       false,
+				"code":     "NO_HOME",
+				"error":    "cannot determine socket path: HOME not set",
+				"broker":   map[string]any{"running": false, "reason": "HOME not set"},
 				"adapters": adapters,
 			})
 			os.Exit(1)
@@ -132,8 +132,8 @@ var statusCmd = &cobra.Command{
 		}
 
 		printJSON(map[string]any{
-			"ok":      resp.OK,
-			"broker":  resp.Data,
+			"ok":       resp.OK,
+			"broker":   resp.Data,
 			"adapters": adapters,
 		})
 		return nil
@@ -150,6 +150,10 @@ func buildAdapterStatus(homeDir string) map[string]any {
 	// Check Codex
 	cxIssues, cxState := install.CheckCodex(homeDir)
 	result["codex"] = formatAdapterState(cxState, cxIssues, "waggle install codex")
+
+	// Check Auggie
+	agIssues, agState := install.CheckAuggie(homeDir)
+	result["auggie"] = formatAdapterState(agState, agIssues, "waggle install auggie")
 
 	return result
 }
@@ -178,4 +182,3 @@ func formatAdapterState(state install.AdapterState, issues []install.HealthIssue
 		return map[string]any{"status": string(state)}
 	}
 }
-
