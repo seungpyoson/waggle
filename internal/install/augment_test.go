@@ -241,6 +241,61 @@ func TestCheckAugment_ReadError(t *testing.T) {
 	}
 }
 
+func TestCheckAugment_OrphanedEndMarker(t *testing.T) {
+	tmpHome := t.TempDir()
+	augmentDir := filepath.Join(tmpHome, ".augment", "skills")
+	os.MkdirAll(augmentDir, 0755)
+
+	skillPath := filepath.Join(augmentDir, "waggle.md")
+	os.WriteFile(skillPath, []byte(augmentBlockEnd+"\norphaned end\n"), 0644)
+
+	issues, state := CheckAugment(tmpHome)
+
+	if state != StateBroken {
+		t.Errorf("expected StateBroken for orphaned end marker, got %q", state)
+	}
+	if len(issues) == 0 {
+		t.Errorf("expected issues for orphaned end marker, got none")
+	}
+}
+
+func TestCheckAugment_DuplicateBeginMarkers(t *testing.T) {
+	tmpHome := t.TempDir()
+	augmentDir := filepath.Join(tmpHome, ".augment", "skills")
+	os.MkdirAll(augmentDir, 0755)
+
+	skillPath := filepath.Join(augmentDir, "waggle.md")
+	content := augmentBlockBegin + "\nfirst\n" + augmentBlockEnd + "\n" + augmentBlockBegin + "\nsecond\n" + augmentBlockEnd + "\n"
+	os.WriteFile(skillPath, []byte(content), 0644)
+
+	issues, state := CheckAugment(tmpHome)
+
+	if state != StateBroken {
+		t.Errorf("expected StateBroken for duplicate markers, got %q", state)
+	}
+	if len(issues) == 0 {
+		t.Errorf("expected issues for duplicate markers, got none")
+	}
+}
+
+func TestCheckAugment_InvertedMarkers(t *testing.T) {
+	tmpHome := t.TempDir()
+	augmentDir := filepath.Join(tmpHome, ".augment", "skills")
+	os.MkdirAll(augmentDir, 0755)
+
+	skillPath := filepath.Join(augmentDir, "waggle.md")
+	os.WriteFile(skillPath, []byte(augmentBlockEnd+"\ncontent\n"+augmentBlockBegin+"\n"), 0644)
+
+	issues, state := CheckAugment(tmpHome)
+
+	if state != StateBroken {
+		t.Errorf("expected StateBroken for inverted markers, got %q", state)
+	}
+	if len(issues) == 0 {
+		t.Errorf("expected issues for inverted markers, got none")
+	}
+}
+
 func TestEmbeddedAugmentFilesMatch(t *testing.T) {
 	sourceDir := filepath.Join("..", "..", "integrations", "augment")
 	embedDir := filepath.Join("augment")
