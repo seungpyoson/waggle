@@ -267,13 +267,18 @@ func TestUninstallAuggie_PreservesRepeatedBlankLinesOutsideManagedBlock(t *testi
 
 func TestUninstallAuggie_RepairsTruncatedBlockFirst(t *testing.T) {
 	tmpHome := t.TempDir()
-	rulesDir := filepath.Join(tmpHome, ".augment", "rules")
-	if err := os.MkdirAll(rulesDir, 0755); err != nil {
-		t.Fatalf("mkdir: %v", err)
+
+	if err := installAuggie(tmpHome); err != nil {
+		t.Fatalf("install failed: %v", err)
 	}
 
-	rulesPath := filepath.Join(rulesDir, "waggle.md")
-	broken := auggieBlockBegin + "\n## Waggle Runtime\n\n# Personal Rules\n- keep this\n"
+	rulesPath := filepath.Join(tmpHome, ".augment", "rules", "waggle.md")
+	data, err := os.ReadFile(rulesPath)
+	if err != nil {
+		t.Fatalf("read waggle.md: %v", err)
+	}
+
+	broken := strings.Replace(string(data), auggieBlockEnd, "", 1) + "\n# Personal Rules\n- keep this\n"
 	if err := os.WriteFile(rulesPath, []byte(broken), 0644); err != nil {
 		t.Fatalf("write waggle.md: %v", err)
 	}
@@ -291,6 +296,36 @@ func TestUninstallAuggie_RepairsTruncatedBlockFirst(t *testing.T) {
 	}
 	if !strings.Contains(string(after), "# Personal Rules\n- keep this") {
 		t.Fatalf("trailing personal rules missing after uninstall repair:\n%s", string(after))
+	}
+}
+
+func TestInstallAuggie_RejectsCorruptedManagedBodyDuringRepair(t *testing.T) {
+	tmpHome := t.TempDir()
+	rulesDir := filepath.Join(tmpHome, ".augment", "rules")
+	if err := os.MkdirAll(rulesDir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	rulesPath := filepath.Join(rulesDir, "waggle.md")
+	broken := auggieBlockBegin + "\nthis is corrupted body text\n# Personal Rules\n- keep this\n"
+	if err := os.WriteFile(rulesPath, []byte(broken), 0644); err != nil {
+		t.Fatalf("write waggle.md: %v", err)
+	}
+
+	err := installAuggie(tmpHome)
+	if err == nil {
+		t.Fatal("expected install to fail closed for corrupted managed-body repair")
+	}
+	if !strings.Contains(err.Error(), "refusing to repair non-canonical Auggie block") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	after, err := os.ReadFile(rulesPath)
+	if err != nil {
+		t.Fatalf("read waggle.md: %v", err)
+	}
+	if string(after) != broken {
+		t.Fatalf("corrupted file changed unexpectedly:\nwant:\n%s\ngot:\n%s", broken, string(after))
 	}
 }
 

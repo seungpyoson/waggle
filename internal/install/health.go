@@ -277,6 +277,13 @@ func CheckAuggie(homeDir string) ([]HealthIssue, AdapterState) {
 
 	canonicalBlock := canonicalManagedBlock(auggieBlockBegin, auggieBlockEnd, string(blockData))
 	endAbs := idx + endIdx + len(auggieBlockEnd)
+	if !hasManagedBlockLineBoundaries(content, idx, endAbs) {
+		return []HealthIssue{{
+			Asset:   rulesPath,
+			Problem: "managed block boundaries are malformed",
+			Repair:  repairCmd,
+		}}, StateBroken
+	}
 	installedBlock := strings.TrimSpace(content[idx:endAbs])
 	if installedBlock != canonicalBlock {
 		return []HealthIssue{{
@@ -287,6 +294,16 @@ func CheckAuggie(homeDir string) ([]HealthIssue, AdapterState) {
 	}
 
 	return nil, StateHealthy
+}
+
+func hasManagedBlockLineBoundaries(content string, beginIdx, endAbs int) bool {
+	if beginIdx > 0 && content[beginIdx-1] != '\n' {
+		return false
+	}
+	if endAbs < len(content) && content[endAbs] != '\n' {
+		return false
+	}
+	return true
 }
 
 // fileExists returns true if a path exists on disk (file or directory).

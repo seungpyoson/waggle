@@ -627,6 +627,54 @@ func TestCheckAuggie_BrokenDuplicateMarkers(t *testing.T) {
 	}
 }
 
+func TestCheckAuggie_BrokenGarbageGluedToEndMarker(t *testing.T) {
+	tmpHome := t.TempDir()
+	rulesDir := filepath.Join(tmpHome, ".augment", "rules")
+	if err := os.MkdirAll(rulesDir, 0755); err != nil {
+		t.Fatalf("failed to create rules dir: %v", err)
+	}
+	rulesPath := filepath.Join(rulesDir, "waggle.md")
+	content := canonicalAuggieManagedBlock(t) + "GARBAGE\n"
+	if err := os.WriteFile(rulesPath, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write waggle.md: %v", err)
+	}
+
+	issues, state := CheckAuggie(tmpHome)
+	if state != StateBroken {
+		t.Errorf("expected StateBroken, got %q", state)
+	}
+	if len(issues) == 0 {
+		t.Fatal("expected issues for glued end-marker garbage, got none")
+	}
+	if issues[0].Problem != "managed block boundaries are malformed" {
+		t.Fatalf("unexpected issue problem: %+v", issues[0])
+	}
+}
+
+func TestCheckAuggie_BrokenGarbageBeforeBeginMarker(t *testing.T) {
+	tmpHome := t.TempDir()
+	rulesDir := filepath.Join(tmpHome, ".augment", "rules")
+	if err := os.MkdirAll(rulesDir, 0755); err != nil {
+		t.Fatalf("failed to create rules dir: %v", err)
+	}
+	rulesPath := filepath.Join(rulesDir, "waggle.md")
+	content := "GARBAGE" + canonicalAuggieManagedBlock(t) + "\n"
+	if err := os.WriteFile(rulesPath, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write waggle.md: %v", err)
+	}
+
+	issues, state := CheckAuggie(tmpHome)
+	if state != StateBroken {
+		t.Errorf("expected StateBroken, got %q", state)
+	}
+	if len(issues) == 0 {
+		t.Fatal("expected issues for glued begin-marker garbage, got none")
+	}
+	if issues[0].Problem != "managed block boundaries are malformed" {
+		t.Fatalf("unexpected issue problem: %+v", issues[0])
+	}
+}
+
 func TestCheckAuggie_Healthy(t *testing.T) {
 	tmpHome := t.TempDir()
 

@@ -78,13 +78,13 @@ func repairTruncatedAuggieBlock(path, blockBody string) error {
 
 	canonicalBlock := canonicalManagedBlock(auggieBlockBegin, auggieBlockEnd, blockBody)
 	truncatedSuffix := content[idx:]
-	matchLen := longestMatchingPrefix(canonicalBlock, truncatedSuffix)
-	if matchLen < len(auggieBlockBegin) {
+	remainder, ok := safeAuggieRepairRemainder(canonicalBlock, truncatedSuffix)
+	if !ok {
 		return fmt.Errorf("managed block start found without end marker in %s; refusing to repair non-canonical Auggie block", path)
 	}
 
-	repaired := content[:idx] + canonicalBlock + truncatedSuffix[matchLen:]
-	return os.WriteFile(path, managedBlockBytes(repaired, truncatedSuffix[matchLen:] == ""), 0644)
+	repaired := content[:idx] + canonicalBlock + remainder
+	return os.WriteFile(path, managedBlockBytes(repaired, remainder == ""), 0644)
 }
 
 func longestMatchingPrefix(want, got string) int {
@@ -100,6 +100,30 @@ func longestMatchingPrefix(want, got string) int {
 	}
 
 	return max
+}
+
+func safeAuggieRepairRemainder(canonicalBlock, truncatedSuffix string) (string, bool) {
+	if strings.HasPrefix(canonicalBlock, truncatedSuffix) {
+		return "", true
+	}
+
+	endStart := strings.LastIndex(canonicalBlock, auggieBlockEnd)
+	if endStart < 0 {
+		return "", false
+	}
+	if !strings.HasPrefix(truncatedSuffix, canonicalBlock[:endStart]) {
+		return "", false
+	}
+
+	remainder := truncatedSuffix[endStart:]
+	if remainder == "" {
+		return "", true
+	}
+	if !strings.HasPrefix(remainder, "\n") {
+		return "", false
+	}
+
+	return remainder, true
 }
 
 func uninstallAuggie(homeDir string) error {
