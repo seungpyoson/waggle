@@ -36,6 +36,7 @@ type Listener interface {
 // ListenerFactory creates listeners for persisted watches.
 type ListenerFactory interface {
 	NewListener(w Watch) (Listener, error)
+	CatchUp(w Watch, handler DeliveryHandler) error
 }
 
 type watchKey struct {
@@ -64,6 +65,7 @@ type Manager struct {
 	deliveryCauses  map[watchKey]error
 	lastDeliveryErr map[string]error
 	workers         map[watchKey]*watchWorker
+	recentErrors    []ErrorEntry // ring buffer, capped at config.Defaults.RuntimeRecentErrorCap
 }
 
 func NewManager(store *Store, factory ListenerFactory, notifier Notifier) *Manager {
@@ -160,6 +162,15 @@ func (m *Manager) LastDeliveryError() error {
 	return fmt.Errorf("%s", strings.Join(parts, "; "))
 }
 
+// RecentErrors returns a snapshot copy of the error ring buffer (thread-safe).
+func (m *Manager) RecentErrors() []ErrorEntry {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	result := make([]ErrorEntry, len(m.recentErrors))
+	copy(result, m.recentErrors)
+	return result
+}
+
 func (m *Manager) runReconcileLoop(ctx context.Context) {
 	ticker := time.NewTicker(config.Defaults.RuntimeReconcileInterval)
 	defer ticker.Stop()
@@ -253,7 +264,8 @@ func (m *Manager) stopWatch(key watchKey) {
 	worker.cancel()
 	<-worker.stopped
 	m.clearDeliveryStateForWatch(key)
-	m.clearDeliveryError(watchTransportErrorKey(worker.watch))
+	m.clearDeliveryError(watchListenerErrorKey(worker.watch))
+	m.clearDeliveryError(watchCatchUpErrorKey(worker.watch))
 	m.clearDeliveryError(watchDeliveryErrorKey(worker.watch.ProjectID, worker.watch.AgentName))
 	_ = m.refreshWatchDeliveryState(worker.watch.ProjectID, worker.watch.AgentName)
 }
@@ -285,14 +297,34 @@ func (m *Manager) runWatch(ctx context.Context, w Watch) {
 		}
 		listener, err := m.factory.NewListener(w)
 		if err != nil {
-			m.captureDeliveryError(watchTransportErrorKey(w), fmt.Errorf("create listener for %s/%s: %w", w.ProjectID, w.AgentName, err))
+			m.captureDeliveryError(watchListenerErrorKey(w), fmt.Errorf("create listener for %s/%s: %w", w.ProjectID, w.AgentName, err))
 			if !sleepWithContext(ctx, backoff) {
 				return
 			}
 			backoff = nextReconnectBackoff(backoff)
 			continue
 		}
-		m.clearDeliveryError(watchTransportErrorKey(w))
+		m.clearDeliveryError(watchListenerErrorKey(w))
+		// Catch up on messages queued in the broker during disconnect.
+		// handleDelivery deduplicates via AddRecordIfAbsent, so overlaps with
+		// listener delivery are harmless.
+		for attempt := 1; attempt <= config.Defaults.CatchUpMaxRetries; attempt++ {
+			if err := m.factory.CatchUp(w, func(d Delivery) error {
+				return m.handleDelivery(w, d)
+			}); err != nil {
+				m.captureDeliveryError(watchCatchUpErrorKey(w),
+					fmt.Errorf("catch-up inbox for %s/%s (attempt %d/%d): %w",
+						w.ProjectID, w.AgentName, attempt, config.Defaults.CatchUpMaxRetries, err))
+				if attempt < config.Defaults.CatchUpMaxRetries {
+					if !sleepWithContext(ctx, config.Defaults.PollInterval) {
+						return
+					}
+				}
+				continue
+			}
+			m.clearDeliveryError(watchCatchUpErrorKey(w))
+			break
+		}
 
 		err = listener.Listen(ctx, func(d Delivery) error {
 			return m.handleDelivery(w, d)
@@ -301,7 +333,7 @@ func (m *Manager) runWatch(ctx context.Context, w Watch) {
 			return
 		}
 		if err != nil {
-			m.captureDeliveryError(watchTransportErrorKey(w), fmt.Errorf("listen for %s/%s: %w", w.ProjectID, w.AgentName, err))
+			m.captureDeliveryError(watchListenerErrorKey(w), fmt.Errorf("listen for %s/%s: %w", w.ProjectID, w.AgentName, err))
 			if !sleepWithContext(ctx, backoff) {
 				return
 			}
@@ -465,6 +497,17 @@ func (m *Manager) captureDeliveryError(key string, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.lastDeliveryErr[key] = err
+
+	// Add to ring buffer, evicting oldest if at capacity
+	entry := ErrorEntry{
+		Timestamp: time.Now().UTC(),
+		WatchKey:  key,
+		Error:     err.Error(),
+	}
+	if len(m.recentErrors) >= config.Defaults.RuntimeRecentErrorCap {
+		m.recentErrors = m.recentErrors[1:]
+	}
+	m.recentErrors = append(m.recentErrors, entry)
 }
 
 func (m *Manager) clearDeliveryError(key string) {
@@ -476,8 +519,12 @@ func (m *Manager) clearDeliveryError(key string) {
 	delete(m.lastDeliveryErr, key)
 }
 
-func watchTransportErrorKey(w Watch) string {
-	return fmt.Sprintf("watch-transport/%s/%s", w.ProjectID, w.AgentName)
+func watchListenerErrorKey(w Watch) string {
+	return fmt.Sprintf("watch-listener/%s/%s", w.ProjectID, w.AgentName)
+}
+
+func watchCatchUpErrorKey(w Watch) string {
+	return fmt.Sprintf("watch-catchup/%s/%s", w.ProjectID, w.AgentName)
 }
 
 func watchDeliveryErrorKey(projectID, agentName string) string {

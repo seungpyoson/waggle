@@ -157,15 +157,20 @@ var runtimeStatusCmd = &cobra.Command{
 				state.PID = pid
 			}
 		}
+		recentErrors := state.RecentErrors
+		if recentErrors == nil {
+			recentErrors = []rt.ErrorEntry{}
+		}
 
 		printJSON(map[string]any{
-			"ok":          true,
-			"pid":         state.PID,
-			"running":     state.Running,
-			"started_at":  state.StartedAt,
-			"stopped_at":  state.StoppedAt,
-			"watch_count": state.WatchCount,
-			"last_error":  state.LastError,
+			"ok":            true,
+			"pid":           state.PID,
+			"running":       state.Running,
+			"started_at":    state.StartedAt,
+			"stopped_at":    state.StoppedAt,
+			"watch_count":   state.WatchCount,
+			"last_error":    state.LastError,
+			"recent_errors": recentErrors,
 		})
 		return nil
 	},

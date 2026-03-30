@@ -324,7 +324,7 @@ func TestManager_ReconcileClearsOnlyReconcileErrorOnSuccess(t *testing.T) {
 	manager := NewManager(store, newFakeListenerFactory(), &fakeNotifier{})
 
 	manager.captureDeliveryError("reconcile", errors.New("stale reconcile error"))
-	manager.captureDeliveryError(watchTransportErrorKey(Watch{ProjectID: "proj-a", AgentName: "agent-1"}), errors.New("live watch error"))
+	manager.captureDeliveryError(watchListenerErrorKey(Watch{ProjectID: "proj-a", AgentName: "agent-1"}), errors.New("live watch error"))
 	if err := manager.reconcile(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -335,8 +335,51 @@ func TestManager_ReconcileClearsOnlyReconcileErrorOnSuccess(t *testing.T) {
 	if strings.Contains(err.Error(), "reconcile") {
 		t.Fatalf("LastDeliveryError() = %v, want reconcile error cleared", err)
 	}
-	if !strings.Contains(err.Error(), "watch-transport/proj-a/agent-1") {
+	if !strings.Contains(err.Error(), "watch-listener/proj-a/agent-1") {
 		t.Fatalf("LastDeliveryError() = %v, want remaining watch error", err)
+	}
+}
+
+func TestManager_CatchUpAndListenErrorsVisibleSimultaneously(t *testing.T) {
+	store := newTestStore(t)
+	manager := NewManager(store, newFakeListenerFactory(), &fakeNotifier{})
+
+	w := Watch{ProjectID: "proj-x", AgentName: "agent-y"}
+
+	// Inject both error keys simultaneously.
+	manager.captureDeliveryError(watchCatchUpErrorKey(w), errors.New("catch-up failed"))
+	manager.captureDeliveryError(watchListenerErrorKey(w), errors.New("listen failed"))
+
+	err := manager.LastDeliveryError()
+	if err == nil {
+		t.Fatal("LastDeliveryError() = nil, want both errors")
+	}
+	errStr := err.Error()
+	if !strings.Contains(errStr, "watch-catchup/") {
+		t.Fatalf("LastDeliveryError() = %v, want catch-up error present", err)
+	}
+	if !strings.Contains(errStr, "watch-listener/") {
+		t.Fatalf("LastDeliveryError() = %v, want listener error present", err)
+	}
+
+	// Clear only catch-up — listener error must survive.
+	manager.clearDeliveryError(watchCatchUpErrorKey(w))
+	err = manager.LastDeliveryError()
+	if err == nil {
+		t.Fatal("LastDeliveryError() = nil after clearing catch-up, want listener error")
+	}
+	errStr = err.Error()
+	if strings.Contains(errStr, "watch-catchup/") {
+		t.Fatalf("LastDeliveryError() = %v, want catch-up error gone", err)
+	}
+	if !strings.Contains(errStr, "watch-listener/") {
+		t.Fatalf("LastDeliveryError() = %v, want listener error still present", err)
+	}
+
+	// Clear listener — no errors remain.
+	manager.clearDeliveryError(watchListenerErrorKey(w))
+	if err := manager.LastDeliveryError(); err != nil {
+		t.Fatalf("LastDeliveryError() = %v, want nil", err)
 	}
 }
 
@@ -427,7 +470,7 @@ func TestManager_StopWatchClearsWorkerErrorsButPreservesDetachedInflightState(t 
 	manager.mu.Lock()
 	manager.inflight[key] = struct{}{}
 	manager.mu.Unlock()
-	manager.captureDeliveryError(watchTransportErrorKey(watch), errors.New("transport error"))
+	manager.captureDeliveryError(watchListenerErrorKey(watch), errors.New("transport error"))
 	manager.captureDeliveryError(watchDeliveryErrorKey(watch.ProjectID, watch.AgentName), errors.New("delivery error"))
 	manager.captureDeliveryError(refreshDeliveryStatusErrorKey(watch.ProjectID, watch.AgentName), errors.New("status refresh error"))
 
@@ -439,7 +482,7 @@ func TestManager_StopWatchClearsWorkerErrorsButPreservesDetachedInflightState(t 
 		manager.mu.Lock()
 		defer manager.mu.Unlock()
 		_, inflightExists := manager.inflight[key]
-		_, transportExists := manager.lastDeliveryErr[watchTransportErrorKey(watch)]
+		_, transportExists := manager.lastDeliveryErr[watchListenerErrorKey(watch)]
 		_, deliveryExists := manager.lastDeliveryErr[watchDeliveryErrorKey(watch.ProjectID, watch.AgentName)]
 		_, statusExists := manager.lastDeliveryErr[refreshDeliveryStatusErrorKey(watch.ProjectID, watch.AgentName)]
 		return len(manager.workers) == 0 && inflightExists && !transportExists && !deliveryExists && !statusExists
@@ -1004,6 +1047,44 @@ func TestManager_UsesRuntimeRetrySweepInterval(t *testing.T) {
 	waitFor(t, "retry sweep interval", func() bool {
 		rec, err := store.GetRecord("proj-a", "agent-1", 222)
 		return err == nil && !rec.NotifiedAt.IsZero() && notifier.callCount() >= 2
+	})
+}
+
+func TestManager_RetriesCatchUpBeforeListening(t *testing.T) {
+	store := newTestStore(t)
+	watch := Watch{ProjectID: "proj-a", AgentName: "agent-1", Source: "hook"}
+	if err := store.UpsertWatch(watch); err != nil {
+		t.Fatal(err)
+	}
+
+	origPoll := config.Defaults.PollInterval
+	origRetries := config.Defaults.CatchUpMaxRetries
+	config.Defaults.PollInterval = 10 * time.Millisecond
+	config.Defaults.CatchUpMaxRetries = 3
+	defer func() {
+		config.Defaults.PollInterval = origPoll
+		config.Defaults.CatchUpMaxRetries = origRetries
+	}()
+
+	factory := newCatchUpRetryFactory([]error{
+		errors.New("first catch-up failed"),
+		errors.New("second catch-up failed"),
+		nil,
+	})
+	manager := NewManager(store, factory, &fakeNotifier{})
+
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Stop()
+
+	_ = factory.waitForListener(t, watch)
+	waitFor(t, "catch-up retries", func() bool {
+		return factory.catchUpCallCount() == 3
+	})
+
+	waitFor(t, "catch-up error cleared", func() bool {
+		return manager.LastDeliveryError() == nil
 	})
 }
 
@@ -1672,6 +1753,10 @@ func (f *fakeListenerFactory) NewListener(w Watch) (Listener, error) {
 	return listener, nil
 }
 
+func (f *fakeListenerFactory) CatchUp(w Watch, handler DeliveryHandler) error {
+	return nil
+}
+
 func (f *fakeListenerFactory) waitForListener(t *testing.T, watch Watch) *fakeListener {
 	t.Helper()
 
@@ -1703,6 +1788,38 @@ func waitForNewListener(t *testing.T, f *fakeListenerFactory, watch Watch, prior
 		return next != nil && next != prior
 	})
 	return next
+}
+
+type catchUpRetryFactory struct {
+	*fakeListenerFactory
+	mu         sync.Mutex
+	catchUpErr []error
+	catchUpCnt int
+}
+
+func newCatchUpRetryFactory(errs []error) *catchUpRetryFactory {
+	return &catchUpRetryFactory{
+		fakeListenerFactory: newFakeListenerFactory(),
+		catchUpErr:          append([]error(nil), errs...),
+	}
+}
+
+func (f *catchUpRetryFactory) CatchUp(_ Watch, _ DeliveryHandler) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.catchUpCnt++
+	if len(f.catchUpErr) == 0 {
+		return nil
+	}
+	err := f.catchUpErr[0]
+	f.catchUpErr = f.catchUpErr[1:]
+	return err
+}
+
+func (f *catchUpRetryFactory) catchUpCallCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.catchUpCnt
 }
 
 type fakeListener struct {
@@ -1785,6 +1902,10 @@ func (f *restartingListenerFactory) NewListener(_ Watch) (Listener, error) {
 	f.listeners = append(f.listeners, l)
 	f.created <- l
 	return l, nil
+}
+
+func (f *restartingListenerFactory) CatchUp(w Watch, handler DeliveryHandler) error {
+	return nil
 }
 
 func (f *restartingListenerFactory) waitForCreated(t *testing.T, want int) *restartableListener {

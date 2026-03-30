@@ -88,6 +88,7 @@ var Defaults = struct {
 	StartupPollInterval                   time.Duration
 	StartupTimeout                        time.Duration
 	DisconnectTimeout                     time.Duration
+	CatchUpMaxRetries                     int
 	RuntimeNotificationRetryLimit         int
 	MaxRetries                            int
 	MaxPriority                           int
@@ -114,6 +115,9 @@ var Defaults = struct {
 	TaskTTLCheckPeriod time.Duration
 	TaskStaleThreshold time.Duration
 	MaxTaskTTL         int
+
+	// Runtime observability
+	RuntimeRecentErrorCap int
 }{
 	DirName:                 ".waggle",
 	DBFile:                  "state.db",
@@ -149,6 +153,7 @@ var Defaults = struct {
 	StartupPollInterval:                   100 * time.Millisecond,
 	StartupTimeout:                        2 * time.Second,
 	DisconnectTimeout:                     2 * time.Second,
+	CatchUpMaxRetries:                     3,
 	RuntimeNotificationRetryLimit:         5,
 	MaxRetries:                            3,
 	MaxPriority:                           100,
@@ -172,6 +177,8 @@ var Defaults = struct {
 	TaskTTLCheckPeriod: 30 * time.Second,
 	TaskStaleThreshold: 5 * time.Minute,
 	MaxTaskTTL:         86400, // 24 hours
+
+	RuntimeRecentErrorCap: 20,
 }
 
 type Paths struct {

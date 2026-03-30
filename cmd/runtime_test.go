@@ -218,6 +218,56 @@ func TestRuntimeStatusReportsStoppedWhenStateMissing(t *testing.T) {
 	if !strings.Contains(stdout, `"running": false`) {
 		t.Fatalf("runtime status = %q, want running false", stdout)
 	}
+	if !strings.Contains(stdout, `"recent_errors": []`) {
+		t.Fatalf("runtime status = %q, want empty recent_errors array", stdout)
+	}
+}
+
+func TestRuntimeStatusIncludesRecentErrors(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	paths := config.NewPaths("")
+	wantRecentErrors := []rt.ErrorEntry{{
+		Timestamp: time.Now().UTC().Round(time.Second),
+		WatchKey:  "watch-1",
+		Error:     "boom",
+	}}
+	if err := rt.SaveState(paths, rt.State{
+		PID:          123,
+		Running:      true,
+		StartedAt:    time.Now().UTC().Round(time.Second),
+		WatchCount:   1,
+		LastError:    "watch-1: boom",
+		RecentErrors: wantRecentErrors,
+	}); err != nil {
+		t.Fatalf("save runtime state: %v", err)
+	}
+
+	stdout, stderr := executeRootCommandForTest(t, "runtime", "status")
+	if stderr != "" {
+		t.Fatalf("runtime status stderr = %q, want empty", stderr)
+	}
+
+	var resp map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(stdout), &resp); err != nil {
+		t.Fatalf("unmarshal runtime status response: %v", err)
+	}
+	rawRecentErrors, ok := resp["recent_errors"]
+	if !ok {
+		t.Fatalf("runtime status response missing recent_errors: %s", stdout)
+	}
+
+	var gotRecentErrors []rt.ErrorEntry
+	if err := json.Unmarshal(rawRecentErrors, &gotRecentErrors); err != nil {
+		t.Fatalf("unmarshal recent_errors: %v", err)
+	}
+	if len(gotRecentErrors) != 1 {
+		t.Fatalf("recent_errors length = %d, want 1", len(gotRecentErrors))
+	}
+	if gotRecentErrors[0].WatchKey != wantRecentErrors[0].WatchKey || gotRecentErrors[0].Error != wantRecentErrors[0].Error || !gotRecentErrors[0].Timestamp.Equal(wantRecentErrors[0].Timestamp) {
+		t.Fatalf("recent_errors[0] = %+v, want %+v", gotRecentErrors[0], wantRecentErrors[0])
+	}
 }
 
 func TestExecuteRootCommandForTestDoesNotLeakInstallUninstallFlag(t *testing.T) {

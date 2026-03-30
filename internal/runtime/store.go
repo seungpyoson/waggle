@@ -605,6 +605,161 @@ func (s *Store) MarkSurfacedBatch(projectID, agentName string, messageIDs []int6
 	return nil
 }
 
+// MarkSurfacedAndDismissBatch marks multiple delivery records surfaced and dismissed
+// in one authoritative lifecycle transition. It is used by bootstrap to consume unread
+// records without leaving a surfaced-but-undismissed failure window.
+func (s *Store) MarkSurfacedAndDismissBatch(projectID, agentName string, messageIDs []int64) error {
+	if projectID == "" || agentName == "" {
+		return fmt.Errorf("project_id and agent_name required")
+	}
+	if len(messageIDs) == 0 {
+		return nil
+	}
+
+	ids := uniquePositiveMessageIDs(messageIDs)
+	if len(ids) != len(messageIDs) {
+		return fmt.Errorf("message_ids must be unique and positive")
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin surfaced and dismissed batch: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	updateArgs := make([]any, 0, 4+len(ids))
+	updateArgs = append(updateArgs, now, now, projectID, agentName)
+	for _, id := range ids {
+		updateArgs = append(updateArgs, id)
+	}
+	if _, err := tx.Exec(fmt.Sprintf(`
+		UPDATE delivery_records
+		SET surfaced_at = COALESCE(surfaced_at, ?),
+		    dismissed_at = COALESCE(dismissed_at, ?)
+		WHERE project_id = ? AND agent_name = ? AND message_id IN (%s)
+	`, sqlPlaceholders(len(ids))), updateArgs...); err != nil {
+		return fmt.Errorf("marking surfaced and dismissed batch: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit surfaced and dismissed batch: %w", err)
+	}
+	return nil
+}
+
+// MarkDismissed marks a single surfaced delivery record as dismissed (idempotent).
+// It does not surface unread records.
+func (s *Store) MarkDismissed(projectID, agentName string, messageID int64) error {
+	if projectID == "" || agentName == "" {
+		return fmt.Errorf("project_id and agent_name required")
+	}
+	if messageID == 0 {
+		return fmt.Errorf("message_id required")
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	result, err := s.db.Exec(`
+		UPDATE delivery_records
+		SET dismissed_at = COALESCE(dismissed_at, ?)
+		WHERE project_id = ? AND agent_name = ? AND message_id = ? AND surfaced_at IS NOT NULL
+	`, now, projectID, agentName, messageID)
+	if err != nil {
+		return fmt.Errorf("marking dismissed: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("counting dismissed rows: %w", err)
+	}
+	if rowsAffected > 0 {
+		return nil
+	}
+
+	var exists int
+	err = s.db.QueryRow(`
+		SELECT 1 FROM delivery_records
+		WHERE project_id = ? AND agent_name = ? AND message_id = ?
+	`, projectID, agentName, messageID).Scan(&exists)
+	if err == sql.ErrNoRows {
+		return ErrRecordNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("checking dismissed record: %w", err)
+	}
+	return nil
+}
+
+// MarkDismissedBatch marks multiple surfaced delivery records as dismissed atomically.
+// It is surfaced-only; use MarkSurfacedAndDismissBatch for bootstrap-style unread consumption.
+func (s *Store) MarkDismissedBatch(projectID, agentName string, messageIDs []int64) error {
+	if projectID == "" || agentName == "" {
+		return fmt.Errorf("project_id and agent_name required")
+	}
+	if len(messageIDs) == 0 {
+		return nil
+	}
+
+	ids := uniquePositiveMessageIDs(messageIDs)
+	if len(ids) != len(messageIDs) {
+		return fmt.Errorf("message_ids must be unique and positive")
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin dismissed batch: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	updateArgs := make([]any, 0, 3+len(ids))
+	updateArgs = append(updateArgs, time.Now().UTC().Format(time.RFC3339Nano), projectID, agentName)
+	for _, id := range ids {
+		updateArgs = append(updateArgs, id)
+	}
+	if _, err := tx.Exec(fmt.Sprintf(`
+		UPDATE delivery_records
+		SET dismissed_at = COALESCE(dismissed_at, ?)
+		WHERE project_id = ? AND agent_name = ? AND message_id IN (%s) AND surfaced_at IS NOT NULL
+	`, sqlPlaceholders(len(ids))), updateArgs...); err != nil {
+		return fmt.Errorf("marking dismissed batch: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit dismissed batch: %w", err)
+	}
+	return nil
+}
+
+// DismissAllSurfaced dismisses all surfaced-but-not-dismissed records for an agent.
+// Returns the number of records dismissed, or 0 when there is nothing surfaced to dismiss.
+func (s *Store) DismissAllSurfaced(projectID, agentName string) (int64, error) {
+	if projectID == "" || agentName == "" {
+		return 0, fmt.Errorf("project_id and agent_name required")
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	result, err := s.db.Exec(`
+		UPDATE delivery_records
+		SET dismissed_at = COALESCE(dismissed_at, ?)
+		WHERE project_id = ? AND agent_name = ? AND surfaced_at IS NOT NULL AND dismissed_at IS NULL
+	`, now, projectID, agentName)
+	if err != nil {
+		return 0, fmt.Errorf("dismissing all surfaced: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("counting dismissed rows: %w", err)
+	}
+	return rowsAffected, nil
+}
+
+// uniquePositiveMessageIDs normalizes batch lifecycle selectors.
+// Callers compare lengths and reject any duplicate or non-positive input as an
+// invariant violation so malformed batches fail loud instead of partially mutating state.
 func uniquePositiveMessageIDs(messageIDs []int64) []int64 {
 	seen := make(map[int64]struct{}, len(messageIDs))
 	out := make([]int64, 0, len(messageIDs))
