@@ -296,6 +296,44 @@ func TestCheckAugment_InvertedMarkers(t *testing.T) {
 	}
 }
 
+func TestCheckAugment_DuplicateEndMarkers(t *testing.T) {
+	tmpHome := t.TempDir()
+	augmentDir := filepath.Join(tmpHome, ".augment", "skills")
+	os.MkdirAll(augmentDir, 0755)
+
+	skillPath := filepath.Join(augmentDir, "waggle.md")
+	content := augmentBlockBegin + "\ncontent\n" + augmentBlockEnd + "\nextra\n" + augmentBlockEnd + "\n"
+	os.WriteFile(skillPath, []byte(content), 0644)
+
+	issues, state := CheckAugment(tmpHome)
+
+	if state != StateBroken {
+		t.Errorf("expected StateBroken for duplicate end markers, got %q", state)
+	}
+	if len(issues) == 0 {
+		t.Errorf("expected issues for duplicate end markers, got none")
+	}
+}
+
+func TestCheckAugment_BeginNotAtStartOfLine(t *testing.T) {
+	tmpHome := t.TempDir()
+	augmentDir := filepath.Join(tmpHome, ".augment", "skills")
+	os.MkdirAll(augmentDir, 0755)
+
+	skillPath := filepath.Join(augmentDir, "waggle.md")
+	content := "prefix " + augmentBlockBegin + "\ncontent\n" + augmentBlockEnd + "\n"
+	os.WriteFile(skillPath, []byte(content), 0644)
+
+	issues, state := CheckAugment(tmpHome)
+
+	if state != StateBroken {
+		t.Errorf("expected StateBroken for begin not at start of line, got %q", state)
+	}
+	if len(issues) == 0 {
+		t.Errorf("expected issues for begin not at start of line, got none")
+	}
+}
+
 func TestEmbeddedAugmentFilesMatch(t *testing.T) {
 	sourceDir := filepath.Join("..", "..", "integrations", "augment")
 	embedDir := filepath.Join("augment")
