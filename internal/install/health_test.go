@@ -168,7 +168,7 @@ func TestCheckClaudeCode_BrokenMissingSkill(t *testing.T) {
 	}
 }
 
-func TestCheckClaudeCode_BrokenMissingFingerprint(t *testing.T) {
+func TestCheckClaudeCode_BrokenOrphanedInstall(t *testing.T) {
 	tmpHome := t.TempDir()
 
 	// Install to create files
@@ -182,13 +182,27 @@ func TestCheckClaudeCode_BrokenMissingFingerprint(t *testing.T) {
 		t.Fatalf("failed to deregister hook: %v", err)
 	}
 
-	// Check health — files exist but fingerprint is gone, so: StateNotInstalled (no fingerprint)
+	// Check health — files exist but fingerprint is gone: StateBroken (orphaned install)
 	issues, state := CheckClaudeCode(tmpHome)
-	if state != StateNotInstalled {
-		t.Errorf("expected StateNotInstalled (fingerprint removed), got %q", state)
+	if state != StateBroken {
+		t.Errorf("expected StateBroken (orphaned install), got %q", state)
 	}
-	if len(issues) != 0 {
-		t.Errorf("expected 0 issues when fingerprint absent, got %d: %+v", len(issues), issues)
+	if len(issues) == 0 {
+		t.Fatal("expected issues for orphaned install, got none")
+	}
+
+	// Verify the registration issue is reported with repair guidance
+	foundRegistration := false
+	for _, issue := range issues {
+		if issue.Problem == "hook registration missing from settings.json" {
+			foundRegistration = true
+			if issue.Repair != "waggle install claude-code" {
+				t.Errorf("expected repair 'waggle install claude-code', got %q", issue.Repair)
+			}
+		}
+	}
+	if !foundRegistration {
+		t.Errorf("did not find registration issue in: %+v", issues)
 	}
 }
 
@@ -367,7 +381,7 @@ func TestCheckCodex_BrokenTruncatedBlock(t *testing.T) {
 	}
 }
 
-func TestCheckCodex_BrokenMissingAgentsFile(t *testing.T) {
+func TestCheckCodex_BrokenOrphanedInstall(t *testing.T) {
 	tmpHome := t.TempDir()
 
 	// Install
@@ -375,19 +389,33 @@ func TestCheckCodex_BrokenMissingAgentsFile(t *testing.T) {
 		t.Fatalf("install failed: %v", err)
 	}
 
-	// Remove AGENTS.md entirely (fingerprint marker now gone)
+	// Remove AGENTS.md entirely (fingerprint marker now gone, SKILL.md remains)
 	agentsPath := filepath.Join(tmpHome, ".codex", "AGENTS.md")
 	if err := os.Remove(agentsPath); err != nil {
 		t.Fatalf("failed to delete AGENTS.md: %v", err)
 	}
 
-	// Check health — AGENTS.md gone means fingerprint gone, so: StateNotInstalled
+	// Check health — AGENTS.md gone but skill file exists: StateBroken (orphaned install)
 	issues, state := CheckCodex(tmpHome)
-	if state != StateNotInstalled {
-		t.Errorf("expected StateNotInstalled (AGENTS.md/marker gone), got %q", state)
+	if state != StateBroken {
+		t.Errorf("expected StateBroken (orphaned install), got %q", state)
 	}
-	if len(issues) != 0 {
-		t.Errorf("expected 0 issues when fingerprint absent, got %d: %+v", len(issues), issues)
+	if len(issues) == 0 {
+		t.Fatal("expected issues for orphaned install, got none")
+	}
+
+	// Verify the managed block issue is reported with repair guidance
+	foundBlock := false
+	for _, issue := range issues {
+		if issue.Problem == "managed block missing from AGENTS.md" {
+			foundBlock = true
+			if issue.Repair != "waggle install codex" {
+				t.Errorf("expected repair 'waggle install codex', got %q", issue.Repair)
+			}
+		}
+	}
+	if !foundBlock {
+		t.Errorf("did not find managed block issue in: %+v", issues)
 	}
 }
 

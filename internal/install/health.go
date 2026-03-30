@@ -23,19 +23,24 @@ type HealthIssue struct {
 }
 
 // CheckClaudeCode checks the health of the Claude Code integration.
-// Returns (issues, state) where:
-// - StateNotInstalled: no fingerprint (waggle hook not registered), zero issues
-// - StateHealthy: fingerprint present, all files present, zero issues
-// - StateBroken: fingerprint present, some files missing, issues listed
+// Evaluates fingerprint (hook registration) and file presence independently:
+//
+//	| Fingerprint | Files | → State        |
+//	|-------------|-------|----------------|
+//	| ✓           | ✓     | Healthy        |
+//	| ✓           | ✗     | Broken         |
+//	| ✗           | ✓     | Broken         |
+//	| ✗           | ✗     | NotInstalled   |
 func CheckClaudeCode(homeDir string) ([]HealthIssue, AdapterState) {
 	var issues []HealthIssue
 	claudeDir := filepath.Join(homeDir, ".claude")
+	const repairCmd = "waggle install claude-code"
 
-	// Step 1: Check for fingerprint (waggle hook registration in settings.json)
+	// Step 1: Check for fingerprint (waggle hook registration in settings.json).
+	// Uses exact canonical command match — same string the installer writes.
 	settingsPath := filepath.Join(claudeDir, "settings.json")
 	settings, _ := readSettingsJSON(settingsPath)
 
-	// Look for waggle hook in SessionStart
 	hookRegistered := false
 	if hooks, ok := settings["hooks"].(map[string]interface{}); ok {
 		if sessionStart, ok := hooks["SessionStart"].([]interface{}); ok {
@@ -45,7 +50,7 @@ func CheckClaudeCode(homeDir string) ([]HealthIssue, AdapterState) {
 						for _, h := range entryHooks {
 							if hMap, ok := h.(map[string]interface{}); ok {
 								if cmd, ok := hMap["command"].(string); ok {
-									if strings.Contains(cmd, "waggle-connect.sh") {
+									if cmd == waggleHookCommand {
 										hookRegistered = true
 										break
 									}
@@ -58,57 +63,67 @@ func CheckClaudeCode(homeDir string) ([]HealthIssue, AdapterState) {
 		}
 	}
 
-	// If no fingerprint, return StateNotInstalled immediately
-	if !hookRegistered {
+	// Step 2: Check if waggle files are present on disk
+	hookPath := filepath.Join(claudeDir, "hooks", "waggle-connect.sh")
+	heartbeatPath := filepath.Join(claudeDir, "hooks", "waggle-heartbeat.sh")
+	skillDir := filepath.Join(claudeDir, "skills", "waggle")
+
+	hookExists := fileExists(hookPath)
+	heartbeatExists := fileExists(heartbeatPath)
+	skillDirExists := fileExists(skillDir)
+	anyFileExists := hookExists || heartbeatExists || skillDirExists
+
+	// Step 3: Derive state from fingerprint × files matrix
+	if !hookRegistered && !anyFileExists {
 		return nil, StateNotInstalled
 	}
 
-	// Step 2: Fingerprint found — check if all files are present
-	// Check hook file
-	hookPath := filepath.Join(claudeDir, "hooks", "waggle-connect.sh")
-	if _, err := os.Stat(hookPath); os.IsNotExist(err) {
+	if !hookRegistered {
+		// Files exist but fingerprint is gone — orphaned install
+		issues = append(issues, HealthIssue{
+			Asset:   settingsPath,
+			Problem: "hook registration missing from settings.json",
+			Repair:  repairCmd,
+		})
+	}
+
+	if !hookExists {
 		issues = append(issues, HealthIssue{
 			Asset:   hookPath,
 			Problem: "waggle-connect.sh missing",
-			Repair:  "waggle install claude-code",
+			Repair:  repairCmd,
 		})
 	}
 
-	// Check heartbeat file
-	heartbeatPath := filepath.Join(claudeDir, "hooks", "waggle-heartbeat.sh")
-	if _, err := os.Stat(heartbeatPath); os.IsNotExist(err) {
+	if !heartbeatExists {
 		issues = append(issues, HealthIssue{
 			Asset:   heartbeatPath,
 			Problem: "waggle-heartbeat.sh missing",
-			Repair:  "waggle install claude-code",
+			Repair:  repairCmd,
 		})
 	}
 
-	// Check skills directory and files
-	skillDir := filepath.Join(claudeDir, "skills", "waggle")
-	if _, err := os.Stat(skillDir); os.IsNotExist(err) {
+	if !skillDirExists {
 		issues = append(issues, HealthIssue{
 			Asset:   skillDir,
 			Problem: "skills directory missing",
-			Repair:  "waggle install claude-code",
+			Repair:  repairCmd,
 		})
 	} else {
-		// Check for expected skill files
 		expectedSkills := []string{"waggle.md", "send.md", "inbox.md", "ack.md", "status.md", "claim.md", "done.md", "presence.md"}
 		for _, skill := range expectedSkills {
 			skillPath := filepath.Join(skillDir, skill)
-			if _, err := os.Stat(skillPath); os.IsNotExist(err) {
+			if !fileExists(skillPath) {
 				issues = append(issues, HealthIssue{
 					Asset:   skillPath,
 					Problem: "skill file " + skill + " missing",
-					Repair:  "waggle install claude-code",
+					Repair:  repairCmd,
 				})
 				break // Report only the first missing skill to avoid noise
 			}
 		}
 	}
 
-	// Determine final state
 	if len(issues) > 0 {
 		return issues, StateBroken
 	}
@@ -116,54 +131,61 @@ func CheckClaudeCode(homeDir string) ([]HealthIssue, AdapterState) {
 }
 
 // CheckCodex checks the health of the Codex integration.
-// Returns (issues, state) where:
-// - StateNotInstalled: no fingerprint (WAGGLE-CODEX-BEGIN marker in AGENTS.md absent), zero issues
-// - StateHealthy: fingerprint present, SKILL.md present, zero issues
-// - StateBroken: fingerprint present, SKILL.md missing, issues listed
+// Same fingerprint × files matrix as CheckClaudeCode.
 func CheckCodex(homeDir string) ([]HealthIssue, AdapterState) {
 	var issues []HealthIssue
 	codexDir := filepath.Join(homeDir, ".codex")
+	const repairCmd = "waggle install codex"
 
 	// Step 1: Check for fingerprint (WAGGLE-CODEX-BEGIN marker in AGENTS.md)
 	agentsPath := filepath.Join(codexDir, "AGENTS.md")
 	data, err := os.ReadFile(agentsPath)
-	if err != nil {
-		// AGENTS.md doesn't exist or is unreadable — no fingerprint
+
+	hasBeginMarker := err == nil && strings.Contains(string(data), codexBlockBegin)
+	hasEndMarker := err == nil && strings.Contains(string(data), codexBlockEnd)
+
+	// Step 2: Check if waggle files are present on disk
+	skillPath := filepath.Join(codexDir, "skills", "waggle-runtime", "SKILL.md")
+	skillExists := fileExists(skillPath)
+
+	// Step 3: Derive state from fingerprint × files matrix
+	if !hasBeginMarker && !skillExists {
 		return nil, StateNotInstalled
 	}
 
-	// Check for waggle managed block marker
-	content := string(data)
-	if !strings.Contains(content, codexBlockBegin) {
-		// No fingerprint
-		return nil, StateNotInstalled
-	}
-
-	// Step 2: Fingerprint found — check managed block integrity.
-	// The installer treats a missing end marker as corruption (see managed_block.go),
-	// so health must detect the same state.
-	if !strings.Contains(content, codexBlockEnd) {
+	if !hasBeginMarker {
+		// Skill file exists but fingerprint is gone — orphaned install
+		issues = append(issues, HealthIssue{
+			Asset:   agentsPath,
+			Problem: "managed block missing from AGENTS.md",
+			Repair:  repairCmd,
+		})
+	} else if !hasEndMarker {
+		// Fingerprint found but block is truncated
 		issues = append(issues, HealthIssue{
 			Asset:   agentsPath,
 			Problem: "managed block truncated (begin marker without end marker)",
-			Repair:  "waggle install codex",
+			Repair:  repairCmd,
 		})
 	}
 
-	// Step 3: Check if all files are present
-	skillPath := filepath.Join(codexDir, "skills", "waggle-runtime", "SKILL.md")
-	if _, err := os.Stat(skillPath); os.IsNotExist(err) {
+	if !skillExists {
 		issues = append(issues, HealthIssue{
 			Asset:   skillPath,
 			Problem: "SKILL.md missing",
-			Repair:  "waggle install codex",
+			Repair:  repairCmd,
 		})
 	}
 
-	// Determine final state
 	if len(issues) > 0 {
 		return issues, StateBroken
 	}
 	return nil, StateHealthy
+}
+
+// fileExists returns true if a path exists on disk (file or directory).
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 

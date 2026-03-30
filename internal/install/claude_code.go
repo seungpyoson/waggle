@@ -8,6 +8,10 @@ import (
 	"path/filepath"
 )
 
+// waggleHookCommand is the canonical command string written to settings.json.
+// Used by install, uninstall, and health checks. Single source of truth.
+const waggleHookCommand = "bash $HOME/.claude/hooks/waggle-connect.sh"
+
 // The canonical Claude Code integration assets live in integrations/claude-code/.
 // This mirrored copy exists in-package so go:embed can bundle them for install.
 //go:embed all:claude-code
@@ -145,7 +149,7 @@ func registerSessionStartHook(claudeDir string) error {
 		"hooks": []interface{}{
 			map[string]interface{}{
 				"type":    "command",
-				"command": "bash $HOME/.claude/hooks/waggle-connect.sh",
+				"command": waggleHookCommand,
 			},
 		},
 	}
@@ -159,7 +163,7 @@ func registerSessionStartHook(claudeDir string) error {
 		entryHooks, _ := entryMap["hooks"].([]interface{})
 		for _, h := range entryHooks {
 			hMap, _ := h.(map[string]interface{})
-			if cmd, _ := hMap["command"].(string); cmd == "bash $HOME/.claude/hooks/waggle-connect.sh" {
+			if cmd, _ := hMap["command"].(string); cmd == waggleHookCommand {
 				return nil // already registered
 			}
 		}
@@ -207,7 +211,7 @@ func deregisterSessionStartHook(claudeDir string) error {
 		isWaggle := false
 		for _, h := range entryHooks {
 			hMap, _ := h.(map[string]interface{})
-			if cmd, _ := hMap["command"].(string); cmd == "bash $HOME/.claude/hooks/waggle-connect.sh" {
+			if cmd, _ := hMap["command"].(string); cmd == waggleHookCommand {
 				isWaggle = true
 				break
 			}
