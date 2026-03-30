@@ -44,7 +44,7 @@ func TestRingBuffer_ThreadSafe(t *testing.T) {
 	var wg sync.WaitGroup
 	errors := make(chan string, cap*2)
 
-	for i := 0; i < cap * 2; i++ {
+	for i := 0; i < cap*2; i++ {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
@@ -60,6 +60,56 @@ func TestRingBuffer_ThreadSafe(t *testing.T) {
 	recentErrors := manager.RecentErrors()
 	if len(recentErrors) > cap {
 		t.Fatalf("concurrent captureDeliveryError caused overflow: got %d, cap is %d", len(recentErrors), cap)
+	}
+}
+
+func TestRingBuffer_ConcurrentReadWrite(t *testing.T) {
+	store := newTestStore(t)
+	manager := NewManager(store, newFakeListenerFactory(), &fakeNotifier{})
+
+	cap := config.Defaults.RuntimeRecentErrorCap
+	const readers = 4
+	const writers = 4
+	const iterations = 64
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+
+	for reader := 0; reader < readers; reader++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for i := 0; i < iterations; i++ {
+				snapshot := manager.RecentErrors()
+				if len(snapshot) > cap {
+					t.Errorf("RecentErrors snapshot overflowed: got %d, cap is %d", len(snapshot), cap)
+					return
+				}
+			}
+		}()
+	}
+
+	for writer := 0; writer < writers; writer++ {
+		wg.Add(1)
+		go func(writer int) {
+			defer wg.Done()
+			<-start
+			for i := 0; i < iterations; i++ {
+				manager.captureDeliveryError(fmt.Sprintf("writer-%d", writer), fmt.Errorf("error %d", i))
+			}
+		}(writer)
+	}
+
+	close(start)
+	wg.Wait()
+
+	recentErrors := manager.RecentErrors()
+	if len(recentErrors) > cap {
+		t.Fatalf("final RecentErrors snapshot overflowed: got %d, cap is %d", len(recentErrors), cap)
+	}
+	if recentErrors == nil {
+		t.Fatal("RecentErrors returned nil snapshot")
 	}
 }
 

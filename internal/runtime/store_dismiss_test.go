@@ -42,6 +42,47 @@ func TestMarkDismissed_Basic(t *testing.T) {
 	}
 }
 
+func TestMarkDismissed_DoesNotDismissUnread(t *testing.T) {
+	store := newTestStore(t)
+
+	rec := DeliveryRecord{
+		ProjectID:  "proj-a",
+		AgentName:  "agent-1",
+		MessageID:  43,
+		FromName:   "orchestrator",
+		Body:       "hello",
+		SentAt:     time.Unix(1, 0).UTC(),
+		ReceivedAt: time.Unix(2, 0).UTC(),
+		NotifiedAt: time.Unix(3, 0).UTC(),
+	}
+	if err := store.AddRecord(rec); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.MarkDismissed("proj-a", "agent-1", 43); err != nil {
+		t.Fatal(err)
+	}
+
+	retrieved, err := store.GetRecord("proj-a", "agent-1", 43)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !retrieved.SurfacedAt.IsZero() {
+		t.Fatalf("surfaced_at = %v, want zero", retrieved.SurfacedAt)
+	}
+	if !retrieved.DismissedAt.IsZero() {
+		t.Fatalf("dismissed_at = %v, want zero", retrieved.DismissedAt)
+	}
+
+	unread, err := store.Unread("proj-a", "agent-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(unread) != 1 {
+		t.Fatalf("unread count = %d, want 1", len(unread))
+	}
+}
+
 func TestMarkDismissed_Idempotent(t *testing.T) {
 	store := newTestStore(t)
 
@@ -77,6 +118,14 @@ func TestMarkDismissed_Idempotent(t *testing.T) {
 	}
 	if retrieved.DismissedAt.IsZero() {
 		t.Fatalf("dismissed_at should be set after idempotent calls")
+	}
+}
+
+func TestMarkDismissedBatch_Empty(t *testing.T) {
+	store := newTestStore(t)
+
+	if err := store.MarkDismissedBatch("proj-a", "agent-1", []int64{}); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -118,7 +167,7 @@ func TestMarkDismissedBatch_Atomic(t *testing.T) {
 	}
 }
 
-func TestBootstrap_DismissesAfterSurf(t *testing.T) {
+func TestMarkSurfacedAndDismissBatch_ConsumesUnreadAtomically(t *testing.T) {
 	store := newTestStore(t)
 
 	rec := DeliveryRecord{
@@ -134,7 +183,7 @@ func TestBootstrap_DismissesAfterSurf(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Simulate Bootstrap: unread → surfaced → dismissed
+	// Simulate Bootstrap: unread → surfaced+dismissed in one authoritative transition.
 	unread, err := store.Unread("proj-a", "agent-1")
 	if err != nil {
 		t.Fatal(err)
@@ -148,10 +197,7 @@ func TestBootstrap_DismissesAfterSurf(t *testing.T) {
 		messageIDs = append(messageIDs, rec.MessageID)
 	}
 
-	if err := store.MarkSurfacedBatch("proj-a", "agent-1", messageIDs); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.MarkDismissedBatch("proj-a", "agent-1", messageIDs); err != nil {
+	if err := store.MarkSurfacedAndDismissBatch("proj-a", "agent-1", messageIDs); err != nil {
 		t.Fatal(err)
 	}
 
@@ -165,5 +211,38 @@ func TestBootstrap_DismissesAfterSurf(t *testing.T) {
 	}
 	if final.DismissedAt.IsZero() {
 		t.Fatalf("dismissed_at should be set")
+	}
+}
+
+func TestDismissAllSurfaced_Zero(t *testing.T) {
+	store := newTestStore(t)
+
+	rec := DeliveryRecord{
+		ProjectID:  "proj-a",
+		AgentName:  "agent-1",
+		MessageID:  44,
+		FromName:   "planner",
+		Body:       "still unread",
+		SentAt:     time.Unix(1, 0).UTC(),
+		ReceivedAt: time.Unix(2, 0).UTC(),
+	}
+	if err := store.AddRecord(rec); err != nil {
+		t.Fatal(err)
+	}
+
+	count, err := store.DismissAllSurfaced("proj-a", "agent-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("dismissed count = %d, want 0", count)
+	}
+
+	retrieved, err := store.GetRecord("proj-a", "agent-1", 44)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !retrieved.DismissedAt.IsZero() {
+		t.Fatalf("dismissed_at = %v, want zero", retrieved.DismissedAt)
 	}
 }

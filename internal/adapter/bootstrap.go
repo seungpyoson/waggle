@@ -86,10 +86,7 @@ func Bootstrap(input BootstrapInput) (BootstrapResult, error) {
 	for _, rec := range records {
 		messageIDs = append(messageIDs, rec.MessageID)
 	}
-	if err := store.MarkSurfacedBatch(projectID, agentName, messageIDs); err != nil {
-		return BootstrapResult{}, err
-	}
-	if err := store.MarkDismissedBatch(projectID, agentName, messageIDs); err != nil {
+	if err := store.MarkSurfacedAndDismissBatch(projectID, agentName, messageIDs); err != nil {
 		return BootstrapResult{}, fmt.Errorf("mark dismissed: %w", err)
 	}
 
