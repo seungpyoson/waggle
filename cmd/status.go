@@ -118,8 +118,9 @@ var statusCmd = &cobra.Command{
 		if err != nil || !resp.OK {
 			// Connected and handshake OK but status RPC failed — broker running but degraded
 			printJSON(map[string]any{
-				"ok":     true,
-				"broker": map[string]any{"running": true, "status": "degraded"},
+				"ok":       true,
+				"broker":   map[string]any{"running": true, "status": "degraded"},
+				"hint":     brokerHint,
 				"adapters": adapters,
 			})
 			return nil
