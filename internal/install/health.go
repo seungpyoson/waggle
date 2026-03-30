@@ -348,6 +348,61 @@ func CheckAuggie(homeDir string) ([]HealthIssue, AdapterState) {
 	return nil, StateHealthy
 }
 
+// CheckAugment checks the health of the Augment integration.
+// Same topology-aware flow as CheckGemini: detect any marker, validate topology,
+// then derive state. This ensures health never reports "not_installed" or "healthy"
+// for a file that upsertManagedBlock would reject.
+func CheckAugment(homeDir string) ([]HealthIssue, AdapterState) {
+	const repairCmd = "waggle install augment"
+	var issues []HealthIssue
+	skillPath := filepath.Join(homeDir, ".augment", "skills", "waggle.md")
+
+	data, err := os.ReadFile(skillPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, StateNotInstalled
+		}
+		return []HealthIssue{{
+			Asset:   skillPath,
+			Problem: "cannot read skill file: " + err.Error(),
+			Repair:  repairCmd,
+		}}, StateBroken
+	}
+
+	content := string(data)
+	hasBeginMarker := strings.Contains(content, augmentBlockBegin)
+	hasEndMarker := strings.Contains(content, augmentBlockEnd)
+
+	// Validate marker topology before deriving state.
+	hasAnyMarker := hasBeginMarker || hasEndMarker
+	if hasAnyMarker {
+		if topErr := validateMarkerTopology(content, augmentBlockBegin, augmentBlockEnd); topErr != nil {
+			issues = append(issues, HealthIssue{
+				Asset:   skillPath,
+				Problem: "managed block has invalid topology: " + topErr.Error(),
+				Repair:  repairCmd,
+			})
+		}
+	}
+
+	if !hasAnyMarker {
+		return nil, StateNotInstalled
+	}
+
+	if hasBeginMarker && !hasEndMarker && len(issues) == 0 {
+		issues = append(issues, HealthIssue{
+			Asset:   skillPath,
+			Problem: "managed block truncated (begin marker without end marker)",
+			Repair:  repairCmd,
+		})
+	}
+
+	if len(issues) > 0 {
+		return issues, StateBroken
+	}
+	return nil, StateHealthy
+}
+
 // fileExists returns true if a path exists on disk (file or directory).
 func fileExists(path string) bool {
 	_, err := os.Stat(path)

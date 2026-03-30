@@ -77,8 +77,22 @@ var installCmd = &cobra.Command{
 				}
 				printJSON(map[string]any{"ok": true, "message": "Auggie integration installed. Restart Auggie to activate."})
 			}
+		case "augment":
+			if installUninstall {
+				if err := install.UninstallAugment(); err != nil {
+					printErr("INSTALL_ERROR", err.Error())
+					return nil
+				}
+				printJSON(map[string]any{"ok": true, "message": "Augment integration removed"})
+			} else {
+				if err := install.InstallAugment(); err != nil {
+					printErr("INSTALL_ERROR", err.Error())
+					return nil
+				}
+				printJSON(map[string]any{"ok": true, "message": "Augment integration installed. Restart Augment to activate."})
+			}
 		default:
-			printErr("INVALID_REQUEST", fmt.Sprintf("unknown platform: %s (supported: claude-code, codex, gemini, auggie)", platform))
+			printErr("INVALID_REQUEST", fmt.Sprintf("unknown platform: %s (supported: claude-code, codex, gemini, auggie, augment)", platform))
 		}
 		return nil
 	},
