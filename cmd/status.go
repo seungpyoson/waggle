@@ -55,6 +55,10 @@ var statusCmd = &cobra.Command{
 			return nil
 		}
 
+		// Self-healing hint for broker failure states. Status is read-only —
+		// it reports but does not mutate. Other commands auto-recover via PersistentPreRunE.
+		const brokerHint = "run any waggle command (e.g. 'waggle sessions') to auto-recover, or 'waggle stop && waggle start' to restart manually"
+
 		c, err := client.Connect(localPaths.Socket, config.Defaults.ConnectTimeout)
 		if err != nil {
 			// Broker not running or not reachable — show adapter health but report error
@@ -62,6 +66,7 @@ var statusCmd = &cobra.Command{
 				"ok":       false,
 				"code":     "BROKER_NOT_RUNNING",
 				"error":    err.Error(),
+				"hint":     brokerHint,
 				"broker":   map[string]any{"running": false},
 				"adapters": adapters,
 			})
@@ -77,6 +82,7 @@ var statusCmd = &cobra.Command{
 				"ok":       false,
 				"code":     "BROKER_DEGRADED",
 				"error":    err.Error(),
+				"hint":     brokerHint,
 				"broker":   map[string]any{"running": false},
 				"adapters": adapters,
 			})
@@ -96,6 +102,7 @@ var statusCmd = &cobra.Command{
 				"ok":       false,
 				"code":     "BROKER_UNRESPONSIVE",
 				"error":    errMsg,
+				"hint":     brokerHint,
 				"broker":   map[string]any{"running": false},
 				"adapters": adapters,
 			})
