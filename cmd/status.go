@@ -85,10 +85,12 @@ var statusCmd = &cobra.Command{
 		}
 		resp, err := c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "waggle-status"})
 		if err != nil || !resp.OK {
-			// Socket opened but handshake failed — zombie broker (listening but not accepting)
+			// Socket opened but handshake failed — zombie broker or explicit rejection
 			errMsg := "handshake failed"
 			if err != nil {
 				errMsg = err.Error()
+			} else if resp.Code != "" || resp.Error != "" {
+				errMsg = resp.Code + ": " + resp.Error
 			}
 			printJSON(map[string]any{
 				"ok":       false,
