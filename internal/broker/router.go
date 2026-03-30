@@ -96,8 +96,12 @@ func handleConnect(s *Session, req protocol.Request) protocol.Response {
 		return protocol.ErrResponse(protocol.ErrAlreadyConnected, "already connected")
 	}
 
-	s.name = req.Name
 	s.broker.mu.Lock()
+	if existing, ok := s.broker.sessions[req.Name]; ok && existing != s {
+		s.broker.mu.Unlock()
+		return protocol.ErrResponse(protocol.ErrAlreadyConnected, "session name already in use")
+	}
+	s.name = req.Name
 	s.broker.sessions[s.name] = s
 	s.broker.mu.Unlock()
 
