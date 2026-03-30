@@ -11,7 +11,8 @@ import (
 // Baseline results (M4 Darwin, 3 runs averaged):
 // BenchmarkStore_InsertRecord-10            	   19730	     61183 ns/op	    1071 B/op	      18 allocs/op
 // BenchmarkStore_Unread-10                  	    6626	    177574 ns/op	  154352 B/op	    3035 allocs/op
-// BenchmarkStore_MarkSurfacedBatch-10       	    9366	    121170 ns/op	    6791 B/op	      29 allocs/op
+// BenchmarkStore_MarkSurfacedBatch_Initial-10     	    8493	    139787 ns/op	    6803 B/op	      29 allocs/op
+// BenchmarkStore_MarkSurfacedBatch_Idempotent-10  	    8204	    135271 ns/op	    6793 B/op	      29 allocs/op
 // BenchmarkStore_ConcurrentInsert-10        	   17854	     68471 ns/op	    1225 B/op	      22 allocs/op
 // BenchmarkStore_AddRecordIfAbsent-10       	   36956	     34437 ns/op	    1064 B/op	      18 allocs/op
 // BenchmarkStore_MarkNotified-10            	   37662	     31145 ns/op	     376 B/op	      12 allocs/op
@@ -106,11 +107,13 @@ func BenchmarkStore_Unread(b *testing.B) {
 	}
 }
 
-// BenchmarkStore_MarkSurfacedBatch measures batch surfacing throughput.
-// Scenario: Bootstrap marking 50 records surfaced at once.
-// First call surfaces 50 records; subsequent calls measure COALESCE idempotency cost.
-// Both paths exercise the full query plan and are regression-detectable.
-func BenchmarkStore_MarkSurfacedBatch(b *testing.B) {
+// BenchmarkStore_MarkSurfacedBatch_Initial measures the cost of first-time batch surfacing.
+// Scenario: agent marking a batch of messages as surfaced for the first time (NULL → timestamp transition).
+// Pre-populates 50 unsurfaced records. Between iterations, resets surfaced_at to NULL via direct SQL
+// so each measured call exercises the NULL→non-NULL COALESCE path.
+// Setup:Measured ratio: ~0.1:1 (reset is ~60µs, measurement is ~570µs).
+// Regression signal: changes to the NULL-transition path, index performance on the UPDATE, transaction overhead.
+func BenchmarkStore_MarkSurfacedBatch_Initial(b *testing.B) {
 	tmpDir := b.TempDir()
 	path := filepath.Join(tmpDir, "runtime.db")
 
@@ -137,6 +140,75 @@ func BenchmarkStore_MarkSurfacedBatch(b *testing.B) {
 			ReceivedAt:    now,
 			NotifiedAt:    time.Time{},
 			SurfacedAt:    time.Time{},
+			DismissedAt:   time.Time{},
+			RetryAttempts: 0,
+		}
+		if err := store.AddRecord(rec); err != nil {
+			b.Fatal(err)
+		}
+		messageIDs = append(messageIDs, int64(i)+1)
+	}
+
+	resetQuery := fmt.Sprintf(`
+		UPDATE delivery_records
+		SET surfaced_at = NULL
+		WHERE project_id = ? AND agent_name = ? AND message_id IN (%s)
+	`, sqlPlaceholders(len(messageIDs)))
+	resetArgs := make([]any, 0, 2+len(messageIDs))
+	resetArgs = append(resetArgs, projectID, agentName)
+	for _, id := range messageIDs {
+		resetArgs = append(resetArgs, id)
+	}
+
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		if i > 0 {
+			b.StopTimer()
+			if _, err := store.db.Exec(resetQuery, resetArgs...); err != nil {
+				b.Fatal(err)
+			}
+			b.StartTimer()
+		}
+
+		if err := store.MarkSurfacedBatch(projectID, agentName, messageIDs); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkStore_MarkSurfacedBatch_Idempotent measures the steady-state cost of re-surfacing already-surfaced records.
+// Scenario: agent re-publishing an event for messages that were already surfaced (COALESCE idempotency path).
+// Pre-populates 50 records with surfaced_at already set. Every iteration hits the COALESCE no-op path.
+// Regression signal: changes to Go helper logic (uniquePositiveMessageIDs), FFI overhead, or SQL index availability.
+// To measure first-time surfacing cost, see BenchmarkStore_MarkSurfacedBatch_Initial.
+func BenchmarkStore_MarkSurfacedBatch_Idempotent(b *testing.B) {
+	tmpDir := b.TempDir()
+	path := filepath.Join(tmpDir, "runtime.db")
+
+	store, err := NewStore(path)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer store.Close()
+
+	projectID := "test-project"
+	agentName := "test-agent"
+
+	// Pre-populate with 50 surfaced records
+	now := time.Now().UTC()
+	messageIDs := make([]int64, 0, 50)
+	for i := 0; i < 50; i++ {
+		rec := DeliveryRecord{
+			ProjectID:     projectID,
+			AgentName:     agentName,
+			MessageID:     int64(i) + 1,
+			FromName:      "bootstrap",
+			Body:          "Test message",
+			SentAt:        now.Add(-1 * time.Hour),
+			ReceivedAt:    now,
+			NotifiedAt:    time.Time{},
+			SurfacedAt:    now,
 			DismissedAt:   time.Time{},
 			RetryAttempts: 0,
 		}
