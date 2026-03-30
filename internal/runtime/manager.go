@@ -297,11 +297,22 @@ func (m *Manager) runWatch(ctx context.Context, w Watch) {
 		// Catch up on messages queued in the broker during disconnect.
 		// handleDelivery deduplicates via AddRecordIfAbsent, so overlaps with
 		// push delivery are harmless.
-		if err := m.factory.CatchUp(w, func(d Delivery) error {
-			return m.handleDelivery(w, d)
-		}); err != nil {
-			// CatchUp failure is non-fatal — push stream still works.
-			m.captureDeliveryError(watchTransportErrorKey(w), fmt.Errorf("catch-up inbox for %s/%s: %w", w.ProjectID, w.AgentName, err))
+		for attempt := 1; attempt <= config.Defaults.CatchUpMaxRetries; attempt++ {
+			if err := m.factory.CatchUp(w, func(d Delivery) error {
+				return m.handleDelivery(w, d)
+			}); err != nil {
+				m.captureDeliveryError(watchTransportErrorKey(w),
+					fmt.Errorf("catch-up inbox for %s/%s (attempt %d/%d): %w",
+						w.ProjectID, w.AgentName, attempt, config.Defaults.CatchUpMaxRetries, err))
+				if attempt < config.Defaults.CatchUpMaxRetries {
+					if !sleepWithContext(ctx, config.Defaults.PollInterval) {
+						return
+					}
+				}
+				continue
+			}
+			m.clearDeliveryError(watchTransportErrorKey(w))
+			break
 		}
 
 		err = listener.Listen(ctx, func(d Delivery) error {

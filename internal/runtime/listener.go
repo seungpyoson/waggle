@@ -50,8 +50,15 @@ func (f *BrokerListenerFactory) CatchUp(w Watch, handler DeliveryHandler) error 
 	if err != nil {
 		return err
 	}
-	defer c.Close()
+	defer func() {
+		// Clean disconnect prevents task requeue and lock release.
+		if err := c.SetDeadline(config.Defaults.DisconnectTimeout); err == nil {
+			_, _ = c.Send(protocol.Request{Cmd: protocol.CmdDisconnect})
+		}
+		c.Close()
+	}()
 
+	// Set deadline for the entire catch-up operation (handshake + inbox + disconnect).
 	if err := c.SetDeadline(config.Defaults.ConnectTimeout); err != nil {
 		return fmt.Errorf("set deadline: %w", err)
 	}
@@ -61,9 +68,6 @@ func (f *BrokerListenerFactory) CatchUp(w Watch, handler DeliveryHandler) error 
 	}
 	if !resp.OK {
 		return fmt.Errorf("%s: %s", resp.Code, resp.Error)
-	}
-	if err := c.ClearDeadline(); err != nil {
-		return fmt.Errorf("clear deadline: %w", err)
 	}
 
 	resp, err = c.Send(protocol.Request{Cmd: protocol.CmdInbox})

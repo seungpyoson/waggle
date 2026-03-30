@@ -1007,6 +1007,44 @@ func TestManager_UsesRuntimeRetrySweepInterval(t *testing.T) {
 	})
 }
 
+func TestManager_RetriesCatchUpBeforeListening(t *testing.T) {
+	store := newTestStore(t)
+	watch := Watch{ProjectID: "proj-a", AgentName: "agent-1", Source: "hook"}
+	if err := store.UpsertWatch(watch); err != nil {
+		t.Fatal(err)
+	}
+
+	origPoll := config.Defaults.PollInterval
+	origRetries := config.Defaults.CatchUpMaxRetries
+	config.Defaults.PollInterval = 10 * time.Millisecond
+	config.Defaults.CatchUpMaxRetries = 3
+	defer func() {
+		config.Defaults.PollInterval = origPoll
+		config.Defaults.CatchUpMaxRetries = origRetries
+	}()
+
+	factory := newCatchUpRetryFactory([]error{
+		errors.New("first catch-up failed"),
+		errors.New("second catch-up failed"),
+		nil,
+	})
+	manager := NewManager(store, factory, &fakeNotifier{})
+
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Stop()
+
+	_ = factory.waitForListener(t, watch)
+	waitFor(t, "catch-up retries", func() bool {
+		return factory.catchUpCallCount() == 3
+	})
+
+	if err := manager.LastDeliveryError(); err != nil {
+		t.Fatalf("LastDeliveryError() = %v, want nil after catch-up retry success", err)
+	}
+}
+
 func TestManager_RetryPendingNotificationsContinuesPastFailedRecord(t *testing.T) {
 	store := newTestStore(t)
 	manager := NewManager(store, newFakeListenerFactory(), &fakeNotifier{
@@ -1707,6 +1745,38 @@ func waitForNewListener(t *testing.T, f *fakeListenerFactory, watch Watch, prior
 		return next != nil && next != prior
 	})
 	return next
+}
+
+type catchUpRetryFactory struct {
+	*fakeListenerFactory
+	mu         sync.Mutex
+	catchUpErr []error
+	catchUpCnt int
+}
+
+func newCatchUpRetryFactory(errs []error) *catchUpRetryFactory {
+	return &catchUpRetryFactory{
+		fakeListenerFactory: newFakeListenerFactory(),
+		catchUpErr:          append([]error(nil), errs...),
+	}
+}
+
+func (f *catchUpRetryFactory) CatchUp(_ Watch, _ DeliveryHandler) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.catchUpCnt++
+	if len(f.catchUpErr) == 0 {
+		return nil
+	}
+	err := f.catchUpErr[0]
+	f.catchUpErr = f.catchUpErr[1:]
+	return err
+}
+
+func (f *catchUpRetryFactory) catchUpCallCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.catchUpCnt
 }
 
 type fakeListener struct {

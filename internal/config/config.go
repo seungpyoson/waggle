@@ -88,6 +88,7 @@ var Defaults = struct {
 	StartupPollInterval                   time.Duration
 	StartupTimeout                        time.Duration
 	DisconnectTimeout                     time.Duration
+	CatchUpMaxRetries                     int
 	RuntimeNotificationRetryLimit         int
 	MaxRetries                            int
 	MaxPriority                           int
@@ -149,6 +150,7 @@ var Defaults = struct {
 	StartupPollInterval:                   100 * time.Millisecond,
 	StartupTimeout:                        2 * time.Second,
 	DisconnectTimeout:                     2 * time.Second,
+	CatchUpMaxRetries:                     3,
 	RuntimeNotificationRetryLimit:         5,
 	MaxRetries:                            3,
 	MaxPriority:                           100,

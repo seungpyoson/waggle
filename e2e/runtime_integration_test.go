@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -13,6 +14,16 @@ import (
 	"github.com/seungpyoson/waggle/internal/protocol"
 	rt "github.com/seungpyoson/waggle/internal/runtime"
 )
+
+type catchUpCounter struct {
+	rt.ListenerFactory
+	count int64
+}
+
+func (c *catchUpCounter) CatchUp(w rt.Watch, handler rt.DeliveryHandler) error {
+	atomic.AddInt64(&c.count, 1)
+	return c.ListenerFactory.CatchUp(w, handler)
+}
 
 func TestRuntimeEndToEndPushStoreAndPull(t *testing.T) {
 	home, err := os.MkdirTemp("/tmp", "wg-e2e-")
@@ -206,7 +217,8 @@ func TestRuntimeBrokerRestartReconnect(t *testing.T) {
 		_ = store.Close()
 	})
 
-	manager := rt.NewManager(store, rt.NewBrokerListenerFactory(), nil)
+	factory := &catchUpCounter{ListenerFactory: rt.NewBrokerListenerFactory()}
+	manager := rt.NewManager(store, factory, nil)
 	mgrCtx, mgrCancel := context.WithCancel(context.Background())
 	t.Cleanup(func() {
 		mgrCancel()
@@ -341,6 +353,9 @@ func TestRuntimeBrokerRestartReconnect(t *testing.T) {
 		rec, err := store.GetRecord("proj-reconnect", "agent-reconnect", 2)
 		return err == nil && !rec.NotifiedAt.IsZero() && rec.Body == "message after restart"
 	})
+	if n := atomic.LoadInt64(&factory.count); n == 0 {
+		t.Fatal("CatchUp was never called — message #2 may have arrived via push instead of catch-up")
+	}
 
 	// Step 12: Verify both messages are in store
 	rec1, err := store.GetRecord("proj-reconnect", "agent-reconnect", 1)
