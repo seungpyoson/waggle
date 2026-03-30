@@ -156,6 +156,10 @@ func CheckClaudeCode(homeDir string) ([]HealthIssue, AdapterState) {
 
 // CheckCodex checks the health of the Codex integration.
 // Same fingerprint × files matrix as CheckClaudeCode.
+//
+// The managed block in AGENTS.md is validated with the same topology rules
+// that upsertManagedBlock/removeManagedBlock enforce, so health never reports
+// "healthy" for a file that mutation would reject.
 func CheckCodex(homeDir string) ([]HealthIssue, AdapterState) {
 	var issues []HealthIssue
 	codexDir := filepath.Join(homeDir, ".codex")
@@ -191,6 +195,17 @@ func CheckCodex(homeDir string) ([]HealthIssue, AdapterState) {
 			Problem: "managed block truncated (begin marker without end marker)",
 			Repair:  repairCmd,
 		})
+	} else {
+		// Both markers present — validate topology matches mutation contract.
+		// Without this, health reports "healthy" for files with duplicate markers,
+		// reversed markers, etc., but install/uninstall would reject them.
+		if topErr := validateMarkerTopology(string(data), codexBlockBegin, codexBlockEnd); topErr != nil {
+			issues = append(issues, HealthIssue{
+				Asset:   agentsPath,
+				Problem: "managed block has invalid topology: " + topErr.Error(),
+				Repair:  repairCmd,
+			})
+		}
 	}
 
 	if !skillExists {

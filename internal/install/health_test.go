@@ -490,4 +490,176 @@ func TestCheckCodex_BrokenOrphanedInstall(t *testing.T) {
 		t.Errorf("did not find managed block issue in: %+v", issues)
 	}
 }
+// Topology-aware managed block validation tests for CheckCodex.
+// These verify that health matches the mutation contract: if validateMarkerTopology
+// would reject the file, health must report StateBroken (not StateHealthy).
+
+func TestCheckCodex_BrokenDuplicateBeginMarkers(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	// Install normally first to get skill files in place
+	if err := installCodex(tmpHome); err != nil {
+		t.Fatalf("install failed: %v", err)
+	}
+
+	// Corrupt AGENTS.md: duplicate begin markers
+	agentsPath := filepath.Join(tmpHome, ".codex", "AGENTS.md")
+	corrupted := codexBlockBegin + "\nsome content\n" + codexBlockEnd + "\n" + codexBlockBegin + "\nmore content\n" + codexBlockEnd + "\n"
+	if err := os.WriteFile(agentsPath, []byte(corrupted), 0644); err != nil {
+		t.Fatalf("write corrupted AGENTS.md: %v", err)
+	}
+
+	issues, state := CheckCodex(tmpHome)
+	if state != StateBroken {
+		t.Errorf("expected StateBroken for duplicate begin markers, got %q", state)
+	}
+	if len(issues) == 0 {
+		t.Fatal("expected issues for duplicate begin markers, got none")
+	}
+
+	foundTopology := false
+	for _, issue := range issues {
+		if issue.Asset == agentsPath && issue.Problem != "" {
+			if issue.Problem == "managed block has invalid topology: duplicate begin markers (2 found); refusing to mutate" {
+				foundTopology = true
+			}
+		}
+	}
+	if !foundTopology {
+		t.Errorf("did not find topology issue for duplicate begin markers in: %+v", issues)
+	}
+}
+
+func TestCheckCodex_BrokenReversedMarkers(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	// Install normally first to get skill files in place
+	if err := installCodex(tmpHome); err != nil {
+		t.Fatalf("install failed: %v", err)
+	}
+
+	// Corrupt AGENTS.md: end marker before begin marker
+	agentsPath := filepath.Join(tmpHome, ".codex", "AGENTS.md")
+	corrupted := codexBlockEnd + "\nsome content\n" + codexBlockBegin + "\n"
+	if err := os.WriteFile(agentsPath, []byte(corrupted), 0644); err != nil {
+		t.Fatalf("write corrupted AGENTS.md: %v", err)
+	}
+
+	issues, state := CheckCodex(tmpHome)
+	if state != StateBroken {
+		t.Errorf("expected StateBroken for reversed markers, got %q", state)
+	}
+	if len(issues) == 0 {
+		t.Fatal("expected issues for reversed markers, got none")
+	}
+
+	foundTopology := false
+	for _, issue := range issues {
+		if issue.Asset == agentsPath && issue.Problem != "" {
+			if issue.Problem == "managed block has invalid topology: end marker appears before begin marker; refusing to mutate" {
+				foundTopology = true
+			}
+		}
+	}
+	if !foundTopology {
+		t.Errorf("did not find topology issue for reversed markers in: %+v", issues)
+	}
+}
+
+func TestCheckCodex_BrokenOrphanedEndMarker(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	// Install normally first to get skill files in place
+	if err := installCodex(tmpHome); err != nil {
+		t.Fatalf("install failed: %v", err)
+	}
+
+	// Corrupt AGENTS.md: end marker without begin marker
+	// Note: hasBeginMarker will be false, but skill file exists → orphaned install path.
+	// We need begin marker present for the topology branch to fire.
+	// Actually, orphaned end marker without begin means hasBeginMarker=false,
+	// so it goes down the "managed block missing from AGENTS.md" path if skillExists.
+	// To test orphaned end WITH begin, we'd need duplicate end markers.
+	// Let's test duplicate end markers instead.
+	agentsPath := filepath.Join(tmpHome, ".codex", "AGENTS.md")
+	corrupted := codexBlockBegin + "\nsome content\n" + codexBlockEnd + "\nextra\n" + codexBlockEnd + "\n"
+	if err := os.WriteFile(agentsPath, []byte(corrupted), 0644); err != nil {
+		t.Fatalf("write corrupted AGENTS.md: %v", err)
+	}
+
+	issues, state := CheckCodex(tmpHome)
+	if state != StateBroken {
+		t.Errorf("expected StateBroken for duplicate end markers, got %q", state)
+	}
+	if len(issues) == 0 {
+		t.Fatal("expected issues for duplicate end markers, got none")
+	}
+
+	foundTopology := false
+	for _, issue := range issues {
+		if issue.Asset == agentsPath && issue.Problem != "" {
+			if issue.Problem == "managed block has invalid topology: duplicate end markers (2 found); refusing to mutate" {
+				foundTopology = true
+			}
+		}
+	}
+	if !foundTopology {
+		t.Errorf("did not find topology issue for duplicate end markers in: %+v", issues)
+	}
+}
+
+func TestCheckCodex_BrokenBeginMarkerNotAtLineStart(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	// Install normally first to get skill files in place
+	if err := installCodex(tmpHome); err != nil {
+		t.Fatalf("install failed: %v", err)
+	}
+
+	// Corrupt AGENTS.md: begin marker not at start of line
+	agentsPath := filepath.Join(tmpHome, ".codex", "AGENTS.md")
+	corrupted := "prefix " + codexBlockBegin + "\nsome content\n" + codexBlockEnd + "\n"
+	if err := os.WriteFile(agentsPath, []byte(corrupted), 0644); err != nil {
+		t.Fatalf("write corrupted AGENTS.md: %v", err)
+	}
+
+	issues, state := CheckCodex(tmpHome)
+	if state != StateBroken {
+		t.Errorf("expected StateBroken for begin marker not at line start, got %q", state)
+	}
+	if len(issues) == 0 {
+		t.Fatal("expected issues for begin marker not at line start, got none")
+	}
+
+	foundTopology := false
+	for _, issue := range issues {
+		if issue.Asset == agentsPath && issue.Problem != "" {
+			if issue.Problem == "managed block has invalid topology: begin marker not at start of line; refusing to mutate" {
+				foundTopology = true
+			}
+		}
+	}
+	if !foundTopology {
+		t.Errorf("did not find topology issue for begin marker not at line start in: %+v", issues)
+	}
+}
+
+func TestCheckCodex_HealthyValidTopology(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	// Install normally — this produces a valid managed block
+	if err := installCodex(tmpHome); err != nil {
+		t.Fatalf("install failed: %v", err)
+	}
+
+	// Verify health reports healthy (topology is valid, content matches)
+	issues, state := CheckCodex(tmpHome)
+	if state != StateHealthy {
+		t.Errorf("expected StateHealthy for valid topology, got %q", state)
+	}
+	if len(issues) != 0 {
+		t.Errorf("expected 0 issues for valid topology, got %d: %+v", len(issues), issues)
+	}
+}
+
 // Auggie health tests live in auggie_test.go (owned-file model).

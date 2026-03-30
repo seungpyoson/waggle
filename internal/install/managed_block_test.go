@@ -426,14 +426,24 @@ func TestTopologyRejectsGluedBeginEvenWithCR(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.md")
 
-	// \r before begin is a line break — should be accepted
+	// Bare \r is NOT a line break — begin marker after \r is glued and should be rejected.
+	// Only \n (and \r\n via its trailing \n) counts as a line boundary.
 	content := "header\r" + testBegin + "\nbody\n" + testEnd + "\n"
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		t.Fatal(err)
 	}
 
 	err := upsertManagedBlock(path, testBegin, testEnd, testBody)
-	if err != nil {
-		t.Fatalf("bare CR before begin should be accepted as line break: %v", err)
+	if err == nil {
+		t.Fatal("expected error for begin marker after bare \\r, got nil")
+	}
+	if !strings.Contains(err.Error(), "begin marker not at start of line") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// File must not be modified on rejection
+	after, _ := os.ReadFile(path)
+	if string(after) != content {
+		t.Fatalf("file changed despite error:\nwant: %q\ngot:  %q", content, string(after))
 	}
 }

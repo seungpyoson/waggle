@@ -6,9 +6,12 @@ import (
 	"strings"
 )
 
-// isLineBreakChar returns true for characters that indicate a line boundary (\n or \r).
+// isLineBreakChar returns true for characters that indicate a line boundary.
+// Only \n is accepted; bare \r (classic Mac OS 9) is not a supported line ending
+// because removeManagedBlock cannot round-trip it safely. CRLF (\r\n) still works
+// because the \n at the end is what triggers detection.
 func isLineBreakChar(c byte) bool {
-	return c == '\n' || c == '\r'
+	return c == '\n'
 }
 
 // validateMarkerTopology checks that a file's managed-block markers are in a
@@ -46,7 +49,7 @@ func validateMarkerTopology(content, begin, end string) error {
 	if endCount == 1 {
 		idx := strings.Index(content, end)
 		endAbs := idx + len(end)
-		if endAbs < len(content) && !isLineBreakChar(content[endAbs]) {
+		if endAbs < len(content) && !isLineBreakChar(content[endAbs]) && !strings.HasPrefix(content[endAbs:], "\r\n") {
 			return fmt.Errorf("end marker not at end of line; refusing to mutate")
 		}
 	}
