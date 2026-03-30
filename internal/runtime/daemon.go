@@ -15,12 +15,13 @@ import (
 )
 
 type State struct {
-	PID        int       `json:"pid,omitempty"`
-	Running    bool      `json:"running"`
-	StartedAt  time.Time `json:"started_at,omitempty"`
-	StoppedAt  time.Time `json:"stopped_at,omitempty"`
-	WatchCount int       `json:"watch_count,omitempty"`
-	LastError  string    `json:"last_error,omitempty"`
+	PID          int          `json:"pid,omitempty"`
+	Running      bool         `json:"running"`
+	StartedAt    time.Time    `json:"started_at,omitempty"`
+	StoppedAt    time.Time    `json:"stopped_at,omitempty"`
+	WatchCount   int          `json:"watch_count,omitempty"`
+	LastError    string       `json:"last_error,omitempty"`
+	RecentErrors []ErrorEntry `json:"recent_errors,omitempty"`
 }
 
 func LoadState(paths config.Paths) (State, error) {
@@ -260,11 +261,12 @@ func RunDaemon(ctx context.Context, paths config.Paths, manager *Manager) error 
 			lastErr = err.Error()
 		}
 		current = State{
-			PID:        os.Getpid(),
-			Running:    true,
-			StartedAt:  startedAt,
-			WatchCount: manager.WatchCount(),
-			LastError:  lastErr,
+			PID:          os.Getpid(),
+			Running:      true,
+			StartedAt:    startedAt,
+			WatchCount:   manager.WatchCount(),
+			LastError:    lastErr,
+			RecentErrors: manager.RecentErrors(),
 		}
 		if !sameState(lastSaved, current) {
 			if err := SaveState(paths, current); err != nil {
@@ -276,12 +278,13 @@ func RunDaemon(ctx context.Context, paths config.Paths, manager *Manager) error 
 		select {
 		case <-signalCtx.Done():
 			current = State{
-				PID:        os.Getpid(),
-				Running:    false,
-				StartedAt:  startedAt,
-				StoppedAt:  time.Now().UTC(),
-				WatchCount: manager.WatchCount(),
-				LastError:  lastErr,
+				PID:          os.Getpid(),
+				Running:      false,
+				StartedAt:    startedAt,
+				StoppedAt:    time.Now().UTC(),
+				WatchCount:   manager.WatchCount(),
+				LastError:    lastErr,
+				RecentErrors: manager.RecentErrors(),
 			}
 			if !sameState(lastSaved, current) {
 				if err := SaveState(paths, current); err != nil {
@@ -308,7 +311,20 @@ func sameState(a, b State) bool {
 		a.StartedAt.Equal(b.StartedAt) &&
 		a.StoppedAt.Equal(b.StoppedAt) &&
 		a.WatchCount == b.WatchCount &&
-		a.LastError == b.LastError
+		a.LastError == b.LastError &&
+		sameErrorEntries(a.RecentErrors, b.RecentErrors)
+}
+
+func sameErrorEntries(a, b []ErrorEntry) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if !a[i].Timestamp.Equal(b[i].Timestamp) || a[i].WatchKey != b[i].WatchKey || a[i].Error != b[i].Error {
+			return false
+		}
+	}
+	return true
 }
 
 func IsRunning(paths config.Paths) bool {
