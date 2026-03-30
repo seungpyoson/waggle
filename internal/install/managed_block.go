@@ -12,7 +12,7 @@ func upsertManagedBlock(path, begin, end, body string) error {
 		return fmt.Errorf("reading %s: %w", path, err)
 	}
 
-	block := strings.TrimSpace(strings.Join([]string{begin, strings.TrimSpace(body), end}, "\n")) + "\n"
+	block := canonicalManagedBlock(begin, end, body)
 	content := string(current)
 
 	if idx := strings.Index(content, begin); idx >= 0 {
@@ -22,15 +22,20 @@ func upsertManagedBlock(path, begin, end, body string) error {
 		}
 		endAbs := idx + endIdx + len(end)
 		replaced := content[:idx] + block + content[endAbs:]
-		return os.WriteFile(path, normalizeManagedBlockWhitespace(replaced), 0644)
+		return os.WriteFile(path, managedBlockBytes(replaced, content[endAbs:] == ""), 0644)
 	}
 
-	if strings.TrimSpace(content) == "" {
-		return os.WriteFile(path, []byte(block), 0644)
+	if content == "" {
+		return os.WriteFile(path, managedBlockBytes(block, true), 0644)
 	}
 
-	merged := strings.TrimRight(content, "\n") + "\n\n" + block
-	return os.WriteFile(path, normalizeManagedBlockWhitespace(merged), 0644)
+	separator := ""
+	if !strings.HasSuffix(content, "\n") {
+		separator = "\n"
+	}
+
+	merged := content + separator + block
+	return os.WriteFile(path, managedBlockBytes(merged, true), 0644)
 }
 
 func removeManagedBlock(path, begin, end string) error {
@@ -52,29 +57,25 @@ func removeManagedBlock(path, begin, end string) error {
 		return fmt.Errorf("managed block start found without end marker in %s", path)
 	}
 	endAbs := idx + endIdx + len(end)
-	updated := content[:idx] + content[endAbs:]
-	return os.WriteFile(path, normalizeManagedBlockWhitespace(updated), 0644)
+	after := content[endAbs:]
+	if strings.HasPrefix(after, "\n") {
+		after = after[1:]
+	}
+
+	updated := content[:idx] + after
+	return os.WriteFile(path, []byte(updated), 0644)
 }
 
-func normalizeManagedBlockWhitespace(s string) []byte {
-	lines := strings.Split(s, "\n")
-	out := make([]string, 0, len(lines))
-	blank := 0
-	for _, line := range lines {
-		if strings.TrimSpace(line) == "" {
-			blank++
-			if blank > 1 {
-				continue
-			}
-			out = append(out, "")
-			continue
-		}
-		blank = 0
-		out = append(out, line)
-	}
-	text := strings.TrimSpace(strings.Join(out, "\n"))
-	if text == "" {
+func canonicalManagedBlock(begin, end, body string) string {
+	return strings.TrimSpace(strings.Join([]string{begin, strings.TrimSpace(body), end}, "\n"))
+}
+
+func managedBlockBytes(content string, ensureTrailingNewline bool) []byte {
+	if content == "" {
 		return []byte{}
 	}
-	return []byte(text + "\n")
+	if ensureTrailingNewline && !strings.HasSuffix(content, "\n") {
+		return []byte(content + "\n")
+	}
+	return []byte(content)
 }

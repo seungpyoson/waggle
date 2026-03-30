@@ -76,7 +76,7 @@ func repairTruncatedAuggieBlock(path, blockBody string) error {
 		return nil
 	}
 
-	canonicalBlock := strings.TrimSpace(strings.Join([]string{auggieBlockBegin, strings.TrimSpace(blockBody), auggieBlockEnd}, "\n"))
+	canonicalBlock := canonicalManagedBlock(auggieBlockBegin, auggieBlockEnd, blockBody)
 	truncatedSuffix := content[idx:]
 	matchLen := longestMatchingPrefix(canonicalBlock, truncatedSuffix)
 	if matchLen < len(auggieBlockBegin) {
@@ -84,7 +84,7 @@ func repairTruncatedAuggieBlock(path, blockBody string) error {
 	}
 
 	repaired := content[:idx] + canonicalBlock + truncatedSuffix[matchLen:]
-	return os.WriteFile(path, normalizeManagedBlockWhitespace(repaired), 0644)
+	return os.WriteFile(path, managedBlockBytes(repaired, truncatedSuffix[matchLen:] == ""), 0644)
 }
 
 func longestMatchingPrefix(want, got string) int {
@@ -104,6 +104,14 @@ func longestMatchingPrefix(want, got string) int {
 
 func uninstallAuggie(homeDir string) error {
 	rulesPath := filepath.Join(homeDir, ".augment", "rules", "waggle.md")
+
+	blockData, err := auggieFiles.ReadFile("auggie/RULE-block.md")
+	if err != nil {
+		return fmt.Errorf("reading embedded Auggie rule block: %w", err)
+	}
+	if err := repairTruncatedAuggieBlock(rulesPath, string(blockData)); err != nil {
+		return fmt.Errorf("repairing truncated Auggie waggle rule: %w", err)
+	}
 
 	if err := removeManagedBlock(rulesPath, auggieBlockBegin, auggieBlockEnd); err != nil {
 		return fmt.Errorf("updating Auggie waggle rule: %w", err)

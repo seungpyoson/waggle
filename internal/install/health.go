@@ -225,17 +225,63 @@ func CheckAuggie(homeDir string) ([]HealthIssue, AdapterState) {
 	}
 
 	content := string(data)
-	hasBeginMarker := strings.Contains(content, auggieBlockBegin)
-	hasEndMarker := strings.Contains(content, auggieBlockEnd)
+	beginCount := strings.Count(content, auggieBlockBegin)
+	endCount := strings.Count(content, auggieBlockEnd)
 
-	if !hasBeginMarker {
+	if beginCount == 0 && endCount == 0 {
 		return nil, StateNotInstalled
 	}
 
-	if !hasEndMarker {
+	if beginCount == 0 {
+		return []HealthIssue{{
+			Asset:   rulesPath,
+			Problem: "managed block end marker found without begin marker",
+			Repair:  repairCmd,
+		}}, StateBroken
+	}
+
+	if endCount == 0 {
 		return []HealthIssue{{
 			Asset:   rulesPath,
 			Problem: "managed block truncated (begin marker without end marker)",
+			Repair:  repairCmd,
+		}}, StateBroken
+	}
+
+	if beginCount != 1 || endCount != 1 {
+		return []HealthIssue{{
+			Asset:   rulesPath,
+			Problem: "managed block markers are duplicated or malformed",
+			Repair:  repairCmd,
+		}}, StateBroken
+	}
+
+	idx := strings.Index(content, auggieBlockBegin)
+	endIdx := strings.Index(content[idx:], auggieBlockEnd)
+	if endIdx < 0 {
+		return []HealthIssue{{
+			Asset:   rulesPath,
+			Problem: "managed block truncated (begin marker without end marker)",
+			Repair:  repairCmd,
+		}}, StateBroken
+	}
+
+	blockData, err := auggieFiles.ReadFile("auggie/RULE-block.md")
+	if err != nil {
+		return []HealthIssue{{
+			Asset:   rulesPath,
+			Problem: "unable to read embedded Auggie rule block: " + err.Error(),
+			Repair:  repairCmd,
+		}}, StateBroken
+	}
+
+	canonicalBlock := canonicalManagedBlock(auggieBlockBegin, auggieBlockEnd, string(blockData))
+	endAbs := idx + endIdx + len(auggieBlockEnd)
+	installedBlock := strings.TrimSpace(content[idx:endAbs])
+	if installedBlock != canonicalBlock {
+		return []HealthIssue{{
+			Asset:   rulesPath,
+			Problem: "managed block content does not match canonical Auggie rule block",
 			Repair:  repairCmd,
 		}}, StateBroken
 	}

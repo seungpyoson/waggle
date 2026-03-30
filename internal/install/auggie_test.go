@@ -92,6 +92,33 @@ func TestInstallAuggie_PreservesExistingRules(t *testing.T) {
 	}
 }
 
+func TestInstallAuggie_PreservesRepeatedBlankLinesOutsideManagedBlock(t *testing.T) {
+	tmpHome := t.TempDir()
+	rulesDir := filepath.Join(tmpHome, ".augment", "rules")
+	if err := os.MkdirAll(rulesDir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	original := "# Leading\n\n\nAlpha\n\n\nOmega\n"
+	rulesPath := filepath.Join(rulesDir, "waggle.md")
+	if err := os.WriteFile(rulesPath, []byte(original), 0644); err != nil {
+		t.Fatalf("write waggle.md: %v", err)
+	}
+
+	if err := installAuggie(tmpHome); err != nil {
+		t.Fatalf("install failed: %v", err)
+	}
+
+	after, err := os.ReadFile(rulesPath)
+	if err != nil {
+		t.Fatalf("read waggle.md: %v", err)
+	}
+
+	if !strings.HasPrefix(string(after), original) {
+		t.Fatalf("install changed surrounding content unexpectedly:\nwant prefix:\n%s\ngot:\n%s", original, string(after))
+	}
+}
+
 func TestInstallAuggie_RepairTruncatedBlockPreservesTrailingRules(t *testing.T) {
 	tmpHome := t.TempDir()
 
@@ -121,7 +148,7 @@ func TestInstallAuggie_RepairTruncatedBlockPreservesTrailingRules(t *testing.T) 
 
 	canonicalBlock := canonicalAuggieManagedBlock(t)
 	brokenSuffix := broken[strings.Index(broken, auggieBlockBegin):]
-	want := string(normalizeManagedBlockWhitespace(canonicalBlock + brokenSuffix[longestMatchingPrefix(canonicalBlock, brokenSuffix):]))
+	want := string(managedBlockBytes(canonicalBlock+brokenSuffix[longestMatchingPrefix(canonicalBlock, brokenSuffix):], false))
 	if string(after) != want {
 		t.Fatalf("reinstall did not preserve trailing rules as expected:\nwant:\n%s\ngot:\n%s", want, string(after))
 	}
@@ -205,6 +232,65 @@ func TestUninstallAuggie_PreservesOtherRulesContent(t *testing.T) {
 	}
 	if string(data) != original {
 		t.Fatalf("waggle.md content changed unexpectedly:\nwant:\n%s\ngot:\n%s", original, string(data))
+	}
+}
+
+func TestUninstallAuggie_PreservesRepeatedBlankLinesOutsideManagedBlock(t *testing.T) {
+	tmpHome := t.TempDir()
+	rulesDir := filepath.Join(tmpHome, ".augment", "rules")
+	if err := os.MkdirAll(rulesDir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	prefix := "# Leading\n\n\nAlpha\n\n\n"
+	suffix := "# Trailing\n\n\nOmega\n"
+	rulesPath := filepath.Join(rulesDir, "waggle.md")
+	content := prefix + canonicalAuggieManagedBlock(t) + "\n" + suffix
+	if err := os.WriteFile(rulesPath, []byte(content), 0644); err != nil {
+		t.Fatalf("write waggle.md: %v", err)
+	}
+
+	if err := uninstallAuggie(tmpHome); err != nil {
+		t.Fatalf("uninstall failed: %v", err)
+	}
+
+	after, err := os.ReadFile(rulesPath)
+	if err != nil {
+		t.Fatalf("read waggle.md: %v", err)
+	}
+
+	want := prefix + suffix
+	if string(after) != want {
+		t.Fatalf("uninstall changed surrounding content unexpectedly:\nwant:\n%s\ngot:\n%s", want, string(after))
+	}
+}
+
+func TestUninstallAuggie_RepairsTruncatedBlockFirst(t *testing.T) {
+	tmpHome := t.TempDir()
+	rulesDir := filepath.Join(tmpHome, ".augment", "rules")
+	if err := os.MkdirAll(rulesDir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	rulesPath := filepath.Join(rulesDir, "waggle.md")
+	broken := auggieBlockBegin + "\n## Waggle Runtime\n\n# Personal Rules\n- keep this\n"
+	if err := os.WriteFile(rulesPath, []byte(broken), 0644); err != nil {
+		t.Fatalf("write waggle.md: %v", err)
+	}
+
+	if err := uninstallAuggie(tmpHome); err != nil {
+		t.Fatalf("uninstall failed: %v", err)
+	}
+
+	after, err := os.ReadFile(rulesPath)
+	if err != nil {
+		t.Fatalf("read waggle.md: %v", err)
+	}
+	if strings.Contains(string(after), auggieBlockBegin) || strings.Contains(string(after), auggieBlockEnd) {
+		t.Fatalf("managed block markers still present after uninstall repair:\n%s", string(after))
+	}
+	if !strings.Contains(string(after), "# Personal Rules\n- keep this") {
+		t.Fatalf("trailing personal rules missing after uninstall repair:\n%s", string(after))
 	}
 }
 
