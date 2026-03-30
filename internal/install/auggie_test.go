@@ -276,7 +276,7 @@ func TestCheckAuggie_BrokenReadError(t *testing.T) {
 // Symlink protection tests
 // ---------------------------------------------------------------------------
 
-func TestInstallAuggie_RejectsSymlink(t *testing.T) {
+func TestInstallAuggie_ReplacesLeafSymlink(t *testing.T) {
 	tmpHome := t.TempDir()
 	rulesDir := filepath.Join(tmpHome, ".augment", "rules")
 	if err := os.MkdirAll(rulesDir, 0755); err != nil {
@@ -293,18 +293,30 @@ func TestInstallAuggie_RejectsSymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Atomic write replaces the symlink directory entry, doesn't follow it
 	err := installAuggie(tmpHome)
-	if err == nil {
-		t.Fatal("expected error for symlinked waggle.md, got nil")
-	}
-	if !strings.Contains(err.Error(), "not a regular file") {
-		t.Fatalf("unexpected error: %v", err)
+	if err != nil {
+		t.Fatalf("install should succeed (atomic write replaces symlink): %v", err)
 	}
 
 	// Target must be unchanged
 	data, _ := os.ReadFile(target)
 	if string(data) != "target content" {
-		t.Fatalf("target file was modified: %q", string(data))
+		t.Fatalf("target file was modified through symlink: %q", string(data))
+	}
+
+	// waggle.md should now be a regular file with canonical content
+	info, err := os.Lstat(rulesPath)
+	if err != nil {
+		t.Fatalf("lstat waggle.md: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		t.Fatal("waggle.md is still a symlink after install")
+	}
+	waggleData, _ := os.ReadFile(rulesPath)
+	canonical := canonicalAuggieFileForTest(t)
+	if string(waggleData) != canonical {
+		t.Fatalf("waggle.md content wrong after replacing symlink")
 	}
 }
 
@@ -364,6 +376,113 @@ func TestCheckAuggie_BrokenSymlink(t *testing.T) {
 	}
 	if len(issues) == 0 || !strings.Contains(issues[0].Problem, "not a regular file") {
 		t.Errorf("expected symlink issue, got: %v", issues)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Atomic write / hard-link tests
+// ---------------------------------------------------------------------------
+
+func TestInstallAuggie_AtomicWriteDetachesHardLink(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	// Install normally first
+	if err := installAuggie(tmpHome); err != nil {
+		t.Fatalf("install failed: %v", err)
+	}
+
+	rulesPath := filepath.Join(tmpHome, ".augment", "rules", "waggle.md")
+
+	// Create a hard link to waggle.md
+	hardLink := filepath.Join(tmpHome, "hardlink.md")
+	if err := os.Link(rulesPath, hardLink); err != nil {
+		t.Fatalf("creating hard link: %v", err)
+	}
+
+	// Read current content via hard link
+	origData, _ := os.ReadFile(hardLink)
+
+	// Reinstall — atomic write should create new inode
+	if err := installAuggie(tmpHome); err != nil {
+		t.Fatalf("reinstall failed: %v", err)
+	}
+
+	// Hard link should still have the OLD content (its inode was detached)
+	afterData, _ := os.ReadFile(hardLink)
+	if string(afterData) != string(origData) {
+		t.Fatalf("hard link content changed — atomic write did not detach inode")
+	}
+
+	// waggle.md should have canonical content (new inode)
+	waggleData, _ := os.ReadFile(rulesPath)
+	canonical := canonicalAuggieFileForTest(t)
+	if string(waggleData) != canonical {
+		t.Fatalf("waggle.md content wrong after reinstall")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Ancestor symlink tests
+// ---------------------------------------------------------------------------
+
+func TestInstallAuggie_RejectsAncestorSymlink(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	// Create a real target directory
+	targetDir := filepath.Join(tmpHome, "attacker-dir")
+	if err := os.MkdirAll(targetDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create ~/.augment as a symlink to the attacker directory
+	augmentDir := filepath.Join(tmpHome, ".augment")
+	if err := os.Symlink(targetDir, augmentDir); err != nil {
+		t.Fatal(err)
+	}
+
+	err := installAuggie(tmpHome)
+	if err == nil {
+		t.Fatal("expected error for ancestor symlink, got nil")
+	}
+	if !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected symlink error, got: %v", err)
+	}
+
+	// Target directory must NOT have rules/ or waggle.md
+	if _, err := os.Stat(filepath.Join(targetDir, "rules", "waggle.md")); err == nil {
+		t.Fatal("file was written through ancestor symlink")
+	}
+}
+
+func TestCheckAuggie_BrokenAncestorSymlink(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	// Create the real rules dir with canonical content
+	realRulesDir := filepath.Join(tmpHome, "real-rules")
+	if err := os.MkdirAll(realRulesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	canonical := canonicalAuggieFileForTest(t)
+	if err := os.WriteFile(filepath.Join(realRulesDir, "waggle.md"), []byte(canonical), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create ~/.augment/rules as a symlink to the real dir
+	augmentDir := filepath.Join(tmpHome, ".augment")
+	if err := os.MkdirAll(augmentDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realRulesDir, filepath.Join(augmentDir, "rules")); err != nil {
+		t.Fatal(err)
+	}
+
+	// Even though content matches, ancestor symlink should be broken
+	issues, state := CheckAuggie(tmpHome)
+	if state != StateBroken {
+		t.Errorf("expected StateBroken for ancestor symlink, got %q", state)
+	}
+	if len(issues) == 0 {
+		t.Error("expected issues for ancestor symlink")
 	}
 }
 

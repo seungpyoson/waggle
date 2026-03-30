@@ -382,6 +382,23 @@ func TestUpsertAcceptsCRLFLineEndings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CRLF file should be accepted: %v", err)
 	}
+
+	after, _ := os.ReadFile(path)
+	result := string(after)
+	// Must contain both markers and the new body
+	if !strings.Contains(result, testBegin) || !strings.Contains(result, testEnd) {
+		t.Fatalf("markers missing after CRLF upsert: %q", result)
+	}
+	if !strings.Contains(result, testBody) {
+		t.Fatalf("body missing after CRLF upsert: %q", result)
+	}
+	// Header and footer with CRLF should be preserved
+	if !strings.HasPrefix(result, "header\r\n") {
+		t.Fatalf("header not preserved: %q", result)
+	}
+	if !strings.HasSuffix(result, "footer\r\n") {
+		t.Fatalf("footer not preserved: %q", result)
+	}
 }
 
 func TestRemoveAcceptsCRLFLineEndings(t *testing.T) {
@@ -396,6 +413,12 @@ func TestRemoveAcceptsCRLFLineEndings(t *testing.T) {
 	err := removeManagedBlock(path, testBegin, testEnd)
 	if err != nil {
 		t.Fatalf("CRLF file should be accepted: %v", err)
+	}
+
+	after, _ := os.ReadFile(path)
+	want := "header\r\nfooter\r\n"
+	if string(after) != want {
+		t.Fatalf("CRLF remove produced wrong output:\nwant: %q\ngot:  %q", want, string(after))
 	}
 }
 

@@ -134,7 +134,9 @@ func removeManagedBlock(path, begin, end string) error {
 	}
 	endAbs := idx + endIdx + len(end)
 	after := content[endAbs:]
-	if strings.HasPrefix(after, "\n") {
+	if strings.HasPrefix(after, "\r\n") {
+		after = after[2:]
+	} else if strings.HasPrefix(after, "\n") {
 		after = after[1:]
 	}
 

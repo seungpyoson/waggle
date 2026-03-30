@@ -3,7 +3,6 @@ package install
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 )
@@ -260,16 +259,93 @@ func TestAdversarial_OwnedFile_SymlinkProtection(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Install must refuse
-	if err := installAuggie(tmpHome); err == nil {
-		t.Fatal("install should reject symlink")
-	} else if !strings.Contains(err.Error(), "not a regular file") {
-		t.Fatalf("unexpected error: %v", err)
+	// Atomic write replaces the symlink directory entry without following it
+	if err := installAuggie(tmpHome); err != nil {
+		t.Fatalf("install should succeed (atomic write replaces symlink): %v", err)
 	}
 
 	// Target must be untouched
 	data, _ := os.ReadFile(target)
 	if string(data) != original {
 		t.Fatalf("symlink attack succeeded — target modified to: %q", string(data))
+	}
+
+	// waggle.md must now be a regular file
+	info, err := os.Lstat(rulesPath)
+	if err != nil {
+		t.Fatalf("lstat waggle.md: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		t.Fatal("waggle.md is still a symlink after install")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// HardLinkProtection — hard-linked waggle.md must not mutate innocent file
+// ---------------------------------------------------------------------------
+func TestAdversarial_OwnedFile_HardLinkProtection(t *testing.T) {
+	tmpHome := t.TempDir()
+	rulesDir := filepath.Join(tmpHome, ".augment", "rules")
+	if err := os.MkdirAll(rulesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create innocent file and hard-link waggle.md to it
+	innocent := filepath.Join(tmpHome, "innocent.md")
+	original := "innocent content"
+	if err := os.WriteFile(innocent, []byte(original), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	rulesPath := filepath.Join(rulesDir, "waggle.md")
+	if err := os.Link(innocent, rulesPath); err != nil {
+		t.Fatal(err)
+	}
+
+	// Install must succeed (atomic write detaches the link)
+	if err := installAuggie(tmpHome); err != nil {
+		t.Fatalf("install should succeed with atomic write: %v", err)
+	}
+
+	// Innocent file must be UNTOUCHED
+	data, _ := os.ReadFile(innocent)
+	if string(data) != original {
+		t.Fatalf("hard link attack succeeded — innocent file modified to: %q", string(data))
+	}
+
+	// waggle.md should have canonical content
+	waggleData, _ := os.ReadFile(rulesPath)
+	canonical := canonicalAuggieFileForTest(t)
+	if string(waggleData) != canonical {
+		t.Fatalf("waggle.md content wrong")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AncestorSymlinkProtection — symlinked ~/.augment must not create files
+// ---------------------------------------------------------------------------
+func TestAdversarial_OwnedFile_AncestorSymlinkProtection(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	// Create attacker directory
+	attackerDir := filepath.Join(tmpHome, "attacker")
+	if err := os.MkdirAll(attackerDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Symlink ~/.augment to attacker dir
+	if err := os.Symlink(attackerDir, filepath.Join(tmpHome, ".augment")); err != nil {
+		t.Fatal(err)
+	}
+
+	// Install must refuse
+	if err := installAuggie(tmpHome); err == nil {
+		t.Fatal("install should reject ancestor symlink")
+	}
+
+	// Attacker dir must have no waggle files
+	entries, _ := os.ReadDir(attackerDir)
+	if len(entries) > 0 {
+		t.Fatalf("ancestor symlink attack succeeded — files created in attacker dir: %v", entries)
 	}
 }
