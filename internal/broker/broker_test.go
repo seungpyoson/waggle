@@ -1290,41 +1290,46 @@ func TestBroker_SendToSelf(t *testing.T) {
 	}
 }
 
-// TestBroker_SessionNameCollision — connect same name twice, disconnect first, verify second still works for push
+// TestBroker_SessionNameCollision — second connect with same name is rejected (session hijack prevention)
 func TestBroker_SessionNameCollision(t *testing.T) {
 	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	// Alice connects on first connection
 	c1 := connectClient(t, sockPath)
-	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	defer c1.Close()
+	resp1, _ := c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	if !resp1.OK {
+		t.Fatalf("first connect failed: %s", resp1.Error)
+	}
 
-	// Alice connects on second connection (overwrites first in sessions map)
+	// Second connection tries same name — must be rejected
 	c2 := connectClient(t, sockPath)
 	defer c2.Close()
-	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	resp2, _ := c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	if resp2.OK {
+		t.Fatal("expected second connect to fail, but got OK")
+	}
+	if resp2.Code != protocol.ErrAlreadyConnected {
+		t.Fatalf("expected code %s, got %s", protocol.ErrAlreadyConnected, resp2.Code)
+	}
 
-	// First connection disconnects
-	c1.Close()
-	time.Sleep(50 * time.Millisecond)
-
-	// Bob sends to alice — should reach the second connection
+	// Original alice still works — bob can send to her and she receives push
 	c3 := connectClient(t, sockPath)
 	defer c3.Close()
 	c3.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
-	resp, _ := c3.Send(protocol.Request{
+	sendResp, _ := c3.Send(protocol.Request{
 		Cmd:     protocol.CmdSend,
 		Name:    "alice",
 		Message: "test collision",
 	})
-	if !resp.OK {
-		t.Fatalf("send failed: %s", resp.Error)
+	if !sendResp.OK {
+		t.Fatalf("send failed: %s", sendResp.Error)
 	}
 
-	// Alice (second connection) should receive the push
-	pushResp, err := c2.Receive()
+	pushResp, err := c1.Receive()
 	if err != nil {
-		t.Fatalf("alice (second connection) failed to receive push: %v", err)
+		t.Fatalf("alice (first connection) failed to receive push: %v", err)
 	}
 	if !pushResp.OK {
 		t.Fatalf("push response not OK: %s", pushResp.Error)
@@ -1334,6 +1339,57 @@ func TestBroker_SessionNameCollision(t *testing.T) {
 	json.Unmarshal(pushResp.Data, &pushData)
 	if pushData["body"] != "test collision" {
 		t.Errorf("push body = %q, want 'test collision'", pushData["body"])
+	}
+}
+
+// TestBroker_DuplicateNameRejected — dedicated test for session hijack prevention
+func TestBroker_DuplicateNameRejected(t *testing.T) {
+	sockPath, _, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	// Client A connects as "agent-dup"
+	cA := connectClient(t, sockPath)
+	defer cA.Close()
+	respA, _ := cA.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "agent-dup"})
+	if !respA.OK {
+		t.Fatalf("client A connect failed: %s", respA.Error)
+	}
+
+	// Client B tries to connect as "agent-dup" — must be rejected
+	cB := connectClient(t, sockPath)
+	defer cB.Close()
+	respB, _ := cB.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "agent-dup"})
+	if respB.OK {
+		t.Fatal("expected client B connect to fail, but got OK")
+	}
+	if respB.Code != protocol.ErrAlreadyConnected {
+		t.Fatalf("expected code %s, got %s", protocol.ErrAlreadyConnected, respB.Code)
+	}
+
+	// Client A is still functional — verify by sending a message to it
+	cC := connectClient(t, sockPath)
+	defer cC.Close()
+	cC.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "verifier"})
+	sendResp, _ := cC.Send(protocol.Request{
+		Cmd:     protocol.CmdSend,
+		Name:    "agent-dup",
+		Message: "still alive",
+	})
+	if !sendResp.OK {
+		t.Fatalf("send to agent-dup failed: %s", sendResp.Error)
+	}
+
+	pushResp, err := cA.Receive()
+	if err != nil {
+		t.Fatalf("client A failed to receive push: %v", err)
+	}
+	if !pushResp.OK {
+		t.Fatalf("push response not OK: %s", pushResp.Error)
+	}
+	var pushData map[string]interface{}
+	json.Unmarshal(pushResp.Data, &pushData)
+	if pushData["body"] != "still alive" {
+		t.Errorf("push body = %q, want 'still alive'", pushData["body"])
 	}
 }
 

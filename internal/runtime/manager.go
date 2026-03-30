@@ -255,6 +255,7 @@ func (m *Manager) stopWatch(key watchKey) {
 	<-worker.stopped
 	m.clearDeliveryStateForWatch(key)
 	m.clearDeliveryError(watchListenerErrorKey(worker.watch))
+	m.clearDeliveryError(watchCatchUpErrorKey(worker.watch))
 	m.clearDeliveryError(watchDeliveryErrorKey(worker.watch.ProjectID, worker.watch.AgentName))
 	_ = m.refreshWatchDeliveryState(worker.watch.ProjectID, worker.watch.AgentName)
 }
@@ -301,7 +302,7 @@ func (m *Manager) runWatch(ctx context.Context, w Watch) {
 			if err := m.factory.CatchUp(w, func(d Delivery) error {
 				return m.handleDelivery(w, d)
 			}); err != nil {
-				m.captureDeliveryError(watchListenerErrorKey(w),
+				m.captureDeliveryError(watchCatchUpErrorKey(w),
 					fmt.Errorf("catch-up inbox for %s/%s (attempt %d/%d): %w",
 						w.ProjectID, w.AgentName, attempt, config.Defaults.CatchUpMaxRetries, err))
 				if attempt < config.Defaults.CatchUpMaxRetries {
@@ -311,10 +312,9 @@ func (m *Manager) runWatch(ctx context.Context, w Watch) {
 				}
 				continue
 			}
-			m.clearDeliveryError(watchListenerErrorKey(w))
+			m.clearDeliveryError(watchCatchUpErrorKey(w))
 			break
 		}
-		m.clearDeliveryError(watchListenerErrorKey(w))
 
 		err = listener.Listen(ctx, func(d Delivery) error {
 			return m.handleDelivery(w, d)
@@ -500,6 +500,10 @@ func (m *Manager) clearDeliveryError(key string) {
 
 func watchListenerErrorKey(w Watch) string {
 	return fmt.Sprintf("watch-listener/%s/%s", w.ProjectID, w.AgentName)
+}
+
+func watchCatchUpErrorKey(w Watch) string {
+	return fmt.Sprintf("watch-catchup/%s/%s", w.ProjectID, w.AgentName)
 }
 
 func watchDeliveryErrorKey(projectID, agentName string) string {
