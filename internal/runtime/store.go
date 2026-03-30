@@ -757,6 +757,9 @@ func (s *Store) DismissAllSurfaced(projectID, agentName string) (int64, error) {
 	return rowsAffected, nil
 }
 
+// uniquePositiveMessageIDs normalizes batch lifecycle selectors.
+// Callers compare lengths and reject any duplicate or non-positive input as an
+// invariant violation so malformed batches fail loud instead of partially mutating state.
 func uniquePositiveMessageIDs(messageIDs []int64) []int64 {
 	seen := make(map[int64]struct{}, len(messageIDs))
 	out := make([]int64, 0, len(messageIDs))

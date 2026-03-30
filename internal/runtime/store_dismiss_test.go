@@ -176,6 +176,50 @@ func TestMarkDismissedBatch_Atomic(t *testing.T) {
 	}
 }
 
+func TestBatchLifecycleMethodsRejectInvalidMessageIDs(t *testing.T) {
+	store := newTestStore(t)
+
+	tests := []struct {
+		name string
+		ids  []int64
+		call func([]int64) error
+	}{
+		{
+			name: "surfaced batch rejects duplicate ids",
+			ids:  []int64{41, 41},
+			call: func(ids []int64) error {
+				return store.MarkSurfacedBatch("proj-a", "agent-1", ids)
+			},
+		},
+		{
+			name: "surfaced and dismissed batch rejects non-positive ids",
+			ids:  []int64{41, 0},
+			call: func(ids []int64) error {
+				return store.MarkSurfacedAndDismissBatch("proj-a", "agent-1", ids)
+			},
+		},
+		{
+			name: "dismissed batch rejects duplicate ids",
+			ids:  []int64{41, 41},
+			call: func(ids []int64) error {
+				return store.MarkDismissedBatch("proj-a", "agent-1", ids)
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.call(tc.ids)
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if err.Error() != "message_ids must be unique and positive" {
+				t.Fatalf("err = %v, want message_ids must be unique and positive", err)
+			}
+		})
+	}
+}
+
 func TestMarkSurfacedAndDismissBatch_ConsumesUnreadAtomically(t *testing.T) {
 	store := newTestStore(t)
 
