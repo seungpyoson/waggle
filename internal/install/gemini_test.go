@@ -214,8 +214,9 @@ func TestCheckGemini_BrokenOrphanedEnd(t *testing.T) {
 	}
 
 	// End marker without begin marker
+	geminiFilePath := filepath.Join(geminiDir, "GEMINI.md")
 	content := "# Config\n" + geminiBlockEnd + "\n"
-	if err := os.WriteFile(filepath.Join(geminiDir, "GEMINI.md"), []byte(content), 0644); err != nil {
+	if err := os.WriteFile(geminiFilePath, []byte(content), 0644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 
@@ -223,8 +224,15 @@ func TestCheckGemini_BrokenOrphanedEnd(t *testing.T) {
 	if state != StateBroken {
 		t.Fatalf("expected StateBroken for orphaned end marker, got %v", state)
 	}
-	if len(issues) == 0 || !strings.Contains(issues[0].Problem, "invalid topology") {
-		t.Fatalf("expected topology issue, got: %v", issues)
+	if len(issues) == 0 {
+		t.Fatal("expected issues for orphaned end marker, got none")
+	}
+	expected := "managed block has invalid topology: orphaned end marker without begin marker; refusing to mutate"
+	if issues[0].Problem != expected {
+		t.Fatalf("expected %q, got %q", expected, issues[0].Problem)
+	}
+	if issues[0].Repair != "waggle install gemini" {
+		t.Fatalf("expected repair 'waggle install gemini', got %q", issues[0].Repair)
 	}
 }
 
@@ -235,17 +243,48 @@ func TestCheckGemini_BrokenDuplicateBegin(t *testing.T) {
 		t.Fatalf("mkdir: %v", err)
 	}
 
+	geminiFilePath := filepath.Join(geminiDir, "GEMINI.md")
 	content := geminiBlockBegin + "\nfirst\n" + geminiBlockEnd + "\n" + geminiBlockBegin + "\nsecond\n" + geminiBlockEnd + "\n"
-	if err := os.WriteFile(filepath.Join(geminiDir, "GEMINI.md"), []byte(content), 0644); err != nil {
+	if err := os.WriteFile(geminiFilePath, []byte(content), 0644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 
 	issues, state := CheckGemini(tmpHome)
 	if state != StateBroken {
-		t.Fatalf("expected StateBroken for duplicate markers, got %v", state)
+		t.Fatalf("expected StateBroken for duplicate begin markers, got %v", state)
 	}
-	if len(issues) == 0 || !strings.Contains(issues[0].Problem, "invalid topology") {
-		t.Fatalf("expected topology issue, got: %v", issues)
+	if len(issues) == 0 {
+		t.Fatal("expected issues for duplicate begin markers, got none")
+	}
+	expected := "managed block has invalid topology: duplicate begin markers (2 found); refusing to mutate"
+	if issues[0].Problem != expected {
+		t.Fatalf("expected %q, got %q", expected, issues[0].Problem)
+	}
+}
+
+func TestCheckGemini_BrokenDuplicateEnd(t *testing.T) {
+	tmpHome := t.TempDir()
+	geminiDir := filepath.Join(tmpHome, ".gemini")
+	if err := os.MkdirAll(geminiDir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	geminiFilePath := filepath.Join(geminiDir, "GEMINI.md")
+	content := geminiBlockBegin + "\nsome content\n" + geminiBlockEnd + "\nextra\n" + geminiBlockEnd + "\n"
+	if err := os.WriteFile(geminiFilePath, []byte(content), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	issues, state := CheckGemini(tmpHome)
+	if state != StateBroken {
+		t.Fatalf("expected StateBroken for duplicate end markers, got %v", state)
+	}
+	if len(issues) == 0 {
+		t.Fatal("expected issues for duplicate end markers, got none")
+	}
+	expected := "managed block has invalid topology: duplicate end markers (2 found); refusing to mutate"
+	if issues[0].Problem != expected {
+		t.Fatalf("expected %q, got %q", expected, issues[0].Problem)
 	}
 }
 
@@ -256,9 +295,9 @@ func TestCheckGemini_BrokenReversedMarkers(t *testing.T) {
 		t.Fatalf("mkdir: %v", err)
 	}
 
-	// End before begin
+	geminiFilePath := filepath.Join(geminiDir, "GEMINI.md")
 	content := geminiBlockEnd + "\ncontent\n" + geminiBlockBegin + "\n"
-	if err := os.WriteFile(filepath.Join(geminiDir, "GEMINI.md"), []byte(content), 0644); err != nil {
+	if err := os.WriteFile(geminiFilePath, []byte(content), 0644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 
@@ -266,8 +305,63 @@ func TestCheckGemini_BrokenReversedMarkers(t *testing.T) {
 	if state != StateBroken {
 		t.Fatalf("expected StateBroken for reversed markers, got %v", state)
 	}
-	if len(issues) == 0 || !strings.Contains(issues[0].Problem, "invalid topology") {
-		t.Fatalf("expected topology issue, got: %v", issues)
+	if len(issues) == 0 {
+		t.Fatal("expected issues for reversed markers, got none")
+	}
+	expected := "managed block has invalid topology: end marker appears before begin marker; refusing to mutate"
+	if issues[0].Problem != expected {
+		t.Fatalf("expected %q, got %q", expected, issues[0].Problem)
+	}
+}
+
+func TestCheckGemini_BrokenBeginNotAtLineStart(t *testing.T) {
+	tmpHome := t.TempDir()
+	geminiDir := filepath.Join(tmpHome, ".gemini")
+	if err := os.MkdirAll(geminiDir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	geminiFilePath := filepath.Join(geminiDir, "GEMINI.md")
+	content := "prefix " + geminiBlockBegin + "\nsome content\n" + geminiBlockEnd + "\n"
+	if err := os.WriteFile(geminiFilePath, []byte(content), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	issues, state := CheckGemini(tmpHome)
+	if state != StateBroken {
+		t.Fatalf("expected StateBroken for begin marker not at line start, got %v", state)
+	}
+	if len(issues) == 0 {
+		t.Fatal("expected issues for begin marker not at line start, got none")
+	}
+	expected := "managed block has invalid topology: begin marker not at start of line; refusing to mutate"
+	if issues[0].Problem != expected {
+		t.Fatalf("expected %q, got %q", expected, issues[0].Problem)
+	}
+}
+
+func TestCheckGemini_BrokenReadError(t *testing.T) {
+	tmpHome := t.TempDir()
+	geminiDir := filepath.Join(tmpHome, ".gemini")
+	if err := os.MkdirAll(geminiDir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	// Create GEMINI.md as a directory — ReadFile will fail
+	geminiFilePath := filepath.Join(geminiDir, "GEMINI.md")
+	if err := os.MkdirAll(geminiFilePath, 0755); err != nil {
+		t.Fatalf("mkdir GEMINI.md: %v", err)
+	}
+
+	issues, state := CheckGemini(tmpHome)
+	if state != StateBroken {
+		t.Fatalf("expected StateBroken for read error, got %v", state)
+	}
+	if len(issues) == 0 {
+		t.Fatal("expected issues for read error, got none")
+	}
+	if !strings.Contains(issues[0].Problem, "failed to read GEMINI.md") {
+		t.Fatalf("expected read error message, got: %s", issues[0].Problem)
 	}
 }
 
