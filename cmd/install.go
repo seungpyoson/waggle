@@ -63,8 +63,22 @@ var installCmd = &cobra.Command{
 				}
 				printJSON(map[string]any{"ok": true, "message": "Gemini integration installed. Restart Gemini to activate."})
 			}
+		case "auggie":
+			if installUninstall {
+				if err := install.UninstallAuggie(); err != nil {
+					printErr("INSTALL_ERROR", err.Error())
+					return nil
+				}
+				printJSON(map[string]any{"ok": true, "message": "Auggie integration removed"})
+			} else {
+				if err := install.InstallAuggie(); err != nil {
+					printErr("INSTALL_ERROR", err.Error())
+					return nil
+				}
+				printJSON(map[string]any{"ok": true, "message": "Auggie integration installed. Restart Auggie to activate."})
+			}
 		default:
-			printErr("INVALID_REQUEST", fmt.Sprintf("unknown platform: %s (supported: claude-code, codex, gemini)", platform))
+			printErr("INVALID_REQUEST", fmt.Sprintf("unknown platform: %s (supported: claude-code, codex, gemini, auggie)", platform))
 		}
 		return nil
 	},

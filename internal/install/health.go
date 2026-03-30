@@ -1,6 +1,7 @@
 package install
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -155,6 +156,10 @@ func CheckClaudeCode(homeDir string) ([]HealthIssue, AdapterState) {
 
 // CheckCodex checks the health of the Codex integration.
 // Same fingerprint × files matrix as CheckClaudeCode.
+//
+// The managed block in AGENTS.md is validated with the same topology rules
+// that upsertManagedBlock/removeManagedBlock enforce, so health never reports
+// "healthy" for a file that mutation would reject.
 func CheckCodex(homeDir string) ([]HealthIssue, AdapterState) {
 	var issues []HealthIssue
 	codexDir := filepath.Join(homeDir, ".codex")
@@ -171,20 +176,38 @@ func CheckCodex(homeDir string) ([]HealthIssue, AdapterState) {
 	skillPath := filepath.Join(codexDir, "skills", "waggle-runtime", "SKILL.md")
 	skillExists := fileExists(skillPath)
 
-	// Step 3: Derive state from fingerprint × files matrix
-	if !hasBeginMarker && !skillExists {
+	// Step 3: Validate marker topology before deriving state.
+	// Any marker presence (begin OR end) means the file has waggle artifacts.
+	// Topology must be validated first so that orphaned/corrupt markers are
+	// caught as StateBroken rather than falling through to StateNotInstalled.
+	hasAnyMarker := hasBeginMarker || hasEndMarker
+	if hasAnyMarker {
+		if topErr := validateMarkerTopology(string(data), codexBlockBegin, codexBlockEnd); topErr != nil {
+			issues = append(issues, HealthIssue{
+				Asset:   agentsPath,
+				Problem: "managed block has invalid topology: " + topErr.Error(),
+				Repair:  repairCmd,
+			})
+		}
+	}
+
+	// Step 4: Derive state from fingerprint × files matrix
+	if !hasBeginMarker && !skillExists && len(issues) == 0 {
+		// No begin marker, no skill file, and no topology issues — truly not installed.
 		return nil, StateNotInstalled
 	}
 
-	if !hasBeginMarker {
-		// Skill file exists but fingerprint is gone — orphaned install
+	if !hasBeginMarker && len(issues) == 0 {
+		// Skill file exists but fingerprint is gone — orphaned install.
+		// (If topology already flagged an issue, skip this to avoid redundant messaging.)
 		issues = append(issues, HealthIssue{
 			Asset:   agentsPath,
 			Problem: "managed block missing from AGENTS.md",
 			Repair:  repairCmd,
 		})
-	} else if !hasEndMarker {
-		// Fingerprint found but block is truncated
+	} else if hasBeginMarker && !hasEndMarker {
+		// Fingerprint found but block is truncated — useful self-heal guidance.
+		// (Topology doesn't flag begin-without-end since upsert/remove self-heal it.)
 		issues = append(issues, HealthIssue{
 			Asset:   agentsPath,
 			Problem: "managed block truncated (begin marker without end marker)",
@@ -244,9 +267,68 @@ func CheckGemini(homeDir string) ([]HealthIssue, AdapterState) {
 	return nil, StateHealthy
 }
 
+// CheckAuggie checks the health of the Auggie integration.
+// Auggie reads all files in ~/.augment/rules/, so waggle owns waggle.md entirely.
+// Health is determined by whether the file exists and matches canonical content.
+func CheckAuggie(homeDir string) ([]HealthIssue, AdapterState) {
+	rulesPath := filepath.Join(homeDir, ".augment", "rules", "waggle.md")
+	const repairCmd = "waggle install auggie"
+
+	// Validate ancestor path — symlinked parent directories are broken.
+	// Uses the same validateAncestorPath as install/uninstall to ensure
+	// consistent classification regardless of whether rules/ exists yet.
+	rulesDir := filepath.Dir(rulesPath)
+	if err := validateAncestorPath(rulesDir, homeDir); err != nil {
+		return []HealthIssue{{
+			Asset:   rulesDir,
+			Problem: "symlink in ancestor path: " + err.Error(),
+			Repair:  "rm the symlink and re-run " + repairCmd,
+		}}, StateBroken
+	}
+
+	// Reject symlinks and non-regular files to maintain owned-file integrity
+	if info, err := os.Lstat(rulesPath); err == nil && info.Mode()&os.ModeType != 0 {
+		return []HealthIssue{{
+			Asset:   rulesPath,
+			Problem: fmt.Sprintf("not a regular file (mode: %s); remove it manually", info.Mode().Type()),
+			Repair:  "rm " + rulesPath + " && " + repairCmd,
+		}}, StateBroken
+	}
+
+	data, err := os.ReadFile(rulesPath)
+	if os.IsNotExist(err) {
+		return nil, StateNotInstalled
+	}
+	if err != nil {
+		return []HealthIssue{{
+			Asset:   rulesPath,
+			Problem: "unable to read rules file: " + err.Error(),
+			Repair:  repairCmd,
+		}}, StateBroken
+	}
+
+	canonical, err := canonicalAuggieFile()
+	if err != nil {
+		return []HealthIssue{{
+			Asset:   rulesPath,
+			Problem: "unable to determine canonical content: " + err.Error(),
+			Repair:  repairCmd,
+		}}, StateBroken
+	}
+
+	if string(data) != canonical {
+		return []HealthIssue{{
+			Asset:   rulesPath,
+			Problem: "content does not match expected; may need update",
+			Repair:  repairCmd,
+		}}, StateBroken
+	}
+
+	return nil, StateHealthy
+}
+
 // fileExists returns true if a path exists on disk (file or directory).
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
 }
-
