@@ -16,7 +16,7 @@ import (
 // BenchmarkStore_AddRecordIfAbsent-10       	   36956	     34437 ns/op	    1064 B/op	      18 allocs/op
 // BenchmarkStore_MarkNotified-10            	   37662	     31145 ns/op	     376 B/op	      12 allocs/op
 // BenchmarkStore_LargeInbox-10              	      61	  17671151 ns/op	22227629 B/op	  319792 allocs/op
-// BenchmarkStore_PendingNotifications-10    	    2571	    463793 ns/op	  365857 B/op	    8285 allocs/op
+// BenchmarkStore_PendingNotificationsAll-10 	    2571	    463793 ns/op	  365857 B/op	    8285 allocs/op
 // BenchmarkStore_PruneDeliveryRecords-10    	  167174	      6815 ns/op	     184 B/op	       8 allocs/op
 //
 // Run with: go test ./internal/runtime -bench=BenchmarkStore -benchmem -count=3
@@ -361,9 +361,10 @@ func BenchmarkStore_LargeInbox(b *testing.B) {
 	}
 }
 
-// BenchmarkStore_PendingNotifications measures PendingNotifications() query throughput.
-// Scenario: daemon polling for pending notifications across all agents.
-func BenchmarkStore_PendingNotifications(b *testing.B) {
+// BenchmarkStore_PendingNotificationsAll measures PendingNotificationsAll() query throughput.
+// Scenario: daemon polling for pending notifications across all agents and projects.
+// Uses the global query (no project_id/agent_name filter) — different SQL from PendingNotifications().
+func BenchmarkStore_PendingNotificationsAll(b *testing.B) {
 	tmpDir := b.TempDir()
 	path := filepath.Join(tmpDir, "runtime.db")
 
@@ -409,12 +410,14 @@ func BenchmarkStore_PendingNotifications(b *testing.B) {
 	}
 }
 
-// BenchmarkStore_PruneDeliveryRecords measures pruning query throughput.
-// Scenario: periodic cleanup of old resolved delivery records.
-// Pre-populates 1000 eligible records. First iteration prunes all 1000.
-// Subsequent iterations measure the no-op DELETE query plan cost (0 rows matched
-// but full WHERE clause and index evaluation still occurs).
-// Regression signal: index removal, WHERE clause degradation, or query plan change.
+// BenchmarkStore_PruneDeliveryRecords measures the steady-state call cost of PruneDeliveryRecords.
+// Scenario: periodic cleanup daemon calling PruneDeliveryRecords during normal operation,
+// when most invocations find few or no eligible records.
+// Pre-populates 1000 eligible records; first iteration prunes all 1000 (~2ms).
+// Subsequent iterations measure the dominant runtime cost: Go→SQLite FFI overhead,
+// parameter binding, and statement execution for a zero-row DELETE.
+// Regression signal: changes to Go binding code, FFI overhead, or statement caching.
+// To measure actual bulk-prune cost, run with: -benchtime=1x
 func BenchmarkStore_PruneDeliveryRecords(b *testing.B) {
 	tmpDir := b.TempDir()
 	path := filepath.Join(tmpDir, "runtime.db")
