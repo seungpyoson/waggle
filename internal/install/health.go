@@ -230,12 +230,16 @@ func CheckCodex(homeDir string) ([]HealthIssue, AdapterState) {
 }
 
 // CheckGemini checks the health of the Gemini integration.
+// Same topology-aware flow as CheckCodex: detect any marker, validate topology,
+// then derive state. This ensures health never reports "not_installed" or "healthy"
+// for a file that upsertManagedBlock would reject.
 func CheckGemini(homeDir string) ([]HealthIssue, AdapterState) {
 	const repairCmd = "waggle install gemini"
+	var issues []HealthIssue
 	geminiDir := filepath.Join(homeDir, ".gemini")
 	geminiFilePath := filepath.Join(geminiDir, "GEMINI.md")
 
-	// Check if GEMINI.md exists
+	// Step 1: Read file
 	data, err := os.ReadFile(geminiFilePath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -249,21 +253,38 @@ func CheckGemini(homeDir string) ([]HealthIssue, AdapterState) {
 	}
 
 	content := string(data)
+	hasBeginMarker := strings.Contains(content, geminiBlockBegin)
+	hasEndMarker := strings.Contains(content, geminiBlockEnd)
 
-	// Check for fingerprint (begin marker)
-	if !strings.Contains(content, geminiBlockBegin) {
+	// Step 2: Validate marker topology before deriving state.
+	// Any marker presence (begin OR end) means the file has waggle artifacts.
+	hasAnyMarker := hasBeginMarker || hasEndMarker
+	if hasAnyMarker {
+		if topErr := validateMarkerTopology(content, geminiBlockBegin, geminiBlockEnd); topErr != nil {
+			issues = append(issues, HealthIssue{
+				Asset:   geminiFilePath,
+				Problem: "managed block has invalid topology: " + topErr.Error(),
+				Repair:  repairCmd,
+			})
+		}
+	}
+
+	// Step 3: Derive state
+	if !hasAnyMarker {
 		return nil, StateNotInstalled
 	}
 
-	// Fingerprint present, check if block is intact
-	if !strings.Contains(content, geminiBlockEnd) {
-		return []HealthIssue{{
+	if hasBeginMarker && !hasEndMarker && len(issues) == 0 {
+		issues = append(issues, HealthIssue{
 			Asset:   geminiFilePath,
-			Problem: "WAGGLE-GEMINI-BEGIN marker found but WAGGLE-GEMINI-END missing",
+			Problem: "managed block truncated (begin marker without end marker)",
 			Repair:  repairCmd,
-		}}, StateBroken
+		})
 	}
 
+	if len(issues) > 0 {
+		return issues, StateBroken
+	}
 	return nil, StateHealthy
 }
 
