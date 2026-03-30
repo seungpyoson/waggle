@@ -176,29 +176,12 @@ func CheckCodex(homeDir string) ([]HealthIssue, AdapterState) {
 	skillPath := filepath.Join(codexDir, "skills", "waggle-runtime", "SKILL.md")
 	skillExists := fileExists(skillPath)
 
-	// Step 3: Derive state from fingerprint × files matrix
-	if !hasBeginMarker && !skillExists {
-		return nil, StateNotInstalled
-	}
-
-	if !hasBeginMarker {
-		// Skill file exists but fingerprint is gone — orphaned install
-		issues = append(issues, HealthIssue{
-			Asset:   agentsPath,
-			Problem: "managed block missing from AGENTS.md",
-			Repair:  repairCmd,
-		})
-	} else if !hasEndMarker {
-		// Fingerprint found but block is truncated
-		issues = append(issues, HealthIssue{
-			Asset:   agentsPath,
-			Problem: "managed block truncated (begin marker without end marker)",
-			Repair:  repairCmd,
-		})
-	} else {
-		// Both markers present — validate topology matches mutation contract.
-		// Without this, health reports "healthy" for files with duplicate markers,
-		// reversed markers, etc., but install/uninstall would reject them.
+	// Step 3: Validate marker topology before deriving state.
+	// Any marker presence (begin OR end) means the file has waggle artifacts.
+	// Topology must be validated first so that orphaned/corrupt markers are
+	// caught as StateBroken rather than falling through to StateNotInstalled.
+	hasAnyMarker := hasBeginMarker || hasEndMarker
+	if hasAnyMarker {
 		if topErr := validateMarkerTopology(string(data), codexBlockBegin, codexBlockEnd); topErr != nil {
 			issues = append(issues, HealthIssue{
 				Asset:   agentsPath,
@@ -206,6 +189,30 @@ func CheckCodex(homeDir string) ([]HealthIssue, AdapterState) {
 				Repair:  repairCmd,
 			})
 		}
+	}
+
+	// Step 4: Derive state from fingerprint × files matrix
+	if !hasBeginMarker && !skillExists && len(issues) == 0 {
+		// No begin marker, no skill file, and no topology issues — truly not installed.
+		return nil, StateNotInstalled
+	}
+
+	if !hasBeginMarker && len(issues) == 0 {
+		// Skill file exists but fingerprint is gone — orphaned install.
+		// (If topology already flagged an issue, skip this to avoid redundant messaging.)
+		issues = append(issues, HealthIssue{
+			Asset:   agentsPath,
+			Problem: "managed block missing from AGENTS.md",
+			Repair:  repairCmd,
+		})
+	} else if hasBeginMarker && !hasEndMarker {
+		// Fingerprint found but block is truncated — useful self-heal guidance.
+		// (Topology doesn't flag begin-without-end since upsert/remove self-heal it.)
+		issues = append(issues, HealthIssue{
+			Asset:   agentsPath,
+			Problem: "managed block truncated (begin marker without end marker)",
+			Repair:  repairCmd,
+		})
 	}
 
 	if !skillExists {

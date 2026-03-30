@@ -566,7 +566,7 @@ func TestCheckCodex_BrokenReversedMarkers(t *testing.T) {
 	}
 }
 
-func TestCheckCodex_BrokenOrphanedEndMarker(t *testing.T) {
+func TestCheckCodex_BrokenDuplicateEndMarkers(t *testing.T) {
 	tmpHome := t.TempDir()
 
 	// Install normally first to get skill files in place
@@ -574,13 +574,7 @@ func TestCheckCodex_BrokenOrphanedEndMarker(t *testing.T) {
 		t.Fatalf("install failed: %v", err)
 	}
 
-	// Corrupt AGENTS.md: end marker without begin marker
-	// Note: hasBeginMarker will be false, but skill file exists → orphaned install path.
-	// We need begin marker present for the topology branch to fire.
-	// Actually, orphaned end marker without begin means hasBeginMarker=false,
-	// so it goes down the "managed block missing from AGENTS.md" path if skillExists.
-	// To test orphaned end WITH begin, we'd need duplicate end markers.
-	// Let's test duplicate end markers instead.
+	// Corrupt AGENTS.md: duplicate end markers (both begin + end present, plus extra end)
 	agentsPath := filepath.Join(tmpHome, ".codex", "AGENTS.md")
 	corrupted := codexBlockBegin + "\nsome content\n" + codexBlockEnd + "\nextra\n" + codexBlockEnd + "\n"
 	if err := os.WriteFile(agentsPath, []byte(corrupted), 0644); err != nil {
@@ -605,6 +599,81 @@ func TestCheckCodex_BrokenOrphanedEndMarker(t *testing.T) {
 	}
 	if !foundTopology {
 		t.Errorf("did not find topology issue for duplicate end markers in: %+v", issues)
+	}
+}
+
+func TestCheckCodex_BrokenOrphanedEndOnly(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	// AGENTS.md with ONLY an end marker (no begin marker), no skill file.
+	// Previously this fell through to StateNotInstalled because the fast path
+	// checked !hasBeginMarker && !skillExists without validating topology.
+	// Now topology validation runs first and catches the orphaned end marker.
+	codexDir := filepath.Join(tmpHome, ".codex")
+	if err := os.MkdirAll(codexDir, 0755); err != nil {
+		t.Fatalf("failed to create .codex: %v", err)
+	}
+	agentsPath := filepath.Join(codexDir, "AGENTS.md")
+	endOnly := "# My AGENTS.md\nSome user content\n" + codexBlockEnd + "\n"
+	if err := os.WriteFile(agentsPath, []byte(endOnly), 0644); err != nil {
+		t.Fatalf("write end-only AGENTS.md: %v", err)
+	}
+
+	issues, state := CheckCodex(tmpHome)
+	if state != StateBroken {
+		t.Errorf("expected StateBroken for orphaned end marker, got %q", state)
+	}
+	if len(issues) == 0 {
+		t.Fatal("expected issues for orphaned end marker, got none")
+	}
+
+	foundTopology := false
+	for _, issue := range issues {
+		if issue.Asset == agentsPath &&
+			issue.Problem == "managed block has invalid topology: orphaned end marker without begin marker; refusing to mutate" {
+			foundTopology = true
+			if issue.Repair != "waggle install codex" {
+				t.Errorf("expected repair 'waggle install codex', got %q", issue.Repair)
+			}
+		}
+	}
+	if !foundTopology {
+		t.Errorf("did not find topology issue for orphaned end marker in: %+v", issues)
+	}
+}
+
+func TestCheckCodex_BrokenOrphanedEndOnlyWithSkill(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	// Install normally to get skill files, then corrupt AGENTS.md to end-only.
+	// This tests the case where skill exists but AGENTS.md has only an end marker.
+	if err := installCodex(tmpHome); err != nil {
+		t.Fatalf("install failed: %v", err)
+	}
+
+	agentsPath := filepath.Join(tmpHome, ".codex", "AGENTS.md")
+	endOnly := "# My AGENTS.md\n" + codexBlockEnd + "\n"
+	if err := os.WriteFile(agentsPath, []byte(endOnly), 0644); err != nil {
+		t.Fatalf("write end-only AGENTS.md: %v", err)
+	}
+
+	issues, state := CheckCodex(tmpHome)
+	if state != StateBroken {
+		t.Errorf("expected StateBroken for orphaned end marker (with skill), got %q", state)
+	}
+	if len(issues) == 0 {
+		t.Fatal("expected issues for orphaned end marker, got none")
+	}
+
+	foundTopology := false
+	for _, issue := range issues {
+		if issue.Asset == agentsPath &&
+			issue.Problem == "managed block has invalid topology: orphaned end marker without begin marker; refusing to mutate" {
+			foundTopology = true
+		}
+	}
+	if !foundTopology {
+		t.Errorf("did not find topology issue for orphaned end marker in: %+v", issues)
 	}
 }
 
