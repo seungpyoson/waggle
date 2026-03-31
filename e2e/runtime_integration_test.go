@@ -80,9 +80,7 @@ func TestRuntimeEndToEndPushStoreAndPull(t *testing.T) {
 		_ = store.Close()
 	})
 
-	listenerFactory := rt.NewBrokerListenerFactory()
-	listenerFactory.PushToken = b.PushToken()
-	manager := rt.NewManager(store, listenerFactory, nil)
+	manager := rt.NewManager(store, rt.NewBrokerListenerFactory(), nil)
 	mgrCtx, mgrCancel := context.WithCancel(context.Background())
 	t.Cleanup(func() {
 		mgrCancel()
@@ -216,9 +214,7 @@ func TestRuntimeBrokerRestartReconnect(t *testing.T) {
 		_ = store.Close()
 	})
 
-	listenerFactory := rt.NewBrokerListenerFactory()
-	listenerFactory.PushToken = b1.PushToken()
-	factory := &catchUpCounter{ListenerFactory: listenerFactory}
+	factory := &catchUpCounter{ListenerFactory: rt.NewBrokerListenerFactory()}
 	manager := rt.NewManager(store, factory, nil)
 	mgrCtx, mgrCancel := context.WithCancel(context.Background())
 	t.Cleanup(func() {
@@ -313,7 +309,6 @@ func TestRuntimeBrokerRestartReconnect(t *testing.T) {
 		case <-time.After(2 * time.Second):
 		}
 	})
-	listenerFactory.PushToken = b2.PushToken()
 
 	// Step 9: Wait for broker #2 socket to be available
 	waitForCondition(t, "broker #2 socket", func() bool {

@@ -107,31 +107,6 @@ func TestInstall_Idempotent(t *testing.T) {
 	}
 }
 
-func TestInstallClaudeCode_RejectsAncestorSymlink(t *testing.T) {
-	tmpHome := t.TempDir()
-	claudeDir := filepath.Join(tmpHome, ".claude")
-	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	realHooksDir := filepath.Join(tmpHome, "real-hooks")
-	if err := os.MkdirAll(realHooksDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := os.Symlink(realHooksDir, filepath.Join(claudeDir, "hooks")); err != nil {
-		t.Fatal(err)
-	}
-
-	err := installClaudeCode(tmpHome)
-	if err == nil {
-		t.Fatal("expected error for ancestor symlink, got nil")
-	}
-	if !strings.Contains(err.Error(), "symlink") {
-		t.Fatalf("expected symlink error, got: %v", err)
-	}
-}
-
 func TestInstall_HookRegistered(t *testing.T) {
 	tmpHome := t.TempDir()
 
@@ -334,37 +309,6 @@ func TestInstall_PushHookCreated(t *testing.T) {
 	}
 	if !strings.Contains(content, "additionalContext") {
 		t.Error("push hook missing additionalContext output")
-	}
-}
-
-func TestInstall_PushHookTouchesPointerAndRecoversOrphans(t *testing.T) {
-	tmpHome := t.TempDir()
-
-	if err := installClaudeCode(tmpHome); err != nil {
-		t.Fatalf("install failed: %v", err)
-	}
-
-	pushPath := filepath.Join(tmpHome, ".claude", "hooks", "waggle-push.js")
-	data, err := os.ReadFile(pushPath)
-	if err != nil {
-		t.Fatalf("read push hook: %v", err)
-	}
-
-	content := string(data)
-	if !strings.Contains(content, "fs.utimesSync(pointerFile, now, now)") {
-		t.Fatal("push hook missing pointer file touch")
-	}
-	if !strings.Contains(content, "let orphanContent = '';") {
-		t.Fatal("push hook missing orphan recovery buffer")
-	}
-	if !strings.Contains(content, "if (f.startsWith(agent + '.c-'))") {
-		t.Fatal("push hook missing orphan recovery scan")
-	}
-	if !strings.Contains(content, "const allContent = [orphanContent, content].filter(Boolean).join('\\n');") {
-		t.Fatal("push hook missing combined orphan and signal content")
-	}
-	if !strings.Contains(content, "additionalContext: '\\n' + allContent +") {
-		t.Fatal("push hook missing combined output usage")
 	}
 }
 

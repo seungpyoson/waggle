@@ -1609,7 +1609,6 @@ func TestManager_MaintenancePrunesExpiredWatchesAndResolvedRecords(t *testing.T)
 
 func TestBrokerListenerFactory_NewListenerUsesWatchProjectID(t *testing.T) {
 	factory := NewBrokerListenerFactory()
-	factory.PushToken = "push-token-123"
 
 	listener, err := factory.NewListener(Watch{
 		ProjectID: "proj-from-watch",
@@ -1628,9 +1627,6 @@ func TestBrokerListenerFactory_NewListenerUsesWatchProjectID(t *testing.T) {
 	want := config.NewPaths("proj-from-watch").Socket
 	if brokerListener.socketPath != want {
 		t.Fatalf("socket path = %q, want %q", brokerListener.socketPath, want)
-	}
-	if brokerListener.pushToken != "push-token-123" {
-		t.Fatalf("push token = %q, want %q", brokerListener.pushToken, "push-token-123")
 	}
 }
 

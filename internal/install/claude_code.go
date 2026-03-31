@@ -19,7 +19,6 @@ const wagglePushCommand = "WAGGLE_PPID=$PPID node $HOME/.claude/hooks/waggle-pus
 
 // The canonical Claude Code integration assets live in integrations/claude-code/.
 // This mirrored copy exists in-package so go:embed can bundle them for install.
-//
 //go:embed all:claude-code
 var claudeCodeFiles embed.FS
 
@@ -28,7 +27,7 @@ var claudeCodeFiles embed.FS
 // Used by both install and uninstall to prevent orphaned files.
 var hookFiles = []struct {
 	embedded, installed string
-	perm                os.FileMode
+	perm               os.FileMode
 }{
 	{"claude-code/hook.sh", "waggle-connect.sh", 0o755},
 	{"claude-code/heartbeat.sh", "waggle-heartbeat.sh", 0o755},
@@ -70,14 +69,7 @@ func installClaudeCode(homeDir string) error {
 		if err != nil {
 			return fmt.Errorf("reading embedded %s: %w", hf.embedded, err)
 		}
-		destPath := filepath.Join(hookDir, hf.installed)
-		if info, err := os.Lstat(destPath); err == nil && info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("refusing to overwrite symlink: %s", destPath)
-		}
-		if hasAncestorSymlink(destPath, homeDir) {
-			return fmt.Errorf("refusing to write through ancestor symlink: %s", destPath)
-		}
-		if err := atomicWriteFile(destPath, data, hf.perm); err != nil {
+		if err := os.WriteFile(filepath.Join(hookDir, hf.installed), data, hf.perm); err != nil {
 			return fmt.Errorf("writing %s: %w", hf.installed, err)
 		}
 	}
@@ -93,14 +85,7 @@ func installClaudeCode(homeDir string) error {
 		if err != nil {
 			return fmt.Errorf("reading embedded skill %s: %w", name, err)
 		}
-		skillPath := filepath.Join(skillDir, name)
-		if info, err := os.Lstat(skillPath); err == nil && info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("refusing to overwrite symlink: %s", skillPath)
-		}
-		if hasAncestorSymlink(skillPath, homeDir) {
-			return fmt.Errorf("refusing to write through ancestor symlink: %s", skillPath)
-		}
-		if err := atomicWriteFile(skillPath, data, 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(skillDir, name), data, 0644); err != nil {
 			return fmt.Errorf("writing skill %s: %w", name, err)
 		}
 	}
@@ -218,7 +203,7 @@ func registerSessionStartHook(claudeDir string) error {
 		return fmt.Errorf("marshaling settings: %w", err)
 	}
 
-	return atomicWriteFile(settingsPath, out, 0644)
+	return os.WriteFile(settingsPath, out, 0644)
 }
 
 // deregisterSessionStartHook removes the waggle hook from settings.json.
@@ -267,7 +252,7 @@ func deregisterSessionStartHook(claudeDir string) error {
 		return fmt.Errorf("marshaling settings: %w", err)
 	}
 
-	return atomicWriteFile(settingsPath, out, 0644)
+	return os.WriteFile(settingsPath, out, 0644)
 }
 
 // registerPreToolUseHook adds the waggle push hook to settings.json PreToolUse array.
@@ -307,7 +292,7 @@ func registerPreToolUseHook(claudeDir string) error {
 	if err != nil {
 		return err
 	}
-	return atomicWriteFile(settingsPath, out, 0644)
+	return os.WriteFile(settingsPath, out, 0644)
 }
 
 // deregisterPreToolUseHook removes the waggle push hook from settings.json.
@@ -353,5 +338,5 @@ func deregisterPreToolUseHook(claudeDir string) error {
 	if err != nil {
 		return fmt.Errorf("marshaling settings: %w", err)
 	}
-	return atomicWriteFile(settingsPath, out, 0644)
+	return os.WriteFile(settingsPath, out, 0644)
 }

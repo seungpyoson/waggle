@@ -1,14 +1,11 @@
 package broker
 
 import (
-	"crypto/rand"
 	"database/sql"
-	"encoding/hex"
 	"fmt"
 	"log"
 	"net"
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -46,9 +43,7 @@ type Broker struct {
 	mu           sync.RWMutex
 	stopCh       chan struct{}
 	wg           sync.WaitGroup
-	pushToken     string
-	pushTokenPath string
-	ackWaiters    map[int64]chan struct{}
+	ackWaiters   map[int64]chan struct{}
 	ackWaitersMu sync.Mutex
 }
 
@@ -78,11 +73,6 @@ func New(cfg Config) (*Broker, error) {
 		if *f.val <= 0 {
 			return nil, fmt.Errorf("broker.Config.%s must be positive, got %v", f.name, *f.val)
 		}
-	}
-
-	pushToken, err := newPushToken()
-	if err != nil {
-		return nil, fmt.Errorf("generate push token: %w", err)
 	}
 
 	// Open database
@@ -146,32 +136,10 @@ func New(cfg Config) (*Broker, error) {
 		listener:   listener,
 		sessions:   make(map[string]*Session),
 		stopCh:     make(chan struct{}),
-		pushToken:  pushToken,
 		ackWaiters: make(map[int64]chan struct{}),
 	}
 
-	// Write push token to file for cross-process sharing with the runtime.
-	// The runtime's listener factory reads this to authenticate push connections.
-	b.pushTokenPath = filepath.Join(filepath.Dir(cfg.SocketPath), "push-token")
-	if err := os.WriteFile(b.pushTokenPath, []byte(pushToken), 0o600); err != nil {
-		listener.Close()
-		store.Close()
-		return nil, fmt.Errorf("write push token: %w", err)
-	}
-
 	return b, nil
-}
-
-func (b *Broker) PushToken() string {
-	return b.pushToken
-}
-
-func newPushToken() (string, error) {
-	buf := make([]byte, 16)
-	if _, err := rand.Read(buf); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(buf), nil
 }
 
 // Serve starts the broker's accept loop and background tasks
@@ -263,12 +231,9 @@ func (b *Broker) Shutdown() error {
 		b.store.Close()
 	}
 
-	// Remove socket file and push token file
+	// Remove socket file
 	if b.config.SocketPath != "" {
 		os.Remove(b.config.SocketPath)
-	}
-	if b.pushTokenPath != "" {
-		os.Remove(b.pushTokenPath)
 	}
 
 	return nil
@@ -315,3 +280,4 @@ func cleanupSocket(path string) error {
 	}
 	return nil
 }
+
