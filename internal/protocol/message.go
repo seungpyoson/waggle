@@ -32,6 +32,7 @@ type Request struct {
 	TTL             int             `json:"ttl,omitempty"`
 	AwaitAck        bool            `json:"await_ack,omitempty"`
 	Timeout         int             `json:"timeout,omitempty"`
+	PushListener    bool            `json:"push_listener,omitempty"`
 }
 
 // Response represents a broker → client response

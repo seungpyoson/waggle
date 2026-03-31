@@ -92,6 +92,10 @@ func handleConnect(s *Session, req protocol.Request) protocol.Response {
 	if len(req.Name) > config.Defaults.MaxFieldLength {
 		return protocol.ErrResponse(protocol.ErrInvalidRequest, fmt.Sprintf("name too long (max %d chars)", config.Defaults.MaxFieldLength))
 	}
+	// Reserve -push suffix for push listeners — prevents routing collisions
+	if strings.HasSuffix(req.Name, "-push") && !req.PushListener {
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, `names ending in "-push" are reserved; set push_listener: true to connect as a push listener`)
+	}
 	if s.name != "" {
 		return protocol.ErrResponse(protocol.ErrAlreadyConnected, "already connected")
 	}
@@ -573,9 +577,14 @@ func handleSend(s *Session, req protocol.Request) protocol.Response {
 		s.broker.ackWaitersMu.Unlock()
 	}
 
-	// Push to recipient if connected
+	// Push to recipient if connected — fall back to name-push listener
 	s.broker.mu.RLock()
 	recipient, online := s.broker.sessions[req.Name]
+	usedPushFallback := false
+	if !online {
+		recipient, online = s.broker.sessions[req.Name+"-push"]
+		usedPushFallback = online
+	}
 	s.broker.mu.RUnlock()
 
 	// CLASS 2 FIX (B3): Skip push delivery when sending to self to prevent protocol corruption
@@ -604,13 +613,14 @@ func handleSend(s *Session, req protocol.Request) protocol.Response {
 		}
 	}
 
-	// Also push to persistent listener (<name>-push) if connected
+	// Also push to persistent listener (<name>-push) if connected.
+	// Skip if fallback already sent to -push above (prevents double-push).
 	pushName := req.Name + "-push"
 	s.broker.mu.RLock()
 	pushRecipient, pushOnline := s.broker.sessions[pushName]
 	s.broker.mu.RUnlock()
 
-	if pushOnline && pushRecipient != s {
+	if pushOnline && pushRecipient != s && !usedPushFallback {
 		pushResp := protocol.Response{
 			OK: true,
 			Data: mustMarshal(map[string]any{
@@ -657,7 +667,9 @@ func handleSend(s *Session, req protocol.Request) protocol.Response {
 }
 
 func handleInbox(s *Session, req protocol.Request) protocol.Response {
-	messages, err := s.broker.msgStore.Inbox(s.name)
+	// Strip -push suffix so push listeners see the base agent's inbox
+	caller := strings.TrimSuffix(s.name, "-push")
+	messages, err := s.broker.msgStore.Inbox(caller)
 	if err != nil {
 		return protocol.ErrResponse(protocol.ErrInternalError, err.Error())
 	}
@@ -669,7 +681,9 @@ func handleAck(s *Session, req protocol.Request) protocol.Response {
 		return protocol.ErrResponse(protocol.ErrInvalidRequest, "message_id required")
 	}
 
-	err := s.broker.msgStore.Ack(req.MessageID, s.name)
+	// Strip -push suffix so push listeners can ack their base agent's messages
+	caller := strings.TrimSuffix(s.name, "-push")
+	err := s.broker.msgStore.Ack(req.MessageID, caller)
 	if err != nil {
 		if errors.Is(err, messages.ErrMessageNotFound) {
 			return protocol.ErrResponse(protocol.ErrMessageNotFound, err.Error())

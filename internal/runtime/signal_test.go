@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -118,5 +119,195 @@ func TestConsumeSignal_NewWriteDuringConsume(t *testing.T) {
 	data2, _ := os.ReadFile(orig)
 	if !strings.Contains(string(data2), "bob") {
 		t.Fatalf("new message lost, orig = %q", data2)
+	}
+}
+
+func TestSanitizeProjectIDForPath_GitHash(t *testing.T) {
+	got := SanitizeProjectIDForPath("abcdef0123456789")
+	if got != "abcdef0123456789" {
+		t.Fatalf("got %q, want unchanged hex hash", got)
+	}
+}
+
+func TestSanitizeProjectIDForPath_PathTraversal(t *testing.T) {
+	got := SanitizeProjectIDForPath("../../etc/passwd")
+	if strings.Contains(got, "/") || strings.Contains(got, "..") {
+		t.Fatalf("path traversal not sanitized: %q", got)
+	}
+}
+
+func TestSanitizeProjectIDForPath_PathPrefix(t *testing.T) {
+	got := SanitizeProjectIDForPath("path:/Users/test/project")
+	if strings.Contains(got, "/") {
+		t.Fatalf("slashes not removed: %q", got)
+	}
+	if got == "" {
+		t.Fatal("should not be empty")
+	}
+}
+
+func TestSanitizeProjectIDForPath_Empty(t *testing.T) {
+	got := SanitizeProjectIDForPath("")
+	if got != "" {
+		t.Fatalf("got %q, want empty", got)
+	}
+}
+
+func TestWriteSignal_StripsANSI(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"OSC52 clipboard", "hello \x1b]52;c;base64data\x07 world"},
+		{"CSI color", "hello \x1b[31mred\x1b[0m world"},
+		{"CSI private mode", "hello \x1b[?1049h world"},
+		{"CSI DEC private", "hello \x1b[?25l world"},
+		{"DCS sequence", "hello \x1bP1;2;3q#1PAYLOAD\x1b\\ world"},
+		{"raw CR overwrite", "safe\rOVERRIDE"},
+		{"raw BEL", "hello \x07 world"},
+		{"raw backspace", "hello \b world"},
+		{"C1 CSI equiv", "hello \x9b31m world"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := t.TempDir()
+			if err := WriteSignal(d, "abcdef01", "a", "alice", tt.input, 65536); err != nil {
+				t.Fatal(err)
+			}
+			data, _ := os.ReadFile(filepath.Join(d, "abcdef01", "a"))
+			s := string(data)
+			for _, b := range s {
+				if b < 0x20 && b != '\n' && b != '\t' {
+					t.Fatalf("control char %U not stripped in %q", b, s)
+				}
+				if b >= 0x7f && b <= 0x9f {
+					t.Fatalf("C1 char %U not stripped in %q", b, s)
+				}
+				if b == 0x1b {
+					t.Fatalf("ESC not stripped in %q", s)
+				}
+			}
+		})
+	}
+}
+
+func TestWriteSignal_StripsANSIFromSender(t *testing.T) {
+	dir := t.TempDir()
+	ansiFrom := "\x1b[31mevil\x1b[0m"
+	if err := WriteSignal(dir, "proj-test", "a", ansiFrom, "msg", 65536); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, "proj-test", "a"))
+	if strings.Contains(string(data), "\x1b") {
+		t.Fatalf("ANSI escape not stripped from sender: %q", data)
+	}
+	if !strings.Contains(string(data), "evil") {
+		t.Fatalf("sender name lost: %q", data)
+	}
+}
+
+func TestWriteSignal_RejectsEmptyProjectID(t *testing.T) {
+	dir := t.TempDir()
+	err := WriteSignal(dir, "", "a", "alice", "hello", 65536)
+	if err == nil {
+		t.Fatal("expected error for empty project ID")
+	}
+}
+
+func TestWriteSignal_SanitizesProjectIDPath(t *testing.T) {
+	dir := t.TempDir()
+	// Path traversal attempt — should NOT create dirs outside signal dir
+	err := WriteSignal(dir, "../../etc", "a", "alice", "hello", 65536)
+	if err != nil {
+		t.Fatal(err) // sanitizer transforms it, doesn't reject
+	}
+	// Verify it created a safe directory, not ../../etc
+	if _, err := os.Stat(filepath.Join(dir, "..", "..", "etc")); err == nil {
+		t.Fatal("path traversal succeeded!")
+	}
+}
+
+// TestSignalPipeline_EndToEnd exercises the full signal delivery path:
+// WriteSessionMapping → WriteSignal → two-hop file discovery → ConsumeSignal.
+// This is the Go equivalent of what shell-hook.sh and waggle-push.js do at runtime.
+func TestSignalPipeline_EndToEnd(t *testing.T) {
+	runtimeDir := t.TempDir()
+	signalDir := filepath.Join(runtimeDir, "signals")
+	os.MkdirAll(signalDir, 0o700)
+
+	ppid := 12345
+	agentName := "claude-code-test"
+	projectID := "abcdef0123456789"
+	safeProjectID := SanitizeProjectIDForPath(projectID)
+
+	// Step 1: Simulate bootstrap — generate nonce, write session mapping
+	nonce := "12345-1711843200000000000"
+	sessionPath := filepath.Join(runtimeDir, "agent-session-"+nonce)
+	os.WriteFile(sessionPath, []byte(agentName+"\n"+safeProjectID+"\n"), 0o600)
+	ppidPath := filepath.Join(runtimeDir, fmt.Sprintf("agent-ppid-%d", ppid))
+	os.WriteFile(ppidPath, []byte(nonce+"\n"), 0o600)
+
+	// Step 2: Daemon writes a signal (simulates notifyRecord → WriteSignal)
+	body := "hello from orchestrator"
+	if err := WriteSignal(signalDir, projectID, agentName, "orchestrator", body, 65536); err != nil {
+		t.Fatalf("WriteSignal: %v", err)
+	}
+
+	// Step 3: Simulate two-hop discovery (what the shell hook does)
+	// Read PPID pointer → get nonce
+	ppidData, err := os.ReadFile(ppidPath)
+	if err != nil {
+		t.Fatalf("read ppid pointer: %v", err)
+	}
+	discoveredNonce := strings.TrimSpace(string(ppidData))
+	if discoveredNonce != nonce {
+		t.Fatalf("nonce = %q, want %q", discoveredNonce, nonce)
+	}
+
+	// Read session file → get agent name + project
+	sessData, err := os.ReadFile(filepath.Join(runtimeDir, "agent-session-"+discoveredNonce))
+	if err != nil {
+		t.Fatalf("read session file: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(sessData)), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("session file has %d lines, want 2", len(lines))
+	}
+	discoveredAgent := lines[0]
+	discoveredProject := lines[1]
+	if discoveredAgent != agentName {
+		t.Fatalf("agent = %q, want %q", discoveredAgent, agentName)
+	}
+	if discoveredProject != safeProjectID {
+		t.Fatalf("project = %q, want %q", discoveredProject, safeProjectID)
+	}
+
+	// Step 4: Check signal file exists at expected path
+	sigPath := filepath.Join(signalDir, discoveredProject, discoveredAgent)
+	if _, err := os.Stat(sigPath); os.IsNotExist(err) {
+		t.Fatalf("signal file not found at %s", sigPath)
+	}
+
+	// Step 5: Consume signal (what the shell hook does via mv+cat+rm)
+	content, err := ConsumeSignal(signalDir, discoveredProject, discoveredAgent)
+	if err != nil {
+		t.Fatalf("ConsumeSignal: %v", err)
+	}
+	if !strings.Contains(content, "orchestrator") || !strings.Contains(content, "hello from orchestrator") {
+		t.Fatalf("consumed content = %q, missing expected message", content)
+	}
+
+	// Step 6: Signal file should be gone after consume
+	if _, err := os.Stat(sigPath); !os.IsNotExist(err) {
+		t.Fatal("signal file should be deleted after consume")
+	}
+
+	// Step 7: Second consume returns empty (no duplicate delivery)
+	content2, err := ConsumeSignal(signalDir, discoveredProject, discoveredAgent)
+	if err != nil {
+		t.Fatalf("second ConsumeSignal: %v", err)
+	}
+	if content2 != "" {
+		t.Fatalf("second consume should be empty, got %q", content2)
 	}
 }

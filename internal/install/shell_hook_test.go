@@ -83,3 +83,118 @@ func TestUninstallShellHook_PreservesOtherContent(t *testing.T) {
 		t.Fatal("lost existing content")
 	}
 }
+
+func TestInstallShellHook_RejectsAncestorSymlink(t *testing.T) {
+	home := t.TempDir()
+	realDir := filepath.Join(home, ".waggle-real")
+	os.MkdirAll(realDir, 0o700)
+	os.Symlink(realDir, filepath.Join(home, ".waggle"))
+
+	err := installShellHook(home)
+	if err == nil {
+		t.Fatal("expected error for ancestor symlink, got nil")
+	}
+	if !strings.Contains(err.Error(), "ancestor symlink") {
+		t.Fatalf("expected ancestor symlink error, got: %v", err)
+	}
+}
+
+func TestAtomicWriteFile_BasicRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.txt")
+	content := []byte("hello world\n")
+	if err := atomicWriteFile(path, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(content) {
+		t.Fatalf("got %q, want %q", got, content)
+	}
+	info, _ := os.Stat(path)
+	if perm := info.Mode().Perm(); perm != 0o644 {
+		t.Fatalf("perm = %o, want 644", perm)
+	}
+}
+
+func TestAtomicWriteFile_NoTempLeftBehind(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.txt")
+	atomicWriteFile(path, []byte("data"), 0o644)
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if strings.Contains(e.Name(), ".waggle-tmp") {
+			t.Fatalf("temp file left behind: %s", e.Name())
+		}
+	}
+}
+
+func TestHasAncestorSymlink_DetectsSymlinkedParent(t *testing.T) {
+	base := t.TempDir()
+	realDir := filepath.Join(base, "real")
+	os.MkdirAll(realDir, 0o700)
+	linkDir := filepath.Join(base, "link")
+	os.Symlink(realDir, linkDir)
+
+	if !hasAncestorSymlink(filepath.Join(linkDir, "file.txt"), base) {
+		t.Fatal("should detect symlinked parent")
+	}
+}
+
+func TestHasAncestorSymlink_NoSymlink(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "subdir")
+	os.MkdirAll(dir, 0o700)
+	if hasAncestorSymlink(filepath.Join(dir, "file.txt"), base) {
+		t.Fatal("should not detect symlink in real dir")
+	}
+}
+
+func TestHasAncestorSymlink_RejectsPathEscapingRoot(t *testing.T) {
+	base := t.TempDir()
+	escaped := filepath.Join(base, "..", "etc", "passwd")
+	if !hasAncestorSymlink(escaped, base) {
+		t.Fatal("should reject path escaping root via ..")
+	}
+}
+
+func TestHasAncestorSymlink_DeeplyNestedSymlink(t *testing.T) {
+	base := t.TempDir()
+	realDir := filepath.Join(base, "real", "deep")
+	os.MkdirAll(realDir, 0o700)
+	os.MkdirAll(filepath.Join(base, "a"), 0o700)
+	os.Symlink(realDir, filepath.Join(base, "a", "link"))
+	if !hasAncestorSymlink(filepath.Join(base, "a", "link", "file.txt"), base) {
+		t.Fatal("should detect deeply nested symlink")
+	}
+}
+
+func TestUpsertShellHookBlock_RejectsLeafSymlink(t *testing.T) {
+	home := t.TempDir()
+	realFile := filepath.Join(home, ".real-zshenv")
+	os.WriteFile(realFile, []byte("# real\n"), 0o644)
+	os.Symlink(realFile, filepath.Join(home, ".zshenv"))
+
+	err := upsertShellHookBlock(filepath.Join(home, ".zshenv"), home)
+	if err == nil {
+		t.Fatal("expected error for leaf symlink")
+	}
+	if !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected symlink error, got: %v", err)
+	}
+}
+
+func TestAtomicWriteFile_OverwritesExisting(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.txt")
+	os.WriteFile(path, []byte("old"), 0o644)
+	if err := atomicWriteFile(path, []byte("new"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(path)
+	if string(got) != "new" {
+		t.Fatalf("got %q, want %q", got, "new")
+	}
+}

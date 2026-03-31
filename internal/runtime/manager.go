@@ -479,7 +479,9 @@ func (m *Manager) notifyRecord(projectID, agentName string, messageID int64, tit
 		}
 	}
 	if m.signalDir != "" {
-		_ = WriteSignal(m.signalDir, projectID, agentName, senderFromTitle(title), body, config.Defaults.SignalMaxBytes)
+		if err := WriteSignal(m.signalDir, projectID, agentName, senderFromTitle(title), body, config.Defaults.SignalMaxBytes); err != nil {
+			return fmt.Errorf("write signal: %w", err)
+		}
 	}
 	if err := m.store.MarkNotified(projectID, agentName, messageID, time.Now().UTC()); err != nil {
 		return err
@@ -775,6 +777,7 @@ func (m *Manager) runMaintenanceLoop(ctx context.Context) {
 			}
 			if m.signalDir != "" {
 				PruneStaleFiles(filepath.Dir(m.signalDir), "agent-ppid-", 24*time.Hour)
+				PruneStaleFiles(filepath.Dir(m.signalDir), "agent-session-", 24*time.Hour)
 				PruneStaleSignals(m.signalDir, 24*time.Hour)
 			}
 			if err := m.refreshTrackedDeliveryStates(); err != nil {

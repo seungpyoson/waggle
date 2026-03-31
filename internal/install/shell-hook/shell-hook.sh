@@ -1,20 +1,29 @@
 # waggle shell-hook — surfaces messages on every agent command.
 # Sourced from .zshenv/.bashrc. Each agent tool call = new shell = fresh source.
-# Cost when no messages: 1 file stat (~ns). Guarded by PPID mapping.
+# Uses WAGGLE_AGENT_PPID (set by agent process, inherited by child shells) for
+# session identity; falls back to $PPID (correct when agent spawns shells directly).
 __waggle_check() {
     local _wd="$HOME/.waggle/runtime"
-    local _wm="$_wd/agent-ppid-$PPID"
-    [ -f "$_wm" ] || return 0
+    local _apid="${WAGGLE_AGENT_PPID:-$PPID}"
+    local _pm="$_wd/agent-ppid-$_apid"
+    [ -f "$_pm" ] || return 0
+    local _nonce
+    read -r _nonce < "$_pm" 2>/dev/null || return 0
+    [ -n "$_nonce" ] || return 0
+    local _sm="$_wd/agent-session-$_nonce"
+    [ -f "$_sm" ] || return 0
     local _wa _wp
-    { read -r _wa; read -r _wp; } < "$_wm" 2>/dev/null || return 0
+    { read -r _wa; read -r _wp; } < "$_sm" 2>/dev/null || return 0
     [ -n "$_wa" ] || return 0
     local _ws="$_wd/signals/$_wp/$_wa"
-    [ -f "$_ws" ] || return 0
-    # Atomic: rename then read. If daemon writes after mv, new file at original path.
-    local _wt="$_ws.c-$$"
-    mv "$_ws" "$_wt" 2>/dev/null || return 0
-    cat "$_wt" >&2 2>/dev/null
-    rm -f "$_wt" 2>/dev/null
-    touch "$_wm" 2>/dev/null
+    if [ -f "$_ws" ]; then
+        # Atomic: rename then read. If daemon writes after mv, new file at original path.
+        local _wt="$_ws.c-$$"
+        if mv "$_ws" "$_wt" 2>/dev/null; then
+            cat "$_wt" >&2 2>/dev/null
+            rm -f "$_wt" 2>/dev/null
+        fi
+    fi
+    touch "$_sm" 2>/dev/null
 }
 __waggle_check

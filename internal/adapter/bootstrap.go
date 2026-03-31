@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/seungpyoson/waggle/internal/broker"
 	"github.com/seungpyoson/waggle/internal/config"
@@ -78,7 +79,9 @@ func Bootstrap(input BootstrapInput) (BootstrapResult, error) {
 		return BootstrapResult{}, err
 	}
 
-	_ = WritePPIDMapping(runtimePaths.RuntimeDir, resolveAgentPPID(), agentName, projectID)
+	ppid := resolveAgentPPID()
+	nonce := fmt.Sprintf("%d-%d", ppid, time.Now().UnixNano())
+	_ = WriteSessionMapping(runtimePaths.RuntimeDir, ppid, nonce, agentName, projectID)
 
 	records, err := store.Unread(projectID, agentName)
 	if err != nil {
@@ -199,16 +202,51 @@ func sanitizeTTY(tty string) string {
 	return sanitizeToken(base)
 }
 
-// WritePPIDMapping writes agent name and project ID keyed by PID for shell hook discovery.
-func WritePPIDMapping(runtimeDir string, ppid int, agentName, projectID string) error {
+// WriteSessionMapping writes the PPID pointer and unique session mapping for hook discovery.
+// The projectID is sanitized for filesystem safety before writing to the session file,
+// so shell/JS hooks receive the same safe value used for signal directory names.
+func WriteSessionMapping(runtimeDir string, ppid int, nonce, agentName, projectID string) error {
 	if err := os.MkdirAll(runtimeDir, 0o700); err != nil {
 		return err
 	}
-	return os.WriteFile(
-		filepath.Join(runtimeDir, fmt.Sprintf("agent-ppid-%d", ppid)),
-		[]byte(agentName+"\n"+projectID+"\n"),
-		0o600,
-	)
+
+	safeProjectID := rt.SanitizeProjectIDForPath(projectID)
+	sessionPath := filepath.Join(runtimeDir, "agent-session-"+nonce)
+	if err := writeRuntimeFileAtomic(sessionPath, []byte(agentName+"\n"+safeProjectID+"\n"), 0o600); err != nil {
+		return err
+	}
+
+	ppidPath := filepath.Join(runtimeDir, fmt.Sprintf("agent-ppid-%d", ppid))
+	return writeRuntimeFileAtomic(ppidPath, []byte(nonce+"\n"), 0o600)
+}
+
+func writeRuntimeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	base := filepath.Base(path)
+
+	tmp, err := os.CreateTemp(dir, base+".*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+	}()
+
+	if err := tmp.Chmod(perm); err != nil {
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }
 
 // resolveAgentPPID returns the agent process PID for PPID mapping.

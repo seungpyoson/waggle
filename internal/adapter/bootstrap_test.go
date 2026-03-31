@@ -1,6 +1,7 @@
 package adapter
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -175,24 +176,59 @@ func TestAdapterBootstrap_SkipsGracefullyWithoutProjectContext(t *testing.T) {
 	}
 }
 
-func TestWritePPIDMapping(t *testing.T) {
+func TestWriteSessionMapping(t *testing.T) {
 	dir := t.TempDir()
-	if err := WritePPIDMapping(dir, 12345, "claude-99", "proj-abc"); err != nil {
+	nonce := "12345-1711843200000000000"
+	if err := WriteSessionMapping(dir, 12345, nonce, "claude-99", "proj-abc"); err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(filepath.Join(dir, "agent-ppid-12345"))
+	sessionData, err := os.ReadFile(filepath.Join(dir, "agent-session-"+nonce))
 	if err != nil {
 		t.Fatal(err)
 	}
-	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	lines := strings.Split(strings.TrimRight(string(sessionData), "\n"), "\n")
 	if len(lines) != 2 {
-		t.Fatalf("expected 2 lines, got %d: %q", len(lines), data)
+		t.Fatalf("expected 2 lines, got %d: %q", len(lines), sessionData)
 	}
 	if lines[0] != "claude-99" {
 		t.Fatalf("agent = %q, want claude-99", lines[0])
 	}
 	if lines[1] != "proj-abc" {
 		t.Fatalf("project = %q, want proj-abc", lines[1])
+	}
+
+	ppidData, err := os.ReadFile(filepath.Join(dir, "agent-ppid-12345"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(ppidData) != nonce+"\n" {
+		t.Fatalf("ppid mapping = %q, want %q", string(ppidData), nonce+"\\n")
+	}
+}
+
+func TestWriteSessionMapping_NoncesAreDifferent(t *testing.T) {
+	dir := t.TempDir()
+	ppid := 12345
+	nonce1 := fmt.Sprintf("%d-%d", ppid, time.Now().UnixNano())
+	if err := WriteSessionMapping(dir, ppid, nonce1, "claude-99", "proj-abc"); err != nil {
+		t.Fatal(err)
+	}
+
+	time.Sleep(time.Nanosecond)
+
+	nonce2 := fmt.Sprintf("%d-%d", ppid, time.Now().UnixNano())
+	if err := WriteSessionMapping(dir, ppid, nonce2, "claude-99", "proj-abc"); err != nil {
+		t.Fatal(err)
+	}
+
+	if nonce1 == nonce2 {
+		t.Fatalf("nonces should differ, both were %q", nonce1)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "agent-session-"+nonce1)); err != nil {
+		t.Fatalf("first session file missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "agent-session-"+nonce2)); err != nil {
+		t.Fatalf("second session file missing: %v", err)
 	}
 }
 

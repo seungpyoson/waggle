@@ -122,7 +122,7 @@ func (l *brokerListener) Listen(ctx context.Context, handler DeliveryHandler) er
 	if err := c.SetDeadline(config.Defaults.ConnectTimeout); err != nil {
 		return fmt.Errorf("set handshake deadline: %w", err)
 	}
-	resp, err := c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: l.name})
+	resp, err := c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: l.name, PushListener: true})
 	if err != nil {
 		return err
 	}

@@ -3067,8 +3067,9 @@ func TestBroker_PushToListenerSession(t *testing.T) {
 	defer listenerConn.Close()
 
 	connectReq := protocol.Request{
-		Cmd:  "connect",
-		Name: "alice-push",
+		Cmd:          "connect",
+		Name:         "alice-push",
+		PushListener: true,
 	}
 	if _, err := listenerConn.Send(connectReq); err != nil {
 		t.Fatal(err)
@@ -3138,8 +3139,9 @@ func TestBroker_ListenReceivesPush(t *testing.T) {
 	defer listenerConn.Close()
 
 	connectReq := protocol.Request{
-		Cmd:  "connect",
-		Name: "bob-push",
+		Cmd:          "connect",
+		Name:         "bob-push",
+		PushListener: true,
 	}
 	if _, err := listenerConn.Send(connectReq); err != nil {
 		t.Fatal(err)
@@ -3198,7 +3200,7 @@ func TestClient_ReadMessagesFilters(t *testing.T) {
 	// Connect a listener as "filter-test-push"
 	listenerConn := connectClient(t, sockPath)
 	defer listenerConn.Close()
-	listenerConn.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "filter-test-push"})
+	listenerConn.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "filter-test-push", PushListener: true})
 
 	// Start ReadMessages — it now owns the scanner
 	msgCh, err := listenerConn.ReadMessages()
@@ -3246,7 +3248,7 @@ func TestPresence_StripsPushAndDeduplicates(t *testing.T) {
 
 	c1 := connectClient(t, sockPath)
 	defer c1.Close()
-	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice-push"})
+	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice-push", PushListener: true})
 
 	c2 := connectClient(t, sockPath)
 	defer c2.Close()
