@@ -22,6 +22,18 @@ const wagglePushCommand = "WAGGLE_PPID=$PPID node $HOME/.claude/hooks/waggle-pus
 //go:embed all:claude-code
 var claudeCodeFiles embed.FS
 
+// hookFiles is the single source of truth for hook file installation.
+// Maps embedded asset name → installed filename under ~/.claude/hooks/.
+// Used by both install and uninstall to prevent orphaned files.
+var hookFiles = []struct {
+	embedded, installed string
+	perm               os.FileMode
+}{
+	{"claude-code/hook.sh", "waggle-connect.sh", 0o755},
+	{"claude-code/heartbeat.sh", "waggle-heartbeat.sh", 0o755},
+	{"claude-code/waggle-push.js", "waggle-push.js", 0o755},
+}
+
 // InstallClaudeCode installs waggle integration for Claude Code.
 // Copies hook, heartbeat, and skills to ~/.claude/ and registers the hook in settings.json.
 func InstallClaudeCode() error {
@@ -47,29 +59,22 @@ func UninstallClaudeCode() error {
 func installClaudeCode(homeDir string) error {
 	claudeDir := filepath.Join(homeDir, ".claude")
 
-	// 1. Copy hook
+	// 1. Copy hook files (from single source of truth: hookFiles)
 	hookDir := filepath.Join(claudeDir, "hooks")
 	if err := os.MkdirAll(hookDir, 0755); err != nil {
 		return fmt.Errorf("creating hooks dir: %w", err)
 	}
-	hookData, err := claudeCodeFiles.ReadFile("claude-code/hook.sh")
-	if err != nil {
-		return fmt.Errorf("reading embedded hook.sh: %w", err)
-	}
-	if err := os.WriteFile(filepath.Join(hookDir, "waggle-connect.sh"), hookData, 0755); err != nil {
-		return fmt.Errorf("writing hook: %w", err)
-	}
-
-	// 2. Copy heartbeat script
-	heartbeatData, err := claudeCodeFiles.ReadFile("claude-code/heartbeat.sh")
-	if err != nil {
-		return fmt.Errorf("reading embedded heartbeat.sh: %w", err)
-	}
-	if err := os.WriteFile(filepath.Join(hookDir, "waggle-heartbeat.sh"), heartbeatData, 0755); err != nil {
-		return fmt.Errorf("writing heartbeat: %w", err)
+	for _, hf := range hookFiles {
+		data, err := claudeCodeFiles.ReadFile(hf.embedded)
+		if err != nil {
+			return fmt.Errorf("reading embedded %s: %w", hf.embedded, err)
+		}
+		if err := os.WriteFile(filepath.Join(hookDir, hf.installed), data, hf.perm); err != nil {
+			return fmt.Errorf("writing %s: %w", hf.installed, err)
+		}
 	}
 
-	// 3. Copy skills
+	// 2. Copy skills
 	skillDir := filepath.Join(claudeDir, "skills", "waggle")
 	if err := os.MkdirAll(skillDir, 0755); err != nil {
 		return fmt.Errorf("creating skills dir: %w", err)
@@ -85,16 +90,7 @@ func installClaudeCode(homeDir string) error {
 		}
 	}
 
-	// 4. Copy PreToolUse push hook
-	pushData, err := claudeCodeFiles.ReadFile("claude-code/waggle-push.js")
-	if err != nil {
-		return fmt.Errorf("reading waggle-push.js: %w", err)
-	}
-	if err := os.WriteFile(filepath.Join(hookDir, "waggle-push.js"), pushData, 0755); err != nil {
-		return fmt.Errorf("writing push hook: %w", err)
-	}
-
-	// 5. Register hooks in settings.json
+	// 3. Register hooks in settings.json
 	if err := registerSessionStartHook(claudeDir); err != nil {
 		return fmt.Errorf("registering hook: %w", err)
 	}
@@ -115,10 +111,10 @@ func installClaudeCode(homeDir string) error {
 func uninstallClaudeCode(homeDir string) error {
 	claudeDir := filepath.Join(homeDir, ".claude")
 
-	// Remove hook files
-	for _, name := range []string{"waggle-connect.sh", "waggle-heartbeat.sh", "waggle-push.js"} {
-		if err := os.Remove(filepath.Join(claudeDir, "hooks", name)); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("removing %s: %w", name, err)
+	// Remove hook files (from single source of truth: hookFiles)
+	for _, hf := range hookFiles {
+		if err := os.Remove(filepath.Join(claudeDir, "hooks", hf.installed)); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("removing %s: %w", hf.installed, err)
 		}
 	}
 

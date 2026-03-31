@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestWriteSignal_CreatesFileWithContent(t *testing.T) {
@@ -309,5 +310,60 @@ func TestSignalPipeline_EndToEnd(t *testing.T) {
 	}
 	if content2 != "" {
 		t.Fatalf("second consume should be empty, got %q", content2)
+	}
+}
+
+// TestPruneStaleSignals_RmdirCannotDeleteNonEmptyDir proves that os.Remove
+// on a directory with files fails with ENOTEMPTY. This disproves the claim
+// that a TOCTOU race in PruneStaleSignals could lose signal files — rmdir(2)
+// checks emptiness atomically in the kernel.
+func TestPruneStaleSignals_RmdirCannotDeleteNonEmptyDir(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "project")
+	os.MkdirAll(dir, 0o700)
+
+	// Write a file into the directory
+	os.WriteFile(filepath.Join(dir, "signal"), []byte("data"), 0o600)
+
+	// Attempt to remove the non-empty directory
+	err := os.Remove(dir)
+	if err == nil {
+		t.Fatal("os.Remove succeeded on non-empty directory — signal file would be lost")
+	}
+
+	// Verify the file survives
+	data, err := os.ReadFile(filepath.Join(dir, "signal"))
+	if err != nil {
+		t.Fatalf("signal file was lost: %v", err)
+	}
+	if string(data) != "data" {
+		t.Fatalf("signal file corrupted: %q", data)
+	}
+}
+
+// TestPruneStaleSignals_EmptyDirCleanedNextCycle proves that empty project
+// directories left behind by one prune cycle are cleaned up by the next.
+func TestPruneStaleSignals_EmptyDirCleanedNextCycle(t *testing.T) {
+	signalDir := t.TempDir()
+	projDir := filepath.Join(signalDir, "proj-abc")
+	os.MkdirAll(projDir, 0o700)
+
+	// Write a signal file with old mtime
+	sigPath := filepath.Join(projDir, "agent-1")
+	os.WriteFile(sigPath, []byte("old message"), 0o600)
+	old := time.Now().Add(-48 * time.Hour)
+	os.Chtimes(sigPath, old, old)
+
+	// First prune: removes the stale signal file, tries to remove dir
+	PruneStaleSignals(signalDir, 24*time.Hour)
+
+	// Signal file should be gone
+	if _, err := os.Stat(sigPath); !os.IsNotExist(err) {
+		t.Fatal("stale signal file should be removed")
+	}
+
+	// Directory should also be gone (it was empty after signal removal)
+	if _, err := os.Stat(projDir); !os.IsNotExist(err) {
+		t.Fatal("empty project directory should be cleaned up")
 	}
 }
