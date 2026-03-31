@@ -37,7 +37,7 @@ func UninstallAugment() error {
 func installAugment(homeDir string) error {
 	augmentDir := filepath.Join(homeDir, ".augment")
 	skillDir := filepath.Join(augmentDir, "skills")
-	if err := os.MkdirAll(skillDir, 0755); err != nil {
+	if err := safeMkdirAll(skillDir, homeDir, 0o755); err != nil {
 		return fmt.Errorf("creating Augment skill dir: %w", err)
 	}
 
@@ -45,7 +45,7 @@ func installAugment(homeDir string) error {
 	if err != nil {
 		return fmt.Errorf("reading embedded Augment block: %w", err)
 	}
-	if err := upsertManagedBlock(filepath.Join(skillDir, "waggle.md"), augmentBlockBegin, augmentBlockEnd, string(blockData)); err != nil {
+	if err := upsertManagedBlock(filepath.Join(skillDir, "waggle.md"), augmentBlockBegin, augmentBlockEnd, string(blockData), homeDir); err != nil {
 		return fmt.Errorf("updating Augment waggle.md: %w", err)
 	}
 
@@ -60,7 +60,7 @@ func uninstallAugment(homeDir string) error {
 	augmentDir := filepath.Join(homeDir, ".augment")
 	skillPath := filepath.Join(augmentDir, "skills", "waggle.md")
 
-	if err := removeManagedBlock(skillPath, augmentBlockBegin, augmentBlockEnd); err != nil {
+	if err := removeManagedBlock(skillPath, augmentBlockBegin, augmentBlockEnd, homeDir); err != nil {
 		return fmt.Errorf("removing managed block from Augment waggle.md: %w", err)
 	}
 

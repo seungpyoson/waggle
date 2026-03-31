@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -85,6 +86,10 @@ func route(s *Session, req protocol.Request) protocol.Response {
 	}
 }
 
+type connectResponseData struct {
+	PushToken string `json:"push_token,omitempty"`
+}
+
 func handleConnect(s *Session, req protocol.Request) protocol.Response {
 	if req.Name == "" {
 		return protocol.ErrResponse(protocol.ErrInvalidRequest, "name required")
@@ -100,10 +105,27 @@ func handleConnect(s *Session, req protocol.Request) protocol.Response {
 		return protocol.ErrResponse(protocol.ErrAlreadyConnected, "already connected")
 	}
 
+	var pushToken string
 	s.broker.mu.Lock()
 	if existing, ok := s.broker.sessions[req.Name]; ok && existing != s {
 		s.broker.mu.Unlock()
 		return protocol.ErrResponse(protocol.ErrAlreadyConnected, "session name already in use")
+	}
+	if strings.HasSuffix(req.Name, "-push") {
+		baseName := strings.TrimSuffix(req.Name, "-push")
+		expectedToken := s.broker.pushTokens[baseName]
+		if req.PushToken == "" || subtle.ConstantTimeCompare([]byte(req.PushToken), []byte(expectedToken)) != 1 {
+			s.broker.mu.Unlock()
+			return protocol.ErrResponse(protocol.ErrForbidden, "invalid push listener token")
+		}
+	} else {
+		var err error
+		pushToken, err = newPushToken()
+		if err != nil {
+			s.broker.mu.Unlock()
+			return protocol.ErrResponse(protocol.ErrInternalError, err.Error())
+		}
+		s.broker.pushTokens[req.Name] = pushToken
 	}
 	s.name = req.Name
 	s.broker.sessions[s.name] = s
@@ -112,6 +134,13 @@ func handleConnect(s *Session, req protocol.Request) protocol.Response {
 	// Publish presence.online event
 	publishPresenceEvent(s.broker, "presence.online", s.name)
 
+	if pushToken != "" {
+		data, err := json.Marshal(connectResponseData{PushToken: pushToken})
+		if err != nil {
+			return protocol.ErrResponse(protocol.ErrInternalError, err.Error())
+		}
+		return protocol.OKResponse(data)
+	}
 	return protocol.OKResponse(nil)
 }
 
@@ -795,4 +824,3 @@ func handleSpawnUpdatePID(s *Session, req protocol.Request) protocol.Response {
 
 	return protocol.OKResponse(nil)
 }
-

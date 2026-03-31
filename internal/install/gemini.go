@@ -36,7 +36,7 @@ func UninstallGemini() error {
 
 func installGemini(homeDir string) error {
 	geminiDir := filepath.Join(homeDir, ".gemini")
-	if err := os.MkdirAll(geminiDir, 0755); err != nil {
+	if err := safeMkdirAll(geminiDir, homeDir, 0o755); err != nil {
 		return fmt.Errorf("creating Gemini dir: %w", err)
 	}
 
@@ -44,7 +44,7 @@ func installGemini(homeDir string) error {
 	if err != nil {
 		return fmt.Errorf("reading embedded Gemini block: %w", err)
 	}
-	if err := upsertManagedBlock(filepath.Join(geminiDir, "GEMINI.md"), geminiBlockBegin, geminiBlockEnd, string(blockData)); err != nil {
+	if err := upsertManagedBlock(filepath.Join(geminiDir, "GEMINI.md"), geminiBlockBegin, geminiBlockEnd, string(blockData), homeDir); err != nil {
 		return fmt.Errorf("updating Gemini GEMINI.md: %w", err)
 	}
 
@@ -58,7 +58,7 @@ func installGemini(homeDir string) error {
 func uninstallGemini(homeDir string) error {
 	geminiDir := filepath.Join(homeDir, ".gemini")
 
-	if err := removeManagedBlock(filepath.Join(geminiDir, "GEMINI.md"), geminiBlockBegin, geminiBlockEnd); err != nil {
+	if err := removeManagedBlock(filepath.Join(geminiDir, "GEMINI.md"), geminiBlockBegin, geminiBlockEnd, homeDir); err != nil {
 		return fmt.Errorf("updating Gemini GEMINI.md: %w", err)
 	}
 

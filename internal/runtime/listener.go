@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/seungpyoson/waggle/internal/broker"
 	"github.com/seungpyoson/waggle/internal/client"
 	"github.com/seungpyoson/waggle/internal/config"
 	"github.com/seungpyoson/waggle/internal/protocol"
@@ -32,6 +33,7 @@ func (f *BrokerListenerFactory) NewListener(w Watch) (Listener, error) {
 	}
 	return &brokerListener{
 		socketPath: paths.Socket,
+		baseName:   w.AgentName,
 		name:       w.AgentName + "-push",
 	}, nil
 }
@@ -109,10 +111,35 @@ func (f *BrokerListenerFactory) CatchUp(w Watch, handler DeliveryHandler) error 
 
 type brokerListener struct {
 	socketPath string
+	baseName   string
 	name       string
 }
 
 func (l *brokerListener) Listen(ctx context.Context, handler DeliveryHandler) error {
+	baseConn, err := client.Connect(l.socketPath, config.Defaults.ConnectTimeout)
+	if err != nil {
+		return err
+	}
+	defer disconnectClient(baseConn)
+
+	if err := baseConn.SetDeadline(config.Defaults.ConnectTimeout); err != nil {
+		return fmt.Errorf("set base handshake deadline: %w", err)
+	}
+	baseResp, err := baseConn.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: l.baseName})
+	if err != nil {
+		return err
+	}
+	if !baseResp.OK {
+		return fmt.Errorf("%s: %s", baseResp.Code, baseResp.Error)
+	}
+	pushToken, err := pushTokenFromConnect(l.socketPath, l.baseName, baseResp.Data)
+	if err != nil {
+		return err
+	}
+	if err := baseConn.ClearDeadline(); err != nil {
+		return fmt.Errorf("clear base deadline: %w", err)
+	}
+
 	c, err := client.Connect(l.socketPath, config.Defaults.ConnectTimeout)
 	if err != nil {
 		return err
@@ -122,7 +149,12 @@ func (l *brokerListener) Listen(ctx context.Context, handler DeliveryHandler) er
 	if err := c.SetDeadline(config.Defaults.ConnectTimeout); err != nil {
 		return fmt.Errorf("set handshake deadline: %w", err)
 	}
-	resp, err := c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: l.name, PushListener: true})
+	resp, err := c.Send(protocol.Request{
+		Cmd:          protocol.CmdConnect,
+		Name:         l.name,
+		PushListener: true,
+		PushToken:    pushToken,
+	})
 	if err != nil {
 		return err
 	}
@@ -169,4 +201,34 @@ func pushedMessageToDelivery(msg client.PushedMessage) (Delivery, error) {
 		SentAt:     sentAt,
 		ReceivedAt: time.Now().UTC(),
 	}, nil
+}
+
+func disconnectClient(c *client.Client) {
+	if c == nil {
+		return
+	}
+	if err := c.SetDeadline(config.Defaults.DisconnectTimeout); err == nil {
+		_, _ = c.Send(protocol.Request{Cmd: protocol.CmdDisconnect})
+	}
+	c.Close()
+}
+
+func pushTokenFromConnect(socketPath, agent string, data json.RawMessage) (string, error) {
+	var payload struct {
+		PushToken string `json:"push_token"`
+	}
+	if len(data) > 0 {
+		if err := json.Unmarshal(data, &payload); err != nil {
+			return "", fmt.Errorf("parse connect response: %w", err)
+		}
+		if payload.PushToken != "" {
+			return payload.PushToken, nil
+		}
+	}
+	if b := broker.LookupBySocket(socketPath); b != nil {
+		if token := b.GetPushToken(agent); token != "" {
+			return token, nil
+		}
+	}
+	return "", fmt.Errorf("connect succeeded but no push token available for %s", agent)
 }

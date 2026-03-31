@@ -21,6 +21,22 @@ func TestInstallShellHook_WritesScript(t *testing.T) {
 	}
 }
 
+func TestShellHookBlock_OnlyExportsBashEnv(t *testing.T) {
+	want := strings.Join([]string{
+		shellHookBegin,
+		`[ -f "$HOME/.waggle/shell-hook.sh" ] && source "$HOME/.waggle/shell-hook.sh"`,
+		`export BASH_ENV="$HOME/.waggle/shell-hook.sh"`,
+		shellHookEnd,
+	}, "\n")
+
+	if shellHookBlock != want {
+		t.Fatalf("shellHookBlock = %q, want %q", shellHookBlock, want)
+	}
+	if strings.Contains(shellHookBlock, "WAGGLE_AGENT_PPID") {
+		t.Fatal("shellHookBlock should not export WAGGLE_AGENT_PPID")
+	}
+}
+
 func TestInstallShellHook_ZshenvWithMarkers(t *testing.T) {
 	home := t.TempDir()
 	os.WriteFile(filepath.Join(home, ".zshenv"), []byte("# existing\n"), 0o644)
@@ -38,6 +54,26 @@ func TestInstallShellHook_ZshenvWithMarkers(t *testing.T) {
 	}
 	if !strings.Contains(s, "# existing") {
 		t.Fatal("lost existing content")
+	}
+}
+
+func TestInstallShellHook_ScriptRefreshesBothMappings(t *testing.T) {
+	home := t.TempDir()
+	if err := installShellHook(home); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(home, ".waggle", "shell-hook.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	content := string(data)
+	if !strings.Contains(content, `touch "$_sm" "$_pm"`) {
+		t.Fatal("shell hook should refresh both session and pointer mappings")
+	}
+	if !strings.Contains(content, ".c-") {
+		t.Fatal("shell hook should handle consumed orphan files")
 	}
 }
 
@@ -196,5 +232,57 @@ func TestAtomicWriteFile_OverwritesExisting(t *testing.T) {
 	got, _ := os.ReadFile(path)
 	if string(got) != "new" {
 		t.Fatalf("got %q, want %q", got, "new")
+	}
+}
+
+func TestSafeWriteFile_RejectsLeafSymlink(t *testing.T) {
+	base := t.TempDir()
+	target := filepath.Join(base, "target.txt")
+	if err := os.WriteFile(target, []byte("original"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "link.txt")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+
+	err := safeWriteFile(link, []byte("mutated"), 0o644, base)
+	if err == nil {
+		t.Fatal("expected symlink rejection")
+	}
+	if !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected symlink error, got %v", err)
+	}
+
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "original" {
+		t.Fatalf("target content = %q, want %q", got, "original")
+	}
+}
+
+func TestSafeRemoveAll_RejectsLeafSymlink(t *testing.T) {
+	base := t.TempDir()
+	targetDir := filepath.Join(base, "target")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(targetDir, link); err != nil {
+		t.Fatal(err)
+	}
+
+	err := safeRemoveAll(link, base)
+	if err == nil {
+		t.Fatal("expected symlink rejection")
+	}
+	if !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected symlink error, got %v", err)
+	}
+
+	if _, err := os.Stat(targetDir); err != nil {
+		t.Fatalf("target dir should remain: %v", err)
 	}
 }

@@ -33,6 +33,7 @@ type Request struct {
 	AwaitAck        bool            `json:"await_ack,omitempty"`
 	Timeout         int             `json:"timeout,omitempty"`
 	PushListener    bool            `json:"push_listener,omitempty"`
+	PushToken       string          `json:"push_token,omitempty"`
 }
 
 // Response represents a broker → client response
@@ -67,4 +68,3 @@ func ErrResponse(code, message string) Response {
 		Error: message,
 	}
 }
-

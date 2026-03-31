@@ -296,13 +296,11 @@ func CheckAuggie(homeDir string) ([]HealthIssue, AdapterState) {
 	const repairCmd = "waggle install auggie"
 
 	// Validate ancestor path — symlinked parent directories are broken.
-	// Uses the same validateAncestorPath as install/uninstall to ensure
-	// consistent classification regardless of whether rules/ exists yet.
 	rulesDir := filepath.Dir(rulesPath)
-	if err := validateAncestorPath(rulesDir, homeDir); err != nil {
+	if hasAncestorSymlink(rulesPath, homeDir) {
 		return []HealthIssue{{
 			Asset:   rulesDir,
-			Problem: "symlink in ancestor path: " + err.Error(),
+			Problem: "symlink in ancestor path: refusing to use path with ancestor symlink",
 			Repair:  "rm the symlink and re-run " + repairCmd,
 		}}, StateBroken
 	}

@@ -29,21 +29,37 @@ try {
 
     const now = new Date();
     try { fs.utimesSync(sessionFile, now, now); } catch {}
+    try { fs.utimesSync(pointerFile, now, now); } catch {}
 
-    const sigFile = path.join(rtDir, 'signals', project, agent);
-    if (!fs.existsSync(sigFile)) process.exit(0);
+    const signalDir = path.join(rtDir, 'signals', project);
+    const sigFile = path.join(signalDir, agent);
+    const chunks = [];
 
-    // Atomic: rename then read (daemon writes to original path are safe)
-    const tmpFile = sigFile + '.c-' + process.pid;
-    try { fs.renameSync(sigFile, tmpFile); } catch { process.exit(0); }
+    try {
+        for (const entry of fs.readdirSync(signalDir)) {
+            if (!entry.startsWith(agent + '.c-')) continue;
+            const orphanFile = path.join(signalDir, entry);
+            const orphanContent = fs.readFileSync(orphanFile, 'utf8').trim();
+            try { fs.unlinkSync(orphanFile); } catch {}
+            if (orphanContent) chunks.push(orphanContent);
+        }
+    } catch {}
 
-    const content = fs.readFileSync(tmpFile, 'utf8').trim();
-    try { fs.unlinkSync(tmpFile); } catch {}
+    if (fs.existsSync(sigFile)) {
+        // Atomic: rename then read (daemon writes to original path are safe)
+        const tmpFile = sigFile + '.c-' + process.pid;
+        try {
+            fs.renameSync(sigFile, tmpFile);
+            const content = fs.readFileSync(tmpFile, 'utf8').trim();
+            try { fs.unlinkSync(tmpFile); } catch {}
+            if (content) chunks.push(content);
+        } catch {}
+    }
 
-    if (!content) process.exit(0);
+    if (chunks.length === 0) process.exit(0);
 
     console.log(JSON.stringify({
-        additionalContext: '\n' + content +
+        additionalContext: '\n' + chunks.join('\n') +
             '\nRespond to waggle messages using: ' +
             'WAGGLE_AGENT_NAME="' + agent + '" waggle send <sender> "<reply>"\n'
     }));

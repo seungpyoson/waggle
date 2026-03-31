@@ -239,7 +239,8 @@ func TestAdversarial_OwnedFile_ConcurrentInstall(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// SymlinkProtection — symlink waggle.md must not overwrite target
+// SymlinkProtection — symlink waggle.md must not overwrite target, and the
+// installer should replace the symlink with a canonical owned file.
 // ---------------------------------------------------------------------------
 func TestAdversarial_OwnedFile_SymlinkProtection(t *testing.T) {
 	tmpHome := t.TempDir()
@@ -259,9 +260,8 @@ func TestAdversarial_OwnedFile_SymlinkProtection(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Atomic write replaces the symlink directory entry without following it
 	if err := installAuggie(tmpHome); err != nil {
-		t.Fatalf("install should succeed (atomic write replaces symlink): %v", err)
+		t.Fatalf("install should replace leaf symlink: %v", err)
 	}
 
 	// Target must be untouched
@@ -270,13 +270,21 @@ func TestAdversarial_OwnedFile_SymlinkProtection(t *testing.T) {
 		t.Fatalf("symlink attack succeeded — target modified to: %q", string(data))
 	}
 
-	// waggle.md must now be a regular file
+	// waggle.md must now be a regular file with canonical content.
 	info, err := os.Lstat(rulesPath)
 	if err != nil {
 		t.Fatalf("lstat waggle.md: %v", err)
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
-		t.Fatal("waggle.md is still a symlink after install")
+		t.Fatal("waggle.md should no longer be a symlink after replacement")
+	}
+
+	got, err := os.ReadFile(rulesPath)
+	if err != nil {
+		t.Fatalf("read waggle.md: %v", err)
+	}
+	if string(got) != canonicalAuggieFileForTest(t) {
+		t.Fatal("waggle.md should be restored to canonical content")
 	}
 }
 

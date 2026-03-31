@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 	"net"
+	"strings"
 	"sync"
 	"syscall"
 
@@ -124,6 +125,9 @@ func (s *Session) doCleanup() {
 		s.broker.mu.Lock()
 		if s.broker.sessions[s.name] == s {
 			delete(s.broker.sessions, s.name)
+			if !strings.HasSuffix(s.name, "-push") {
+				delete(s.broker.pushTokens, s.name)
+			}
 			shouldPublish = true
 		}
 		s.broker.mu.Unlock()
@@ -139,5 +143,3 @@ func (s *Session) doCleanup() {
 
 	s.conn.Close()
 }
-
-

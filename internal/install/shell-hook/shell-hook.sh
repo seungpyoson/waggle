@@ -16,6 +16,15 @@ __waggle_check() {
     { read -r _wa; read -r _wp; } < "$_sm" 2>/dev/null || return 0
     [ -n "$_wa" ] || return 0
     local _ws="$_wd/signals/$_wp/$_wa"
+    if [ -n "${ZSH_VERSION-}" ]; then
+        setopt localoptions nonomatch
+    fi
+    local _orphan
+    for _orphan in "$_ws".c-*; do
+        [ -f "$_orphan" ] || continue
+        cat "$_orphan" >&2 2>/dev/null
+        rm -f "$_orphan" 2>/dev/null
+    done
     if [ -f "$_ws" ]; then
         # Atomic: rename then read. If daemon writes after mv, new file at original path.
         local _wt="$_ws.c-$$"
@@ -24,6 +33,7 @@ __waggle_check() {
             rm -f "$_wt" 2>/dev/null
         fi
     fi
-    touch "$_sm" 2>/dev/null
+    touch "$_sm" "$_pm" 2>/dev/null
 }
 __waggle_check
+unset -f __waggle_check 2>/dev/null

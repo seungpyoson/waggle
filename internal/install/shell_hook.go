@@ -18,7 +18,6 @@ const (
 
 var shellHookBlock = strings.Join([]string{
 	shellHookBegin,
-	`export WAGGLE_AGENT_PPID="${WAGGLE_AGENT_PPID:-$PPID}"`,
 	`[ -f "$HOME/.waggle/shell-hook.sh" ] && source "$HOME/.waggle/shell-hook.sh"`,
 	`export BASH_ENV="$HOME/.waggle/shell-hook.sh"`,
 	shellHookEnd,
@@ -44,7 +43,7 @@ func UninstallShellHook() error {
 
 func installShellHook(homeDir string) error {
 	waggleDir := filepath.Join(homeDir, ".waggle")
-	if err := os.MkdirAll(waggleDir, 0o700); err != nil {
+	if err := safeMkdirAll(waggleDir, homeDir, 0o700); err != nil {
 		return fmt.Errorf("create dir: %w", err)
 	}
 	hookData, err := shellHookFS.ReadFile("shell-hook/shell-hook.sh")
@@ -52,13 +51,7 @@ func installShellHook(homeDir string) error {
 		return fmt.Errorf("read embedded hook: %w", err)
 	}
 	hookPath := filepath.Join(waggleDir, "shell-hook.sh")
-	if info, err := os.Lstat(hookPath); err == nil && info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("refusing to overwrite symlink: %s", hookPath)
-	}
-	if hasAncestorSymlink(hookPath, homeDir) {
-		return fmt.Errorf("refusing to write through ancestor symlink: %s", hookPath)
-	}
-	if err := atomicWriteFile(hookPath, hookData, 0o644); err != nil {
+	if err := safeWriteFile(hookPath, hookData, 0o644, homeDir); err != nil {
 		return fmt.Errorf("write hook: %w", err)
 	}
 	for _, rc := range []string{".zshenv", ".bashrc"} {
@@ -73,7 +66,7 @@ func uninstallShellHook(homeDir string) error {
 	for _, rc := range []string{".zshenv", ".bashrc"} {
 		removeShellHookBlock(filepath.Join(homeDir, rc), homeDir)
 	}
-	os.Remove(filepath.Join(homeDir, ".waggle", "shell-hook.sh"))
+	_ = safeRemove(filepath.Join(homeDir, ".waggle", "shell-hook.sh"), homeDir)
 	return nil
 }
 
@@ -102,7 +95,7 @@ func upsertShellHookBlock(path, homeDir string) error {
 		content += "\n"
 	}
 	content += shellHookBlock + "\n"
-	return atomicWriteFile(path, []byte(content), perm)
+	return safeWriteFile(path, []byte(content), perm, homeDir)
 }
 
 func removeShellHookBlock(path, homeDir string) {
@@ -141,68 +134,5 @@ func removeShellHookBlock(path, homeDir string) {
 			filtered = append(filtered, line)
 		}
 	}
-	_ = atomicWriteFile(path, []byte(strings.Join(filtered, "\n")), perm)
-}
-
-// atomicWriteFile writes data to path atomically via temp+rename.
-// Prevents TOCTOU attacks where the target is swapped between check and write.
-func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, ".waggle-tmp-*")
-	if err != nil {
-		return fmt.Errorf("create temp: %w", err)
-	}
-	tmpName := tmp.Name()
-	defer func() {
-		if tmpName != "" {
-			os.Remove(tmpName)
-		}
-	}()
-
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return fmt.Errorf("write temp: %w", err)
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return fmt.Errorf("sync temp: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close temp: %w", err)
-	}
-	if err := os.Chmod(tmpName, perm); err != nil {
-		return fmt.Errorf("chmod temp: %w", err)
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return fmt.Errorf("rename temp: %w", err)
-	}
-	tmpName = "" // success — don't remove in defer
-	return nil
-}
-
-// hasAncestorSymlink checks whether any directory component between root and path
-// is a symlink. Only checks components below root to avoid false positives on
-// system-level symlinks (e.g., /var → /private/var on macOS).
-func hasAncestorSymlink(path, root string) bool {
-	root = filepath.Clean(root)
-	path = filepath.Clean(path)
-	rel, err := filepath.Rel(root, path)
-	if err != nil {
-		return false
-	}
-	// Reject paths that escape root via ".." components.
-	if strings.HasPrefix(rel, "..") {
-		return true
-	}
-	current := root
-	for _, part := range strings.Split(filepath.Dir(rel), string(filepath.Separator)) {
-		if part == "." {
-			continue
-		}
-		current = filepath.Join(current, part)
-		if info, err := os.Lstat(current); err == nil && info.Mode()&os.ModeSymlink != 0 {
-			return true
-		}
-	}
-	return false
+	_ = safeWriteFile(path, []byte(strings.Join(filtered, "\n")), perm, homeDir)
 }

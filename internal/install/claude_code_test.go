@@ -312,6 +312,28 @@ func TestInstall_PushHookCreated(t *testing.T) {
 	}
 }
 
+func TestInstall_PushHookRecoversOrphansAndRefreshesBothMappings(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	if err := installClaudeCode(tmpHome); err != nil {
+		t.Fatalf("install failed: %v", err)
+	}
+
+	pushPath := filepath.Join(tmpHome, ".claude", "hooks", "waggle-push.js")
+	data, err := os.ReadFile(pushPath)
+	if err != nil {
+		t.Fatalf("read push hook: %v", err)
+	}
+
+	content := string(data)
+	if !strings.Contains(content, "fs.utimesSync(pointerFile, now, now)") {
+		t.Fatal("push hook should refresh pointer mapping alongside session mapping")
+	}
+	if !strings.Contains(content, "fs.readdirSync(") {
+		t.Fatal("push hook should recover orphaned consumed signal files")
+	}
+}
+
 func TestInstall_PreToolUseHookRegistered(t *testing.T) {
 	tmpHome := t.TempDir()
 
