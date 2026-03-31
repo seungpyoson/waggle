@@ -2,6 +2,8 @@ package adapter
 
 import (
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -170,5 +172,35 @@ func TestAdapterBootstrap_SkipsGracefullyWithoutProjectContext(t *testing.T) {
 	}
 	if result.Tool != "codex" {
 		t.Fatalf("Bootstrap should still set Tool even when skipped, got %q", result.Tool)
+	}
+}
+
+func TestWritePPIDMapping(t *testing.T) {
+	dir := t.TempDir()
+	if err := WritePPIDMapping(dir, 12345, "claude-99"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "agent-ppid-12345"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(data)); got != "claude-99" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestResolveAgentPPID_PrefersEnvVar(t *testing.T) {
+	t.Setenv("WAGGLE_AGENT_PPID", "99999")
+	got := resolveAgentPPID()
+	if got != 99999 {
+		t.Fatalf("got %d, want 99999", got)
+	}
+}
+
+func TestResolveAgentPPID_FallsBackToGetppid(t *testing.T) {
+	t.Setenv("WAGGLE_AGENT_PPID", "")
+	got := resolveAgentPPID()
+	if got != os.Getppid() {
+		t.Fatalf("got %d, want %d", got, os.Getppid())
 	}
 }

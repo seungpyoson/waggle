@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/seungpyoson/waggle/internal/broker"
@@ -76,6 +77,8 @@ func Bootstrap(input BootstrapInput) (BootstrapResult, error) {
 	}); err != nil {
 		return BootstrapResult{}, err
 	}
+
+	_ = WritePPIDMapping(runtimePaths.RuntimeDir, resolveAgentPPID(), agentName)
 
 	records, err := store.Unread(projectID, agentName)
 	if err != nil {
@@ -194,6 +197,30 @@ func sanitizeTTY(tty string) string {
 		return ""
 	}
 	return sanitizeToken(base)
+}
+
+// WritePPIDMapping writes agent name keyed by PID for shell hook discovery.
+func WritePPIDMapping(runtimeDir string, ppid int, agentName string) error {
+	if err := os.MkdirAll(runtimeDir, 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(
+		filepath.Join(runtimeDir, fmt.Sprintf("agent-ppid-%d", ppid)),
+		[]byte(agentName+"\n"),
+		0o600,
+	)
+}
+
+// resolveAgentPPID returns the agent process PID for PPID mapping.
+// Prefers WAGGLE_AGENT_PPID env var (set by callers who know the real agent PID)
+// over os.Getppid() (which returns the intermediate shell, not the agent).
+func resolveAgentPPID() int {
+	if ep := os.Getenv("WAGGLE_AGENT_PPID"); ep != "" {
+		if p, err := strconv.Atoi(ep); err == nil && p > 0 {
+			return p
+		}
+	}
+	return os.Getppid()
 }
 
 func sanitizeToken(v string) string {
