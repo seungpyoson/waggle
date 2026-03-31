@@ -50,7 +50,11 @@ func installShellHook(homeDir string) error {
 	if err != nil {
 		return fmt.Errorf("read embedded hook: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(waggleDir, "shell-hook.sh"), hookData, 0o644); err != nil {
+	hookPath := filepath.Join(waggleDir, "shell-hook.sh")
+	if info, err := os.Lstat(hookPath); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing to overwrite symlink: %s", hookPath)
+	}
+	if err := os.WriteFile(hookPath, hookData, 0o644); err != nil {
 		return fmt.Errorf("write hook: %w", err)
 	}
 	for _, rc := range []string{".zshenv", ".bashrc"} {

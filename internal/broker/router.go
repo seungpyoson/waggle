@@ -695,10 +695,25 @@ func handleAck(s *Session, req protocol.Request) protocol.Response {
 
 func handlePresence(s *Session) protocol.Response {
 	s.broker.mu.RLock()
+	// Collect all raw session names first
+	allNames := make(map[string]bool, len(s.broker.sessions))
+	for name := range s.broker.sessions {
+		allNames[name] = true
+	}
+	// Build presence list, hiding -push listeners only when the base agent exists
 	seen := make(map[string]bool)
 	agents := make([]map[string]string, 0, len(s.broker.sessions))
 	for name := range s.broker.sessions {
-		displayName := strings.TrimSuffix(name, "-push")
+		displayName := name
+		if base := strings.TrimSuffix(name, "-push"); base != name {
+			// This is a -push listener. Hide it if the base agent session exists.
+			if allNames[base] {
+				continue
+			}
+			// Base agent not connected — show the -push listener under the base name
+			// so the agent is still discoverable.
+			displayName = base
+		}
 		if seen[displayName] {
 			continue
 		}

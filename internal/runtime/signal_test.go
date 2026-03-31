@@ -34,13 +34,26 @@ func TestWriteSignal_Appends(t *testing.T) {
 
 func TestWriteSignal_DropsWhenOverCap(t *testing.T) {
 	dir := t.TempDir()
-	// First write: long body exceeds small cap
-	WriteSignal(dir, "proj-test", "a", "alice", strings.Repeat("x", 100), 50)
-	// File is ~133 bytes > 50 cap
-	WriteSignal(dir, "proj-test", "a", "bob", "should-be-dropped", 50)
+	// First write fits (short message ~38 bytes, cap 100)
+	WriteSignal(dir, "proj-test", "a", "alice", "hello", 100)
 	data, _ := os.ReadFile(filepath.Join(dir, "proj-test", "a"))
+	if !strings.Contains(string(data), "alice") {
+		t.Fatalf("first write should succeed, got: %q", data)
+	}
+	// Second write pushes past cap
+	WriteSignal(dir, "proj-test", "a", "bob", strings.Repeat("x", 100), 100)
+	data, _ = os.ReadFile(filepath.Join(dir, "proj-test", "a"))
 	if strings.Contains(string(data), "bob") {
 		t.Fatalf("second write should be dropped, got: %q", data)
+	}
+}
+
+func TestWriteSignal_DropsOversizedFirstWrite(t *testing.T) {
+	dir := t.TempDir()
+	// Even first write rejected if message exceeds cap
+	WriteSignal(dir, "proj-test", "a", "alice", strings.Repeat("x", 100), 50)
+	if _, err := os.Stat(filepath.Join(dir, "proj-test", "a")); err == nil {
+		t.Fatal("oversized first write should be dropped")
 	}
 }
 
@@ -60,7 +73,7 @@ func TestConsumeSignal_AtomicReadAndDelete(t *testing.T) {
 	dir := t.TempDir()
 	WriteSignal(dir, "proj-test", "a", "alice", "hello", 65536)
 	projDir := filepath.Join(dir, "proj-test")
-	content, err := ConsumeSignal(projDir, "a")
+	content, err := ConsumeSignal(dir, "proj-test", "a")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +92,7 @@ func TestConsumeSignal_AtomicReadAndDelete(t *testing.T) {
 }
 
 func TestConsumeSignal_NoFile_Empty(t *testing.T) {
-	content, err := ConsumeSignal(t.TempDir(), "nope")
+	content, err := ConsumeSignal(t.TempDir(), "no-proj", "nope")
 	if err != nil || content != "" {
 		t.Fatalf("expected empty, got %q err=%v", content, err)
 	}

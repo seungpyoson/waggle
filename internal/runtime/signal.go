@@ -18,7 +18,11 @@ func WriteSignal(signalDir, projectID, agentName, fromName, body string, maxByte
 	path := filepath.Join(dir, agentName)
 	msg := fmt.Sprintf("📨 waggle message from %s: %s\n", fromName, body)
 	if maxBytes > 0 {
-		if info, err := os.Stat(path); err == nil && info.Size()+int64(len(msg)) >= maxBytes {
+		existing := int64(0)
+		if info, err := os.Stat(path); err == nil {
+			existing = info.Size()
+		}
+		if existing+int64(len(msg)) >= maxBytes {
 			return nil
 		}
 	}
@@ -33,8 +37,8 @@ func WriteSignal(signalDir, projectID, agentName, fromName, body string, maxByte
 
 // ConsumeSignal atomically reads and removes the signal file.
 // Rename-then-read ensures no data loss if the daemon writes during consume.
-func ConsumeSignal(signalDir, agentName string) (string, error) {
-	path := filepath.Join(signalDir, agentName)
+func ConsumeSignal(signalDir, projectID, agentName string) (string, error) {
+	path := filepath.Join(signalDir, projectID, agentName)
 	tmp := fmt.Sprintf("%s.consuming-%d", path, time.Now().UnixNano())
 	if err := os.Rename(path, tmp); err != nil {
 		if os.IsNotExist(err) {
@@ -67,6 +71,39 @@ func PruneStaleFiles(dir, prefix string, maxAge time.Duration) {
 		}
 		if info.ModTime().Before(cutoff) {
 			os.Remove(filepath.Join(dir, e.Name()))
+		}
+	}
+}
+
+// PruneStaleSignals removes signal files older than maxAge across all project subdirectories.
+func PruneStaleSignals(signalDir string, maxAge time.Duration) {
+	projects, err := os.ReadDir(signalDir)
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-maxAge)
+	for _, proj := range projects {
+		if !proj.IsDir() {
+			continue
+		}
+		projPath := filepath.Join(signalDir, proj.Name())
+		agents, err := os.ReadDir(projPath)
+		if err != nil {
+			continue
+		}
+		for _, agent := range agents {
+			info, err := agent.Info()
+			if err != nil {
+				continue
+			}
+			if info.ModTime().Before(cutoff) {
+				os.Remove(filepath.Join(projPath, agent.Name()))
+			}
+		}
+		// Remove empty project directories
+		remaining, _ := os.ReadDir(projPath)
+		if len(remaining) == 0 {
+			os.Remove(projPath)
 		}
 	}
 }

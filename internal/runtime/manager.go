@@ -775,6 +775,7 @@ func (m *Manager) runMaintenanceLoop(ctx context.Context) {
 			}
 			if m.signalDir != "" {
 				PruneStaleFiles(filepath.Dir(m.signalDir), "agent-ppid-", 24*time.Hour)
+				PruneStaleSignals(m.signalDir, 24*time.Hour)
 			}
 			if err := m.refreshTrackedDeliveryStates(); err != nil {
 				hadErr = true
