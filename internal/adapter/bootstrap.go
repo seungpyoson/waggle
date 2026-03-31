@@ -78,7 +78,7 @@ func Bootstrap(input BootstrapInput) (BootstrapResult, error) {
 		return BootstrapResult{}, err
 	}
 
-	_ = WritePPIDMapping(runtimePaths.RuntimeDir, resolveAgentPPID(), agentName)
+	_ = WritePPIDMapping(runtimePaths.RuntimeDir, resolveAgentPPID(), agentName, projectID)
 
 	records, err := store.Unread(projectID, agentName)
 	if err != nil {
@@ -106,10 +106,10 @@ func Bootstrap(input BootstrapInput) (BootstrapResult, error) {
 
 func ResolveAgentName(tool, explicit, tty string, ppid, pid int) string {
 	if explicit != "" {
-		return explicit
+		return sanitizeToken(explicit)
 	}
 	if env := os.Getenv("WAGGLE_AGENT_NAME"); env != "" {
-		return env
+		return sanitizeToken(env)
 	}
 
 	tool = sanitizeToken(tool)
@@ -199,14 +199,14 @@ func sanitizeTTY(tty string) string {
 	return sanitizeToken(base)
 }
 
-// WritePPIDMapping writes agent name keyed by PID for shell hook discovery.
-func WritePPIDMapping(runtimeDir string, ppid int, agentName string) error {
+// WritePPIDMapping writes agent name and project ID keyed by PID for shell hook discovery.
+func WritePPIDMapping(runtimeDir string, ppid int, agentName, projectID string) error {
 	if err := os.MkdirAll(runtimeDir, 0o700); err != nil {
 		return err
 	}
 	return os.WriteFile(
 		filepath.Join(runtimeDir, fmt.Sprintf("agent-ppid-%d", ppid)),
-		[]byte(agentName+"\n"),
+		[]byte(agentName+"\n"+projectID+"\n"),
 		0o600,
 	)
 }

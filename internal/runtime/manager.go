@@ -479,7 +479,7 @@ func (m *Manager) notifyRecord(projectID, agentName string, messageID int64, tit
 		}
 	}
 	if m.signalDir != "" {
-		_ = WriteSignal(m.signalDir, agentName, senderFromTitle(title), body, config.Defaults.SignalMaxBytes)
+		_ = WriteSignal(m.signalDir, projectID, agentName, senderFromTitle(title), body, config.Defaults.SignalMaxBytes)
 	}
 	if err := m.store.MarkNotified(projectID, agentName, messageID, time.Now().UTC()); err != nil {
 		return err

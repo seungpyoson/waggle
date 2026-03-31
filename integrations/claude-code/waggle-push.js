@@ -16,10 +16,12 @@ const mapFile = path.join(rtDir, 'agent-ppid-' + ppid);
 try {
     if (!fs.existsSync(mapFile)) process.exit(0);
 
-    const agent = fs.readFileSync(mapFile, 'utf8').trim().split('\n')[0];
+    const lines = fs.readFileSync(mapFile, 'utf8').trim().split('\n');
+    const agent = lines[0];
+    const project = lines[1] || '';
     if (!agent) process.exit(0);
 
-    const sigFile = path.join(rtDir, 'signals', agent);
+    const sigFile = path.join(rtDir, 'signals', project, agent);
     if (!fs.existsSync(sigFile)) process.exit(0);
 
     // Atomic: rename then read (daemon writes to original path are safe)

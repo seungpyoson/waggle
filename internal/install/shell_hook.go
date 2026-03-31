@@ -70,23 +70,47 @@ func uninstallShellHook(homeDir string) error {
 }
 
 func upsertShellHookBlock(path string) error {
+	// Refuse to follow symlinks — prevents write-through attacks.
+	if linfo, err := os.Lstat(path); err == nil && linfo.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing to modify symlink: %s", path)
+	}
+
 	existing, _ := os.ReadFile(path)
 	content := string(existing)
 	if strings.Contains(content, shellHookBegin) {
 		return nil // already present
 	}
+
+	// Preserve original file permissions; default 0644 for new files.
+	perm := os.FileMode(0o644)
+	if info, err := os.Stat(path); err == nil {
+		perm = info.Mode().Perm()
+	}
+
 	if len(content) > 0 && !strings.HasSuffix(content, "\n") {
 		content += "\n"
 	}
 	content += shellHookBlock + "\n"
-	return os.WriteFile(path, []byte(content), 0o644)
+	return os.WriteFile(path, []byte(content), perm)
 }
 
 func removeShellHookBlock(path string) {
+	// Refuse to follow symlinks.
+	if linfo, err := os.Lstat(path); err == nil && linfo.Mode()&os.ModeSymlink != 0 {
+		return
+	}
+
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return
 	}
+
+	// Preserve original file permissions.
+	perm := os.FileMode(0o644)
+	if info, err := os.Stat(path); err == nil {
+		perm = info.Mode().Perm()
+	}
+
 	lines := strings.Split(string(data), "\n")
 	var filtered []string
 	inBlock := false
@@ -103,5 +127,5 @@ func removeShellHookBlock(path string) {
 			filtered = append(filtered, line)
 		}
 	}
-	os.WriteFile(path, []byte(strings.Join(filtered, "\n")), 0o644)
+	os.WriteFile(path, []byte(strings.Join(filtered, "\n")), perm)
 }

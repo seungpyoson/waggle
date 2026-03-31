@@ -14,18 +14,18 @@ import (
 func TestResolveAgentNamePrefersExplicit(t *testing.T) {
 	t.Setenv("WAGGLE_AGENT_NAME", "env-agent")
 
-	got := ResolveAgentName("codex", "explicit-agent", "/dev/ttys001", 123, 456)
+	got := ResolveAgentName("codex", "Explicit-Agent!", "/dev/ttys001", 123, 456)
 	if got != "explicit-agent" {
-		t.Fatalf("ResolveAgentName() = %q, want explicit-agent", got)
+		t.Fatalf("ResolveAgentName() = %q, want explicit-agent (sanitized)", got)
 	}
 }
 
 func TestResolveAgentNameUsesEnvBeforeTTY(t *testing.T) {
-	t.Setenv("WAGGLE_AGENT_NAME", "env-agent")
+	t.Setenv("WAGGLE_AGENT_NAME", "Env Agent!")
 
 	got := ResolveAgentName("codex", "", "/dev/ttys001", 123, 456)
 	if got != "env-agent" {
-		t.Fatalf("ResolveAgentName() = %q, want env-agent", got)
+		t.Fatalf("ResolveAgentName() = %q, want env-agent (sanitized)", got)
 	}
 }
 
@@ -177,15 +177,22 @@ func TestAdapterBootstrap_SkipsGracefullyWithoutProjectContext(t *testing.T) {
 
 func TestWritePPIDMapping(t *testing.T) {
 	dir := t.TempDir()
-	if err := WritePPIDMapping(dir, 12345, "claude-99"); err != nil {
+	if err := WritePPIDMapping(dir, 12345, "claude-99", "proj-abc"); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(filepath.Join(dir, "agent-ppid-12345"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.TrimSpace(string(data)); got != "claude-99" {
-		t.Fatalf("got %q", got)
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 lines, got %d: %q", len(lines), data)
+	}
+	if lines[0] != "claude-99" {
+		t.Fatalf("agent = %q, want claude-99", lines[0])
+	}
+	if lines[1] != "proj-abc" {
+		t.Fatalf("project = %q, want proj-abc", lines[1])
 	}
 }
 
