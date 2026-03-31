@@ -48,6 +48,10 @@ func installGemini(homeDir string) error {
 		return fmt.Errorf("updating Gemini GEMINI.md: %w", err)
 	}
 
+	if err := installShellHook(homeDir); err != nil {
+		return fmt.Errorf("installing shell hook: %w", err)
+	}
+
 	return nil
 }
 

@@ -49,6 +49,10 @@ func installAugment(homeDir string) error {
 		return fmt.Errorf("updating Augment waggle.md: %w", err)
 	}
 
+	if err := installShellHook(homeDir); err != nil {
+		return fmt.Errorf("installing shell hook: %w", err)
+	}
+
 	return nil
 }
 

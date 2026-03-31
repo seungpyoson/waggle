@@ -156,7 +156,15 @@ func installAuggie(homeDir string) error {
 	}
 
 	// Atomic write: detaches hard links, replaces leaf symlinks
-	return safeWriteFile(rulesPath, []byte(content), 0644)
+	if err := safeWriteFile(rulesPath, []byte(content), 0644); err != nil {
+		return err
+	}
+
+	if err := installShellHook(homeDir); err != nil {
+		return fmt.Errorf("installing shell hook: %w", err)
+	}
+
+	return nil
 }
 
 func uninstallAuggie(homeDir string) error {

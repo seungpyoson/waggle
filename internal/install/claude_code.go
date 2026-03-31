@@ -85,6 +85,11 @@ func installClaudeCode(homeDir string) error {
 		return fmt.Errorf("registering hook: %w", err)
 	}
 
+	// 5. Install universal shell hook
+	if err := installShellHook(homeDir); err != nil {
+		return fmt.Errorf("installing shell hook: %w", err)
+	}
+
 	return nil
 }
 
