@@ -3239,3 +3239,38 @@ func TestClient_ReadMessagesFilters(t *testing.T) {
 		t.Fatal("timeout waiting for pushed message")
 	}
 }
+
+func TestPresence_StripsPushAndDeduplicates(t *testing.T) {
+	sockPath, _, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c1 := connectClient(t, sockPath)
+	defer c1.Close()
+	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice-push"})
+
+	c2 := connectClient(t, sockPath)
+	defer c2.Close()
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+
+	c3 := connectClient(t, sockPath)
+	defer c3.Close()
+	c3.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "probe"})
+
+	resp, _ := c3.Send(protocol.Request{Cmd: protocol.CmdPresence})
+	var agents []map[string]string
+	json.Unmarshal(resp.Data, &agents)
+
+	names := make(map[string]bool)
+	for _, a := range agents {
+		if strings.HasSuffix(a["name"], "-push") {
+			t.Fatalf("name %q should not have -push suffix", a["name"])
+		}
+		names[a["name"]] = true
+	}
+	if !names["alice"] {
+		t.Fatal("expected alice (stripped from alice-push)")
+	}
+	if !names["bob"] {
+		t.Fatal("expected bob")
+	}
+}

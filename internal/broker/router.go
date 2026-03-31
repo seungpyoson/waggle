@@ -695,13 +695,18 @@ func handleAck(s *Session, req protocol.Request) protocol.Response {
 
 func handlePresence(s *Session) protocol.Response {
 	s.broker.mu.RLock()
+	seen := make(map[string]bool)
 	agents := make([]map[string]string, 0, len(s.broker.sessions))
 	for name := range s.broker.sessions {
-		agents = append(agents, map[string]string{"name": name, "state": "online"})
+		displayName := strings.TrimSuffix(name, "-push")
+		if seen[displayName] {
+			continue
+		}
+		seen[displayName] = true
+		agents = append(agents, map[string]string{"name": displayName, "state": "online"})
 	}
 	s.broker.mu.RUnlock()
 
-	// Sort by name for deterministic output
 	sort.Slice(agents, func(i, j int) bool { return agents[i]["name"] < agents[j]["name"] })
 
 	return protocol.OKResponse(mustMarshal(agents))
