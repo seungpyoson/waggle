@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -66,6 +67,7 @@ type Manager struct {
 	lastDeliveryErr map[string]error
 	workers         map[watchKey]*watchWorker
 	recentErrors    []ErrorEntry // ring buffer, capped at config.Defaults.RuntimeRecentErrorCap
+	signalDir       string       // set via SetSignalDir; enables shell-hook signal files
 }
 
 func NewManager(store *Store, factory ListenerFactory, notifier Notifier) *Manager {
@@ -80,6 +82,11 @@ func NewManager(store *Store, factory ListenerFactory, notifier Notifier) *Manag
 		lastDeliveryErr: make(map[string]error),
 		workers:         make(map[watchKey]*watchWorker),
 	}
+}
+
+// SetSignalDir enables signal file writing for shell-hook delivery.
+func (m *Manager) SetSignalDir(dir string) {
+	m.signalDir = dir
 }
 
 func (m *Manager) Start(ctx context.Context) error {
@@ -471,6 +478,9 @@ func (m *Manager) notifyRecord(projectID, agentName string, messageID int64, tit
 			return err
 		}
 	}
+	if m.signalDir != "" {
+		_ = WriteSignal(m.signalDir, agentName, senderFromTitle(title), body, config.Defaults.SignalMaxBytes)
+	}
 	if err := m.store.MarkNotified(projectID, agentName, messageID, time.Now().UTC()); err != nil {
 		return err
 	}
@@ -592,6 +602,14 @@ func notificationTitle(d Delivery) string {
 		return "New waggle message"
 	}
 	return fmt.Sprintf("Message from %s", d.FromName)
+}
+
+func senderFromTitle(title string) string {
+	const prefix = "Message from "
+	if strings.HasPrefix(title, prefix) {
+		return strings.TrimPrefix(title, prefix)
+	}
+	return "unknown"
 }
 
 type deliveryKey struct {
@@ -754,6 +772,9 @@ func (m *Manager) runMaintenanceLoop(ctx context.Context) {
 			if _, err := m.store.PruneDeliveryRecords(now.Add(-config.Defaults.RuntimeDeliveryRetention)); err != nil {
 				hadErr = true
 				m.captureDeliveryError("maintenance", fmt.Errorf("prune delivery records: %w", err))
+			}
+			if m.signalDir != "" {
+				PruneStaleFiles(filepath.Dir(m.signalDir), "agent-ppid-", 24*time.Hour)
 			}
 			if err := m.refreshTrackedDeliveryStates(); err != nil {
 				hadErr = true

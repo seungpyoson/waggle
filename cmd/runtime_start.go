@@ -42,6 +42,7 @@ var runtimeStartCmd = &cobra.Command{
 			defer store.Close()
 
 			manager := rt.NewManager(store, rt.NewBrokerListenerFactory(), rt.NewCommandNotifier())
+			manager.SetSignalDir(runtimePaths.RuntimeSignalDir)
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 			return rt.RunDaemon(ctx, runtimePaths, manager)
