@@ -214,7 +214,9 @@ func NewPaths(projectID string) Paths {
 	}
 
 	f := fnv.New64a()
-	_, _ = f.Write([]byte(projectID))
+	if _, err := f.Write([]byte(projectID)); err != nil {
+		panic(fmt.Sprintf("hash project ID: %v", err))
+	}
 	hash := fmt.Sprintf("%012x", f.Sum64()&0xffffffffffff)
 
 	dataDir := filepath.Join(home, Defaults.DirName, "data", hash)

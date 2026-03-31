@@ -1,12 +1,17 @@
 package runtime
 
 import (
+	"errors"
 	"fmt"
+	"hash/fnv"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/seungpyoson/waggle/internal/fsutil"
 )
 
 // ansiPattern matches ANSI escape sequences:
@@ -15,32 +20,23 @@ import (
 // - DCS: ESC P ... ST
 // - Simple ESC: ESC + letter
 var ansiPattern = regexp.MustCompile("(?:" +
-	`\x1b\[[0-9;?!>"' ]*[A-Za-z@]` + "|" + // CSI with intermediate bytes
+	`\x1b\[[\x20-\x3f]*[A-Za-z@]` + "|" + // CSI with full ECMA-48 parameter/intermediate bytes
 	`\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)` + "|" + // OSC terminated by BEL or ST
 	`\x1bP[^\x1b]*(?:\x1b\\)?` + "|" + // DCS with payload + optional ST
 	`\x1b[A-Za-z]` + // Simple ESC sequences
 	")")
 
-// SanitizeProjectIDForPath transforms a project ID into a filesystem-safe directory name.
-// Replaces non-alphanumeric characters (slashes, colons, dots) with hyphens and collapses runs.
-// Deterministic: same input always produces same output.
-// Handles both git SHA hashes ("abcdef01") and path-based IDs ("path:/Users/foo").
-func SanitizeProjectIDForPath(id string) string {
-	if id == "" {
+var ErrSignalCapExceeded = errors.New("signal cap exceeded")
+
+// ProjectPathKey returns the opaque filesystem key for a project ID.
+// It uses a 64-bit FNV-1a hash truncated to 12 lowercase hex characters.
+func ProjectPathKey(rawID string) string {
+	if rawID == "" {
 		return ""
 	}
-	var b strings.Builder
-	prevDash := false
-	for _, r := range id {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' {
-			b.WriteRune(r)
-			prevDash = false
-		} else if !prevDash {
-			b.WriteByte('-')
-			prevDash = true
-		}
-	}
-	return strings.Trim(b.String(), "-")
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(rawID))
+	return fmt.Sprintf("%012x", h.Sum64()&0xffffffffffff)
 }
 
 // stripANSI removes ANSI escape sequences and dangerous control characters from s.
@@ -60,20 +56,38 @@ func stripANSI(s string) string {
 }
 
 // WriteSignal appends a formatted message to the agent's signal file.
-// Drops the write silently if the file would exceed maxBytes after append.
-// Sanitizes projectID (path traversal) and strips ANSI escapes from body (terminal hijack).
+// Returns ErrSignalCapExceeded if the file would exceed maxBytes after append.
+// Hashes projectID to an opaque path key, sanitizes agentName, and strips ANSI escapes from body.
 func WriteSignal(signalDir, projectID, agentName, fromName, body string, maxBytes int64) error {
-	safeProjectID := SanitizeProjectIDForPath(projectID)
-	if safeProjectID == "" {
-		return fmt.Errorf("empty project ID after sanitization")
+	projectKey := ProjectPathKey(projectID)
+	if projectKey == "" {
+		return fmt.Errorf("empty project ID")
+	}
+	safeAgentName := SanitizeAgentName(agentName)
+	if safeAgentName == "" {
+		return fmt.Errorf("empty agent name after sanitization")
 	}
 	body = stripANSI(body)
 	fromName = stripANSI(fromName)
-	dir := filepath.Join(signalDir, safeProjectID)
+	dir := filepath.Join(signalDir, projectKey)
+	signalRoot := filepath.Dir(signalDir)
+	if fsutil.HasAncestorSymlink(dir, signalRoot) {
+		return fmt.Errorf("refusing to create signal dir with ancestor symlink: %s", dir)
+	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create signal dir: %w", err)
 	}
-	path := filepath.Join(dir, agentName)
+	path := filepath.Join(dir, safeAgentName)
+	if fsutil.HasAncestorSymlink(path, signalRoot) {
+		return fmt.Errorf("refusing to write signal through ancestor symlink: %s", path)
+	}
+	if info, err := os.Lstat(path); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("refusing to overwrite symlink: %s", path)
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("lstat signal: %w", err)
+	}
 	msg := fmt.Sprintf("📨 waggle message from %s: %s\n", fromName, body)
 	if maxBytes > 0 {
 		existing := int64(0)
@@ -81,7 +95,8 @@ func WriteSignal(signalDir, projectID, agentName, fromName, body string, maxByte
 			existing = info.Size()
 		}
 		if existing+int64(len(msg)) >= maxBytes {
-			return nil
+			log.Printf("dropping signal for %q/%q: cap %d bytes exceeded", projectKey, safeAgentName, maxBytes)
+			return ErrSignalCapExceeded
 		}
 	}
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
@@ -93,33 +108,11 @@ func WriteSignal(signalDir, projectID, agentName, fromName, body string, maxByte
 	return err
 }
 
-// ConsumeSignal atomically reads and removes the signal file.
-// Rename-then-read ensures no data loss if the daemon writes during consume.
-func ConsumeSignal(signalDir, projectID, agentName string) (string, error) {
-	safeProjectID := SanitizeProjectIDForPath(projectID)
-	if safeProjectID == "" {
-		return "", fmt.Errorf("empty project ID after sanitization")
-	}
-	path := filepath.Join(signalDir, safeProjectID, agentName)
-	tmp := fmt.Sprintf("%s.consuming-%d", path, time.Now().UnixNano())
-	if err := os.Rename(path, tmp); err != nil {
-		if os.IsNotExist(err) {
-			return "", nil
-		}
-		return "", err
-	}
-	data, err := os.ReadFile(tmp)
-	os.Remove(tmp)
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(data)), nil
-}
-
 // PruneStaleFiles removes files matching prefix older than maxAge.
 func PruneStaleFiles(dir, prefix string, maxAge time.Duration) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
+		// Best-effort cleanup: skip unreadable directories to keep runtime cleanup non-fatal.
 		return
 	}
 	cutoff := time.Now().Add(-maxAge)
@@ -132,6 +125,7 @@ func PruneStaleFiles(dir, prefix string, maxAge time.Duration) {
 			continue
 		}
 		if info.ModTime().Before(cutoff) {
+			// Best-effort cleanup: stale files may already be gone after concurrent cleanup.
 			os.Remove(filepath.Join(dir, e.Name()))
 		}
 	}
@@ -141,6 +135,7 @@ func PruneStaleFiles(dir, prefix string, maxAge time.Duration) {
 func PruneStaleSignals(signalDir string, maxAge time.Duration) {
 	projects, err := os.ReadDir(signalDir)
 	if err != nil {
+		// Best-effort cleanup: skip unreadable signal roots to keep runtime cleanup non-fatal.
 		return
 	}
 	cutoff := time.Now().Add(-maxAge)
@@ -151,6 +146,7 @@ func PruneStaleSignals(signalDir string, maxAge time.Duration) {
 		projPath := filepath.Join(signalDir, proj.Name())
 		agents, err := os.ReadDir(projPath)
 		if err != nil {
+			// Best-effort cleanup: skip unreadable project directories and continue pruning others.
 			continue
 		}
 		for _, agent := range agents {
@@ -159,12 +155,15 @@ func PruneStaleSignals(signalDir string, maxAge time.Duration) {
 				continue
 			}
 			if info.ModTime().Before(cutoff) {
+				// Best-effort cleanup: stale files may already be gone after concurrent cleanup.
 				os.Remove(filepath.Join(projPath, agent.Name()))
 			}
 		}
 		// Remove empty project directories
+		// Best-effort cleanup: if the empty-dir probe fails, leave the directory for a later cycle.
 		remaining, _ := os.ReadDir(projPath)
 		if len(remaining) == 0 {
+			// Best-effort cleanup: another writer may recreate the directory before removal.
 			os.Remove(projPath)
 		}
 	}

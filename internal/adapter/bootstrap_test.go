@@ -1,7 +1,9 @@
 package adapter
 
 import (
+	"bytes"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -193,8 +195,8 @@ func TestWriteSessionMapping(t *testing.T) {
 	if lines[0] != "claude-99" {
 		t.Fatalf("agent = %q, want claude-99", lines[0])
 	}
-	if lines[1] != "proj-abc" {
-		t.Fatalf("project = %q, want proj-abc", lines[1])
+	if lines[1] != rt.ProjectPathKey("proj-abc") {
+		t.Fatalf("project = %q, want %q", lines[1], rt.ProjectPathKey("proj-abc"))
 	}
 
 	ppidData, err := os.ReadFile(filepath.Join(dir, "agent-ppid-12345"))
@@ -229,6 +231,74 @@ func TestWriteSessionMapping_NoncesAreDifferent(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "agent-session-"+nonce2)); err != nil {
 		t.Fatalf("second session file missing: %v", err)
+	}
+}
+
+func TestWriteSessionMapping_StoresOpaqueProjectKey(t *testing.T) {
+	dir := t.TempDir()
+	nonce := "12345-1711843200000000001"
+	projectID := "path:/Users/test/project"
+
+	if err := WriteSessionMapping(dir, 12345, nonce, "claude-99", projectID); err != nil {
+		t.Fatal(err)
+	}
+
+	sessionData, err := os.ReadFile(filepath.Join(dir, "agent-session-"+nonce))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimRight(string(sessionData), "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 lines, got %d: %q", len(lines), sessionData)
+	}
+	if lines[1] != rt.ProjectPathKey(projectID) {
+		t.Fatalf("project key = %q, want %q", lines[1], rt.ProjectPathKey(projectID))
+	}
+	if strings.Contains(lines[1], "Users") || strings.Contains(lines[1], "project") {
+		t.Fatalf("project key leaked raw project path: %q", lines[1])
+	}
+}
+
+func TestBootstrap_LogsWhenSessionMappingWriteFails(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("WAGGLE_PROJECT_ID", "proj-log-warning")
+	t.Setenv("WAGGLE_ADAPTER_SKIP_RUNTIME_START", "1")
+	t.Setenv("WAGGLE_AGENT_PPID", "4242")
+
+	runtimeDir := config.NewPaths("").RuntimeDir
+	if err := os.MkdirAll(runtimeDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(runtimeDir, "agent-ppid-4242"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	oldWriter := log.Writer()
+	oldFlags := log.Flags()
+	oldPrefix := log.Prefix()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	log.SetPrefix("")
+	t.Cleanup(func() {
+		log.SetOutput(oldWriter)
+		log.SetFlags(oldFlags)
+		log.SetPrefix(oldPrefix)
+	})
+
+	result, err := Bootstrap(BootstrapInput{Tool: "codex"})
+	if err != nil {
+		t.Fatalf("Bootstrap returned error: %v", err)
+	}
+	if result.ProjectID != "proj-log-warning" {
+		t.Fatalf("ProjectID = %q, want proj-log-warning", result.ProjectID)
+	}
+	if !strings.Contains(buf.String(), "warning: write session mapping failed") {
+		t.Fatalf("expected degraded push delivery warning, got %q", buf.String())
+	}
+	if !strings.Contains(buf.String(), "push delivery degraded") {
+		t.Fatalf("expected push delivery degraded detail, got %q", buf.String())
 	}
 }
 

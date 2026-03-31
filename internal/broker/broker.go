@@ -170,6 +170,38 @@ func (b *Broker) GetPushToken(agent string) string {
 	return b.pushTokens[agent]
 }
 
+func (b *Broker) GeneratePushToken(agent string) (string, error) {
+	if b == nil {
+		return "", fmt.Errorf("broker unavailable")
+	}
+	if agent == "" {
+		return "", fmt.Errorf("agent required")
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if token := b.pushTokens[agent]; token != "" {
+		return token, nil
+	}
+
+	token, err := newPushToken()
+	if err != nil {
+		return "", err
+	}
+	b.pushTokens[agent] = token
+	return token, nil
+}
+
+func (b *Broker) DeletePushToken(agent string) {
+	if b == nil || agent == "" {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	delete(b.pushTokens, agent)
+}
+
 func newPushToken() (string, error) {
 	buf := make([]byte, 32)
 	if _, err := rand.Read(buf); err != nil {
@@ -271,6 +303,7 @@ func (b *Broker) Shutdown() error {
 
 	// Remove socket file
 	if b.config.SocketPath != "" {
+		// Best-effort cleanup: listener shutdown may already have removed the socket.
 		os.Remove(b.config.SocketPath)
 	}
 

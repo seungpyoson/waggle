@@ -131,6 +131,29 @@ func TestStore_ExplicitWatchIsDurableWhileSessionWatchesExpire(t *testing.T) {
 	}
 }
 
+func TestUpsertWatch_SanitizesAgentName(t *testing.T) {
+	store := newTestStore(t)
+
+	if err := store.UpsertWatch(Watch{
+		ProjectID: "proj-a",
+		AgentName: "  Agent../Name__X  ",
+		Source:    "cli",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	watches, err := store.ListWatches()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(watches) != 1 {
+		t.Fatalf("watch count = %d, want 1", len(watches))
+	}
+	if watches[0].AgentName != "agent-name-x" {
+		t.Fatalf("agent name = %q, want %q", watches[0].AgentName, "agent-name-x")
+	}
+}
+
 func TestStore_RecordPersistenceUnreadAndSurfaced(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "runtime.db")

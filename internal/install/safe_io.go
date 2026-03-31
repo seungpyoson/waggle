@@ -4,11 +4,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
+
+	"github.com/seungpyoson/waggle/internal/fsutil"
 )
 
 func safeWriteFile(path string, data []byte, perm os.FileMode, root string) error {
-	if hasAncestorSymlink(path, root) {
+	if fsutil.HasAncestorSymlink(path, root) {
 		return fmt.Errorf("refusing to write through ancestor symlink: %s", path)
 	}
 	if info, err := os.Lstat(path); err == nil {
@@ -25,7 +26,7 @@ func safeWriteFile(path string, data []byte, perm os.FileMode, root string) erro
 }
 
 func safeRemove(path string, root string) error {
-	if hasAncestorSymlink(path, root) {
+	if fsutil.HasAncestorSymlink(path, root) {
 		return fmt.Errorf("refusing to remove through ancestor symlink: %s", path)
 	}
 	if info, err := os.Lstat(path); err == nil {
@@ -39,7 +40,7 @@ func safeRemove(path string, root string) error {
 }
 
 func safeRemoveAll(path string, root string) error {
-	if hasAncestorSymlink(path, root) {
+	if fsutil.HasAncestorSymlink(path, root) {
 		return fmt.Errorf("refusing to remove through ancestor symlink: %s", path)
 	}
 	if info, err := os.Lstat(path); err == nil {
@@ -53,7 +54,7 @@ func safeRemoveAll(path string, root string) error {
 }
 
 func safeMkdirAll(path string, root string, perm os.FileMode) error {
-	if hasAncestorSymlink(path, root) {
+	if fsutil.HasAncestorSymlink(path, root) {
 		return fmt.Errorf("refusing to create path with ancestor symlink: %s", path)
 	}
 	return os.MkdirAll(path, perm)
@@ -70,6 +71,7 @@ func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
 	tmpName := tmp.Name()
 	defer func() {
 		if tmpName != "" {
+			// Best-effort cleanup: the temp path is unreachable once the write returns.
 			os.Remove(tmpName)
 		}
 	}()
@@ -93,30 +95,4 @@ func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
 	}
 	tmpName = ""
 	return nil
-}
-
-// hasAncestorSymlink checks whether any directory component between root and path
-// is a symlink. Only checks components below root to avoid false positives on
-// system-level symlinks (e.g., /var → /private/var on macOS).
-func hasAncestorSymlink(path, root string) bool {
-	root = filepath.Clean(root)
-	path = filepath.Clean(path)
-	rel, err := filepath.Rel(root, path)
-	if err != nil {
-		return false
-	}
-	if strings.HasPrefix(rel, "..") {
-		return true
-	}
-	current := root
-	for _, part := range strings.Split(filepath.Dir(rel), string(filepath.Separator)) {
-		if part == "." {
-			continue
-		}
-		current = filepath.Join(current, part)
-		if info, err := os.Lstat(current); err == nil && info.Mode()&os.ModeSymlink != 0 {
-			return true
-		}
-	}
-	return false
 }

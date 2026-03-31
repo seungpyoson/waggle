@@ -5,6 +5,7 @@
 __waggle_check() {
     local _wd="$HOME/.waggle/runtime"
     local _apid="${WAGGLE_AGENT_PPID:-$PPID}"
+    case "$_apid" in *[!0-9]*) return 0 ;; esac
     local _pm="$_wd/agent-ppid-$_apid"
     [ -f "$_pm" ] || return 0
     local _nonce
@@ -15,6 +16,9 @@ __waggle_check() {
     local _wa _wp
     { read -r _wa; read -r _wp; } < "$_sm" 2>/dev/null || return 0
     [ -n "$_wa" ] || return 0
+    [ -n "$_wp" ] || return 0
+    case "$_wa" in *[!A-Za-z0-9_-]*) return 0 ;; esac
+    case "$_wp" in *[!A-Za-z0-9_-]*) return 0 ;; esac
     local _ws="$_wd/signals/$_wp/$_wa"
     if [ -n "${ZSH_VERSION-}" ]; then
         setopt localoptions nonomatch

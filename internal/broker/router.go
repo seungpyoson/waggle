@@ -113,19 +113,24 @@ func handleConnect(s *Session, req protocol.Request) protocol.Response {
 	}
 	if strings.HasSuffix(req.Name, "-push") {
 		baseName := strings.TrimSuffix(req.Name, "-push")
-		expectedToken := s.broker.pushTokens[baseName]
-		if req.PushToken == "" || subtle.ConstantTimeCompare([]byte(req.PushToken), []byte(expectedToken)) != 1 {
+		expectedToken, exists := s.broker.pushTokens[baseName]
+		if !exists || req.PushToken == "" || subtle.ConstantTimeCompare([]byte(req.PushToken), []byte(expectedToken)) != 1 {
 			s.broker.mu.Unlock()
 			return protocol.ErrResponse(protocol.ErrForbidden, "invalid push listener token")
 		}
 	} else {
-		var err error
-		pushToken, err = newPushToken()
-		if err != nil {
-			s.broker.mu.Unlock()
-			return protocol.ErrResponse(protocol.ErrInternalError, err.Error())
+		if existingToken, exists := s.broker.pushTokens[req.Name]; exists {
+			pushToken = existingToken
+		} else {
+			var err error
+			pushToken, err = newPushToken()
+			if err != nil {
+				s.broker.mu.Unlock()
+				return protocol.ErrResponse(protocol.ErrInternalError, err.Error())
+			}
+			s.broker.pushTokens[req.Name] = pushToken
+			s.ownsPushToken = true
 		}
-		s.broker.pushTokens[req.Name] = pushToken
 	}
 	s.name = req.Name
 	s.broker.sessions[s.name] = s
@@ -557,7 +562,10 @@ func publishTaskEvent(b *Broker, event string, task *tasks.Task) {
 }
 
 func mustMarshal(v interface{}) json.RawMessage {
-	data, _ := json.Marshal(v)
+	data, err := json.Marshal(v)
+	if err != nil {
+		panic(fmt.Sprintf("mustMarshal: %v", err))
+	}
 	return data
 }
 
@@ -633,11 +641,11 @@ func handleSend(s *Session, req protocol.Request) protocol.Response {
 		if err := recipient.enc.Encode(pushMsg); err != nil {
 			recipient.writeMu.Unlock()
 			// Don't mark as pushed if delivery failed
-			log.Printf("session %s: failed to push message %d to %s: %v", s.name, msg.ID, req.Name, err)
+			log.Printf("session %q: failed to push message %d to %q: %v", s.name, msg.ID, req.Name, err)
 		} else {
 			recipient.writeMu.Unlock()
 			if err := s.broker.msgStore.MarkPushed(msg.ID); err != nil {
-				log.Printf("session %s: failed to mark message %d as pushed: %v", s.name, msg.ID, err)
+				log.Printf("session %q: failed to mark message %d as pushed: %v", s.name, msg.ID, err)
 			}
 		}
 	}
@@ -645,11 +653,12 @@ func handleSend(s *Session, req protocol.Request) protocol.Response {
 	// Also push to persistent listener (<name>-push) if connected.
 	// Skip if fallback already sent to -push above (prevents double-push).
 	pushName := req.Name + "-push"
+	senderName := strings.TrimSuffix(s.name, "-push")
 	s.broker.mu.RLock()
 	pushRecipient, pushOnline := s.broker.sessions[pushName]
 	s.broker.mu.RUnlock()
 
-	if pushOnline && pushRecipient != s && !usedPushFallback {
+	if pushOnline && pushRecipient != s && !usedPushFallback && req.Name != senderName {
 		pushResp := protocol.Response{
 			OK: true,
 			Data: mustMarshal(map[string]any{
@@ -663,7 +672,7 @@ func handleSend(s *Session, req protocol.Request) protocol.Response {
 		pushRecipient.writeMu.Lock()
 		if err := pushRecipient.enc.Encode(pushResp); err != nil {
 			pushRecipient.writeMu.Unlock()
-			log.Printf("session %s: failed to push message %d to %s: %v", s.name, msg.ID, pushName, err)
+			log.Printf("session %q: failed to push message %d to %q: %v", s.name, msg.ID, pushName, err)
 		} else {
 			pushRecipient.writeMu.Unlock()
 		}
@@ -696,7 +705,6 @@ func handleSend(s *Session, req protocol.Request) protocol.Response {
 }
 
 func handleInbox(s *Session, req protocol.Request) protocol.Response {
-	// Strip -push suffix so push listeners see the base agent's inbox
 	caller := strings.TrimSuffix(s.name, "-push")
 	messages, err := s.broker.msgStore.Inbox(caller)
 	if err != nil {
@@ -710,7 +718,6 @@ func handleAck(s *Session, req protocol.Request) protocol.Response {
 		return protocol.ErrResponse(protocol.ErrInvalidRequest, "message_id required")
 	}
 
-	// Strip -push suffix so push listeners can ack their base agent's messages
 	caller := strings.TrimSuffix(s.name, "-push")
 	err := s.broker.msgStore.Ack(req.MessageID, caller)
 	if err != nil {

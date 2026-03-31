@@ -1,8 +1,10 @@
 package adapter
 
 import (
+	"errors"
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -81,7 +83,11 @@ func Bootstrap(input BootstrapInput) (BootstrapResult, error) {
 
 	ppid := resolveAgentPPID()
 	nonce := fmt.Sprintf("%d-%d", ppid, time.Now().UnixNano())
-	_ = WriteSessionMapping(runtimePaths.RuntimeDir, ppid, nonce, agentName, projectID)
+	// Best-effort: runtime delivery is driven by the watch store, and this mapping only
+	// enables shell-hook signal discovery for the current terminal session.
+	if err := WriteSessionMapping(runtimePaths.RuntimeDir, ppid, nonce, agentName, projectID); err != nil {
+		log.Printf("warning: write session mapping failed: %v; push delivery degraded", err)
+	}
 
 	records, err := store.Unread(projectID, agentName)
 	if err != nil {
@@ -144,7 +150,7 @@ func resolveProjectID(explicit string) (string, error) {
 	return config.ResolveProjectID()
 }
 
-func ensureRuntimeStarted(runtimePaths config.Paths) error {
+func ensureRuntimeStarted(runtimePaths config.Paths) (retErr error) {
 	if rt.IsRunning(runtimePaths) {
 		return nil
 	}
@@ -160,7 +166,13 @@ func ensureRuntimeStarted(runtimePaths config.Paths) error {
 		return err
 	}
 	defer func() {
-		_ = releaseLock()
+		if err := releaseLock(); err != nil {
+			if retErr == nil {
+				retErr = fmt.Errorf("release runtime start lock: %w", err)
+				return
+			}
+			log.Printf("warning: release runtime start lock: %v", err)
+		}
 	}()
 
 	daemonArgs := []string{os.Args[0], "runtime", "start", "--foreground"}
@@ -203,16 +215,16 @@ func sanitizeTTY(tty string) string {
 }
 
 // WriteSessionMapping writes the PPID pointer and unique session mapping for hook discovery.
-// The projectID is sanitized for filesystem safety before writing to the session file,
-// so shell/JS hooks receive the same safe value used for signal directory names.
+// The projectID is hashed to the same opaque key used for signal directory names,
+// so shell/JS hooks never receive raw project paths in session mapping files.
 func WriteSessionMapping(runtimeDir string, ppid int, nonce, agentName, projectID string) error {
 	if err := os.MkdirAll(runtimeDir, 0o700); err != nil {
 		return err
 	}
 
-	safeProjectID := rt.SanitizeProjectIDForPath(projectID)
+	projectKey := rt.ProjectPathKey(projectID)
 	sessionPath := filepath.Join(runtimeDir, "agent-session-"+nonce)
-	if err := writeRuntimeFileAtomic(sessionPath, []byte(agentName+"\n"+safeProjectID+"\n"), 0o600); err != nil {
+	if err := writeRuntimeFileAtomic(sessionPath, []byte(agentName+"\n"+projectKey+"\n"), 0o600); err != nil {
 		return err
 	}
 
@@ -220,7 +232,7 @@ func WriteSessionMapping(runtimeDir string, ppid int, nonce, agentName, projectI
 	return writeRuntimeFileAtomic(ppidPath, []byte(nonce+"\n"), 0o600)
 }
 
-func writeRuntimeFileAtomic(path string, data []byte, perm os.FileMode) error {
+func writeRuntimeFileAtomic(path string, data []byte, perm os.FileMode) (retErr error) {
 	dir := filepath.Dir(path)
 	base := filepath.Base(path)
 
@@ -229,9 +241,19 @@ func writeRuntimeFileAtomic(path string, data []byte, perm os.FileMode) error {
 		return err
 	}
 	tmpName := tmp.Name()
+	tmpOpen := true
+	cleanupPending := true
 	defer func() {
-		_ = tmp.Close()
-		_ = os.Remove(tmpName)
+		if tmpOpen {
+			if err := tmp.Close(); err != nil {
+				retErr = errors.Join(retErr, fmt.Errorf("close temp %s: %w", tmpName, err))
+			}
+		}
+		if cleanupPending {
+			if err := os.Remove(tmpName); err != nil && !os.IsNotExist(err) {
+				retErr = errors.Join(retErr, fmt.Errorf("remove temp %s: %w", tmpName, err))
+			}
+		}
 	}()
 
 	if err := tmp.Chmod(perm); err != nil {
@@ -243,10 +265,16 @@ func writeRuntimeFileAtomic(path string, data []byte, perm os.FileMode) error {
 	if err := tmp.Sync(); err != nil {
 		return err
 	}
-	if err := tmp.Close(); err != nil {
+	closeErr := tmp.Close()
+	tmpOpen = false
+	if closeErr != nil {
+		return closeErr
+	}
+	if err := os.Rename(tmpName, path); err != nil {
 		return err
 	}
-	return os.Rename(tmpName, path)
+	cleanupPending = false
+	return nil
 }
 
 // resolveAgentPPID returns the agent process PID for PPID mapping.

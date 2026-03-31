@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/seungpyoson/waggle/internal/fsutil"
 )
 
 // AdapterState represents the installation state of an adapter.
@@ -297,7 +299,7 @@ func CheckAuggie(homeDir string) ([]HealthIssue, AdapterState) {
 
 	// Validate ancestor path — symlinked parent directories are broken.
 	rulesDir := filepath.Dir(rulesPath)
-	if hasAncestorSymlink(rulesPath, homeDir) {
+	if fsutil.HasAncestorSymlink(rulesPath, homeDir) {
 		return []HealthIssue{{
 			Asset:   rulesDir,
 			Problem: "symlink in ancestor path: refusing to use path with ancestor symlink",

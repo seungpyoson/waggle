@@ -1,10 +1,14 @@
 package install
 
 import (
+	"bytes"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/seungpyoson/waggle/internal/fsutil"
 )
 
 func TestInstallShellHook_WritesScript(t *testing.T) {
@@ -18,6 +22,12 @@ func TestInstallShellHook_WritesScript(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "__waggle_check") {
 		t.Fatal("missing function")
+	}
+	if !strings.Contains(string(data), `case "$_apid" in`) {
+		t.Fatal("missing numeric PPID guard case")
+	}
+	if !strings.Contains(string(data), `*[!0-9]*) return 0 ;;`) {
+		t.Fatal("missing non-numeric PPID early return")
 	}
 }
 
@@ -77,6 +87,25 @@ func TestInstallShellHook_ScriptRefreshesBothMappings(t *testing.T) {
 	}
 }
 
+func TestInstallShellHook_ValidatesSessionTokens(t *testing.T) {
+	home := t.TempDir()
+	if err := installShellHook(home); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(home, ".waggle", "shell-hook.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	if !strings.Contains(content, `case "$_wa" in *[!A-Za-z0-9_-]*) return 0 ;; esac`) {
+		t.Fatal("shell hook should validate agent token from session file")
+	}
+	if !strings.Contains(content, `case "$_wp" in *[!A-Za-z0-9_-]*) return 0 ;; esac`) {
+		t.Fatal("shell hook should validate project token from session file")
+	}
+}
+
 func TestInstallShellHook_BashrcWithMarkers(t *testing.T) {
 	home := t.TempDir()
 	os.WriteFile(filepath.Join(home, ".bashrc"), []byte("# bash\n"), 0o644)
@@ -94,6 +123,38 @@ func TestInstallShellHook_Idempotent(t *testing.T) {
 	data, _ := os.ReadFile(filepath.Join(home, ".zshenv"))
 	if strings.Count(string(data), "WAGGLE-SHELL-HOOK-BEGIN") != 1 {
 		t.Fatal("marker duplicated")
+	}
+}
+
+func TestUpsertShellHookBlock_ReturnsErrorOnUnreadableFile(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".zshenv")
+	const content = "# existing\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	err := upsertShellHookBlock(path, home)
+
+	if restoreErr := os.Chmod(path, 0o600); restoreErr != nil {
+		t.Fatalf("restore perms: %v", restoreErr)
+	}
+	if err == nil {
+		t.Fatal("expected read error for unreadable file")
+	}
+	if !strings.Contains(err.Error(), "read "+path) {
+		t.Fatalf("expected read error mentioning path, got %v", err)
+	}
+
+	got, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(got) != content {
+		t.Fatalf("file content changed: got %q want %q", got, content)
 	}
 }
 
@@ -117,6 +178,73 @@ func TestUninstallShellHook_PreservesOtherContent(t *testing.T) {
 	data, _ := os.ReadFile(filepath.Join(home, ".zshenv"))
 	if !strings.Contains(string(data), "# keep this") {
 		t.Fatal("lost existing content")
+	}
+}
+
+func TestRemoveShellHookBlock_ReturnsErrorOnRewriteFailure(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".zshenv")
+	content := strings.Join([]string{
+		"# keep this",
+		shellHookBlock,
+		"",
+	}, "\n")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(home, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(home, 0o700)
+	})
+
+	err := removeShellHookBlock(path, home)
+	if err == nil {
+		t.Fatal("expected rewrite error, got nil")
+	}
+	if !strings.Contains(err.Error(), "write "+path) {
+		t.Fatalf("expected write error mentioning path, got %v", err)
+	}
+}
+
+func TestUninstallShellHook_LogsSafeRemoveWarningAndContinues(t *testing.T) {
+	home := t.TempDir()
+	waggleReal := filepath.Join(home, ".waggle-real")
+	if err := os.MkdirAll(waggleReal, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".zshenv"), []byte("# keep this\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(waggleReal, "shell-hook.sh"), []byte("echo hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(waggleReal, filepath.Join(home, ".waggle")); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	oldWriter := log.Writer()
+	oldFlags := log.Flags()
+	oldPrefix := log.Prefix()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	log.SetPrefix("")
+	t.Cleanup(func() {
+		log.SetOutput(oldWriter)
+		log.SetFlags(oldFlags)
+		log.SetPrefix(oldPrefix)
+	})
+
+	if err := uninstallShellHook(home); err != nil {
+		t.Fatalf("uninstallShellHook returned error: %v", err)
+	}
+	if !strings.Contains(buf.String(), "warning: remove shell hook script") {
+		t.Fatalf("expected safeRemove warning log, got %q", buf.String())
+	}
+	if _, err := os.Lstat(filepath.Join(home, ".waggle")); err != nil {
+		t.Fatalf("symlink should remain after best-effort uninstall: %v", err)
 	}
 }
 
@@ -174,7 +302,7 @@ func TestHasAncestorSymlink_DetectsSymlinkedParent(t *testing.T) {
 	linkDir := filepath.Join(base, "link")
 	os.Symlink(realDir, linkDir)
 
-	if !hasAncestorSymlink(filepath.Join(linkDir, "file.txt"), base) {
+	if !fsutil.HasAncestorSymlink(filepath.Join(linkDir, "file.txt"), base) {
 		t.Fatal("should detect symlinked parent")
 	}
 }
@@ -183,15 +311,35 @@ func TestHasAncestorSymlink_NoSymlink(t *testing.T) {
 	base := t.TempDir()
 	dir := filepath.Join(base, "subdir")
 	os.MkdirAll(dir, 0o700)
-	if hasAncestorSymlink(filepath.Join(dir, "file.txt"), base) {
+	if fsutil.HasAncestorSymlink(filepath.Join(dir, "file.txt"), base) {
 		t.Fatal("should not detect symlink in real dir")
+	}
+}
+
+func TestHasAncestorSymlink_AbsolutePathsNeverRelError(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "subdir")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "file.txt")
+
+	rel, err := filepath.Rel(base, path)
+	if err != nil {
+		t.Fatalf("filepath.Rel returned error for absolute paths: %v", err)
+	}
+	if rel != filepath.Join("subdir", "file.txt") {
+		t.Fatalf("rel = %q, want %q", rel, filepath.Join("subdir", "file.txt"))
+	}
+	if fsutil.HasAncestorSymlink(path, base) {
+		t.Fatal("absolute path under root should not be treated as a symlink escape")
 	}
 }
 
 func TestHasAncestorSymlink_RejectsPathEscapingRoot(t *testing.T) {
 	base := t.TempDir()
 	escaped := filepath.Join(base, "..", "etc", "passwd")
-	if !hasAncestorSymlink(escaped, base) {
+	if !fsutil.HasAncestorSymlink(escaped, base) {
 		t.Fatal("should reject path escaping root via ..")
 	}
 }
@@ -202,7 +350,7 @@ func TestHasAncestorSymlink_DeeplyNestedSymlink(t *testing.T) {
 	os.MkdirAll(realDir, 0o700)
 	os.MkdirAll(filepath.Join(base, "a"), 0o700)
 	os.Symlink(realDir, filepath.Join(base, "a", "link"))
-	if !hasAncestorSymlink(filepath.Join(base, "a", "link", "file.txt"), base) {
+	if !fsutil.HasAncestorSymlink(filepath.Join(base, "a", "link", "file.txt"), base) {
 		t.Fatal("should detect deeply nested symlink")
 	}
 }

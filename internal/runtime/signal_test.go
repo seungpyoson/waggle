@@ -1,7 +1,10 @@
 package runtime
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,7 +17,7 @@ func TestWriteSignal_CreatesFileWithContent(t *testing.T) {
 	if err := WriteSignal(dir, "proj-test", "agent-1", "alice", "hello", 65536); err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(filepath.Join(dir, "proj-test", "agent-1"))
+	data, err := os.ReadFile(filepath.Join(dir, ProjectPathKey("proj-test"), "agent-1"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,7 +31,7 @@ func TestWriteSignal_Appends(t *testing.T) {
 	dir := t.TempDir()
 	WriteSignal(dir, "proj-test", "a", "alice", "one", 65536)
 	WriteSignal(dir, "proj-test", "a", "bob", "two", 65536)
-	data, _ := os.ReadFile(filepath.Join(dir, "proj-test", "a"))
+	data, _ := os.ReadFile(filepath.Join(dir, ProjectPathKey("proj-test"), "a"))
 	if c := strings.Count(string(data), "\n"); c != 2 {
 		t.Fatalf("expected 2 lines, got %d: %q", c, data)
 	}
@@ -38,15 +41,36 @@ func TestWriteSignal_DropsWhenOverCap(t *testing.T) {
 	dir := t.TempDir()
 	// First write fits (short message ~38 bytes, cap 100)
 	WriteSignal(dir, "proj-test", "a", "alice", "hello", 100)
-	data, _ := os.ReadFile(filepath.Join(dir, "proj-test", "a"))
+	data, _ := os.ReadFile(filepath.Join(dir, ProjectPathKey("proj-test"), "a"))
 	if !strings.Contains(string(data), "alice") {
 		t.Fatalf("first write should succeed, got: %q", data)
 	}
 	// Second write pushes past cap
 	WriteSignal(dir, "proj-test", "a", "bob", strings.Repeat("x", 100), 100)
-	data, _ = os.ReadFile(filepath.Join(dir, "proj-test", "a"))
+	data, _ = os.ReadFile(filepath.Join(dir, ProjectPathKey("proj-test"), "a"))
 	if strings.Contains(string(data), "bob") {
 		t.Fatalf("second write should be dropped, got: %q", data)
+	}
+}
+
+func TestWriteSignal_ReturnsCapExceededError(t *testing.T) {
+	dir := t.TempDir()
+
+	if err := WriteSignal(dir, "proj-test", "a", "alice", "hello", 100); err != nil {
+		t.Fatal(err)
+	}
+
+	err := WriteSignal(dir, "proj-test", "a", "bob", strings.Repeat("x", 100), 100)
+	if !errors.Is(err, ErrSignalCapExceeded) {
+		t.Fatalf("WriteSignal() error = %v, want %v", err, ErrSignalCapExceeded)
+	}
+
+	data, readErr := os.ReadFile(filepath.Join(dir, ProjectPathKey("proj-test"), "a"))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if strings.Contains(string(data), "bob") {
+		t.Fatalf("cap-exceeded write should not append content, got: %q", data)
 	}
 }
 
@@ -54,15 +78,44 @@ func TestWriteSignal_DropsOversizedFirstWrite(t *testing.T) {
 	dir := t.TempDir()
 	// Even first write rejected if message exceeds cap
 	WriteSignal(dir, "proj-test", "a", "alice", strings.Repeat("x", 100), 50)
-	if _, err := os.Stat(filepath.Join(dir, "proj-test", "a")); err == nil {
+	if _, err := os.Stat(filepath.Join(dir, ProjectPathKey("proj-test"), "a")); err == nil {
 		t.Fatal("oversized first write should be dropped")
+	}
+}
+
+func TestWriteSignal_LogsWhenDroppingOverCap(t *testing.T) {
+	dir := t.TempDir()
+	if err := WriteSignal(dir, "proj-test", "a", "alice", "hello", 100); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	oldWriter := log.Writer()
+	oldFlags := log.Flags()
+	oldPrefix := log.Prefix()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	log.SetPrefix("")
+	t.Cleanup(func() {
+		log.SetOutput(oldWriter)
+		log.SetFlags(oldFlags)
+		log.SetPrefix(oldPrefix)
+	})
+
+	if err := WriteSignal(dir, "proj-test", "a", "bob", strings.Repeat("x", 100), 100); !errors.Is(err, ErrSignalCapExceeded) {
+		t.Fatalf("WriteSignal() error = %v, want %v", err, ErrSignalCapExceeded)
+	}
+
+	logged := buf.String()
+	if !strings.Contains(logged, "dropping signal for") {
+		t.Fatalf("expected cap-drop log, got %q", logged)
 	}
 }
 
 func TestWriteSignal_DirPermissions(t *testing.T) {
 	sigDir := filepath.Join(t.TempDir(), "signals")
 	WriteSignal(sigDir, "proj-test", "a", "alice", "test", 65536)
-	info, err := os.Stat(filepath.Join(sigDir, "proj-test"))
+	info, err := os.Stat(filepath.Join(sigDir, ProjectPathKey("proj-test")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,11 +124,58 @@ func TestWriteSignal_DirPermissions(t *testing.T) {
 	}
 }
 
+func TestWriteSignal_RejectsAncestorSymlink(t *testing.T) {
+	runtimeRoot := t.TempDir()
+	realSignals := filepath.Join(runtimeRoot, "signals-real")
+	if err := os.MkdirAll(realSignals, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	signalDir := filepath.Join(runtimeRoot, "signals")
+	if err := os.Symlink(realSignals, signalDir); err != nil {
+		t.Fatal(err)
+	}
+
+	err := WriteSignal(signalDir, "proj-test", "agent-1", "alice", "hello", 65536)
+	if err == nil {
+		t.Fatal("expected error for ancestor symlink")
+	}
+	if !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected symlink error, got %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(realSignals, ProjectPathKey("proj-test"), "agent-1")); statErr == nil {
+		t.Fatal("signal should not be written through symlinked path")
+	}
+}
+
+// ConsumeSignal is test-only because production delivery uses shell/JS hooks for consume.
+func ConsumeSignal(signalDir, projectKey, agentName string) (string, error) {
+	if projectKey == "" {
+		return "", fmt.Errorf("empty project key")
+	}
+	path := filepath.Join(signalDir, projectKey, agentName)
+	tmp := fmt.Sprintf("%s.consuming-%d", path, time.Now().UnixNano())
+	if err := os.Rename(path, tmp); err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	data, err := os.ReadFile(tmp)
+	if removeErr := os.Remove(tmp); removeErr != nil && !os.IsNotExist(removeErr) && err == nil {
+		err = removeErr
+	}
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(data)), nil
+}
+
 func TestConsumeSignal_AtomicReadAndDelete(t *testing.T) {
 	dir := t.TempDir()
 	WriteSignal(dir, "proj-test", "a", "alice", "hello", 65536)
-	projDir := filepath.Join(dir, "proj-test")
-	content, err := ConsumeSignal(dir, "proj-test", "a")
+	projDir := filepath.Join(dir, ProjectPathKey("proj-test"))
+	content, err := ConsumeSignal(dir, ProjectPathKey("proj-test"), "a")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +194,7 @@ func TestConsumeSignal_AtomicReadAndDelete(t *testing.T) {
 }
 
 func TestConsumeSignal_NoFile_Empty(t *testing.T) {
-	content, err := ConsumeSignal(t.TempDir(), "no-proj", "nope")
+	content, err := ConsumeSignal(t.TempDir(), ProjectPathKey("no-proj"), "nope")
 	if err != nil || content != "" {
 		t.Fatalf("expected empty, got %q err=%v", content, err)
 	}
@@ -103,7 +203,7 @@ func TestConsumeSignal_NoFile_Empty(t *testing.T) {
 func TestConsumeSignal_NewWriteDuringConsume(t *testing.T) {
 	dir := t.TempDir()
 	WriteSignal(dir, "proj-test", "a", "alice", "first", 65536)
-	projDir := filepath.Join(dir, "proj-test")
+	projDir := filepath.Join(dir, ProjectPathKey("proj-test"))
 	// Simulate atomic rename (what ConsumeSignal does internally)
 	orig := filepath.Join(projDir, "a")
 	tmp := orig + ".consuming-test"
@@ -123,34 +223,40 @@ func TestConsumeSignal_NewWriteDuringConsume(t *testing.T) {
 	}
 }
 
-func TestSanitizeProjectIDForPath_GitHash(t *testing.T) {
-	got := SanitizeProjectIDForPath("abcdef0123456789")
-	if got != "abcdef0123456789" {
-		t.Fatalf("got %q, want unchanged hex hash", got)
-	}
-}
-
-func TestSanitizeProjectIDForPath_PathTraversal(t *testing.T) {
-	got := SanitizeProjectIDForPath("../../etc/passwd")
-	if strings.Contains(got, "/") || strings.Contains(got, "..") {
-		t.Fatalf("path traversal not sanitized: %q", got)
-	}
-}
-
-func TestSanitizeProjectIDForPath_PathPrefix(t *testing.T) {
-	got := SanitizeProjectIDForPath("path:/Users/test/project")
-	if strings.Contains(got, "/") {
-		t.Fatalf("slashes not removed: %q", got)
-	}
+func TestProjectPathKey_Deterministic(t *testing.T) {
+	got := ProjectPathKey("abcdef0123456789")
 	if got == "" {
-		t.Fatal("should not be empty")
+		t.Fatal("ProjectPathKey() returned empty string")
+	}
+	if len(got) != 12 {
+		t.Fatalf("len(ProjectPathKey()) = %d, want 12", len(got))
+	}
+	if got != ProjectPathKey("abcdef0123456789") {
+		t.Fatalf("ProjectPathKey() not deterministic: %q vs %q", got, ProjectPathKey("abcdef0123456789"))
 	}
 }
 
-func TestSanitizeProjectIDForPath_Empty(t *testing.T) {
-	got := SanitizeProjectIDForPath("")
-	if got != "" {
-		t.Fatalf("got %q, want empty", got)
+func TestProjectPathKey_NoCollision(t *testing.T) {
+	inputs := []string{
+		"abcdef0123456789",
+		"abcdef012345678a",
+		"path:/Users/test/project",
+		"path:/Users/test/project-2",
+		"../../etc/passwd",
+		"proj-abc",
+		"proj abd",
+	}
+
+	seen := make(map[string]string, len(inputs))
+	for _, input := range inputs {
+		key := ProjectPathKey(input)
+		if key == "" {
+			t.Fatalf("ProjectPathKey(%q) returned empty string", input)
+		}
+		if prior, exists := seen[key]; exists {
+			t.Fatalf("ProjectPathKey collision: %q and %q both mapped to %q", prior, input, key)
+		}
+		seen[key] = input
 	}
 }
 
@@ -175,7 +281,7 @@ func TestWriteSignal_StripsANSI(t *testing.T) {
 			if err := WriteSignal(d, "abcdef01", "a", "alice", tt.input, 65536); err != nil {
 				t.Fatal(err)
 			}
-			data, _ := os.ReadFile(filepath.Join(d, "abcdef01", "a"))
+			data, _ := os.ReadFile(filepath.Join(d, ProjectPathKey("abcdef01"), "a"))
 			s := string(data)
 			for _, b := range s {
 				if b < 0x20 && b != '\n' && b != '\t' {
@@ -192,13 +298,40 @@ func TestWriteSignal_StripsANSI(t *testing.T) {
 	}
 }
 
+func TestStripANSI_StripsCSIIntermediateBytes(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "delete chars with intermediate byte",
+			input: "hello \x1b[#P world",
+			want:  "hello  world",
+		},
+		{
+			name:  "cursor style with space intermediate byte",
+			input: "hello \x1b[4 q world",
+			want:  "hello  world",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := stripANSI(tt.input); got != tt.want {
+				t.Fatalf("stripANSI(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestWriteSignal_StripsANSIFromSender(t *testing.T) {
 	dir := t.TempDir()
 	ansiFrom := "\x1b[31mevil\x1b[0m"
 	if err := WriteSignal(dir, "proj-test", "a", ansiFrom, "msg", 65536); err != nil {
 		t.Fatal(err)
 	}
-	data, _ := os.ReadFile(filepath.Join(dir, "proj-test", "a"))
+	data, _ := os.ReadFile(filepath.Join(dir, ProjectPathKey("proj-test"), "a"))
 	if strings.Contains(string(data), "\x1b") {
 		t.Fatalf("ANSI escape not stripped from sender: %q", data)
 	}
@@ -226,6 +359,25 @@ func TestWriteSignal_SanitizesProjectIDPath(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "..", "..", "etc")); err == nil {
 		t.Fatal("path traversal succeeded!")
 	}
+	if _, err := os.Stat(filepath.Join(dir, ProjectPathKey("../../etc"), "a")); err != nil {
+		t.Fatalf("hashed project path missing: %v", err)
+	}
+}
+
+func TestWriteSignal_SanitizesAgentNamePath(t *testing.T) {
+	dir := t.TempDir()
+
+	if err := WriteSignal(dir, "proj-test", "../Agent Name", "alice", "hello", 65536); err != nil {
+		t.Fatal(err)
+	}
+
+	safePath := filepath.Join(dir, ProjectPathKey("proj-test"), "agent-name")
+	if _, err := os.Stat(safePath); err != nil {
+		t.Fatalf("sanitized signal path missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "evil")); err == nil {
+		t.Fatal("unsanitized agent path escaped project directory")
+	}
 }
 
 // TestSignalPipeline_EndToEnd exercises the full signal delivery path:
@@ -239,12 +391,12 @@ func TestSignalPipeline_EndToEnd(t *testing.T) {
 	ppid := 12345
 	agentName := "claude-code-test"
 	projectID := "abcdef0123456789"
-	safeProjectID := SanitizeProjectIDForPath(projectID)
+	projectKey := ProjectPathKey(projectID)
 
 	// Step 1: Simulate bootstrap — generate nonce, write session mapping
 	nonce := "12345-1711843200000000000"
 	sessionPath := filepath.Join(runtimeDir, "agent-session-"+nonce)
-	os.WriteFile(sessionPath, []byte(agentName+"\n"+safeProjectID+"\n"), 0o600)
+	os.WriteFile(sessionPath, []byte(agentName+"\n"+projectKey+"\n"), 0o600)
 	ppidPath := filepath.Join(runtimeDir, fmt.Sprintf("agent-ppid-%d", ppid))
 	os.WriteFile(ppidPath, []byte(nonce+"\n"), 0o600)
 
@@ -279,8 +431,8 @@ func TestSignalPipeline_EndToEnd(t *testing.T) {
 	if discoveredAgent != agentName {
 		t.Fatalf("agent = %q, want %q", discoveredAgent, agentName)
 	}
-	if discoveredProject != safeProjectID {
-		t.Fatalf("project = %q, want %q", discoveredProject, safeProjectID)
+	if discoveredProject != projectKey {
+		t.Fatalf("project = %q, want %q", discoveredProject, projectKey)
 	}
 
 	// Step 4: Check signal file exists at expected path

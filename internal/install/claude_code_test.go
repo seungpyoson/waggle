@@ -310,6 +310,9 @@ func TestInstall_PushHookCreated(t *testing.T) {
 	if !strings.Contains(content, "additionalContext") {
 		t.Error("push hook missing additionalContext output")
 	}
+	if !strings.Contains(content, `if (!/^\d+$/.test(ppid)) process.exit(0);`) {
+		t.Error("push hook missing non-numeric PPID early exit")
+	}
 }
 
 func TestInstall_PushHookRecoversOrphansAndRefreshesBothMappings(t *testing.T) {
@@ -331,6 +334,44 @@ func TestInstall_PushHookRecoversOrphansAndRefreshesBothMappings(t *testing.T) {
 	}
 	if !strings.Contains(content, "fs.readdirSync(") {
 		t.Fatal("push hook should recover orphaned consumed signal files")
+	}
+}
+
+func TestInstall_PushHookValidatesSessionTokens(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	if err := installClaudeCode(tmpHome); err != nil {
+		t.Fatalf("install failed: %v", err)
+	}
+
+	pushPath := filepath.Join(tmpHome, ".claude", "hooks", "waggle-push.js")
+	data, err := os.ReadFile(pushPath)
+	if err != nil {
+		t.Fatalf("read push hook: %v", err)
+	}
+
+	content := string(data)
+	if !strings.Contains(content, "const tokenPattern = /^[a-zA-Z0-9_-]+$/;") {
+		t.Fatal("push hook should define session token validation regex")
+	}
+	if !strings.Contains(content, "if (!tokenPattern.test(agent) || !tokenPattern.test(project)) process.exit(0);") {
+		t.Fatal("push hook should reject invalid agent/project tokens from session file")
+	}
+}
+
+func TestPushHookSourcesStayIdentical(t *testing.T) {
+	installCopy, err := os.ReadFile(filepath.Join("claude-code", "waggle-push.js"))
+	if err != nil {
+		t.Fatalf("read install copy: %v", err)
+	}
+
+	integrationCopy, err := os.ReadFile(filepath.Join("..", "..", "integrations", "claude-code", "waggle-push.js"))
+	if err != nil {
+		t.Fatalf("read integration copy: %v", err)
+	}
+
+	if string(installCopy) != string(integrationCopy) {
+		t.Fatal("waggle-push.js copies diverged")
 	}
 }
 

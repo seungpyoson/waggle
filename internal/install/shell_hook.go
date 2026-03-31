@@ -3,9 +3,12 @@ package install
 import (
 	"embed"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/seungpyoson/waggle/internal/fsutil"
 )
 
 //go:embed shell-hook/shell-hook.sh
@@ -64,9 +67,14 @@ func installShellHook(homeDir string) error {
 
 func uninstallShellHook(homeDir string) error {
 	for _, rc := range []string{".zshenv", ".bashrc"} {
-		removeShellHookBlock(filepath.Join(homeDir, rc), homeDir)
+		path := filepath.Join(homeDir, rc)
+		if err := removeShellHookBlock(path, homeDir); err != nil {
+			log.Printf("warning: remove shell hook block from %q: %v", path, err)
+		}
 	}
-	_ = safeRemove(filepath.Join(homeDir, ".waggle", "shell-hook.sh"), homeDir)
+	if err := safeRemove(filepath.Join(homeDir, ".waggle", "shell-hook.sh"), homeDir); err != nil && !os.IsNotExist(err) {
+		log.Printf("warning: remove shell hook script: %v", err)
+	}
 	return nil
 }
 
@@ -75,11 +83,14 @@ func upsertShellHookBlock(path, homeDir string) error {
 	if linfo, err := os.Lstat(path); err == nil && linfo.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("refusing to modify symlink: %s", path)
 	}
-	if hasAncestorSymlink(path, homeDir) {
+	if fsutil.HasAncestorSymlink(path, homeDir) {
 		return fmt.Errorf("refusing to modify path with ancestor symlink: %s", path)
 	}
 
-	existing, _ := os.ReadFile(path)
+	existing, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("read %s: %w", path, err)
+	}
 	content := string(existing)
 	if strings.Contains(content, shellHookBegin) {
 		return nil // already present
@@ -98,25 +109,30 @@ func upsertShellHookBlock(path, homeDir string) error {
 	return safeWriteFile(path, []byte(content), perm, homeDir)
 }
 
-func removeShellHookBlock(path, homeDir string) {
+func removeShellHookBlock(path, homeDir string) error {
 	// Refuse to follow symlinks.
 	if linfo, err := os.Lstat(path); err == nil && linfo.Mode()&os.ModeSymlink != 0 {
-		return
+		return fmt.Errorf("refusing to modify symlink: %s", path)
 	}
-	if hasAncestorSymlink(path, homeDir) {
-		return
+	if fsutil.HasAncestorSymlink(path, homeDir) {
+		return fmt.Errorf("refusing to modify path with ancestor symlink: %s", path)
 	}
 
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("read %s: %w", path, err)
 	}
 
 	// Preserve original file permissions.
 	perm := os.FileMode(0o644)
-	if info, err := os.Stat(path); err == nil {
-		perm = info.Mode().Perm()
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("stat %s: %w", path, err)
 	}
+	perm = info.Mode().Perm()
 
 	lines := strings.Split(string(data), "\n")
 	var filtered []string
@@ -134,5 +150,7 @@ func removeShellHookBlock(path, homeDir string) {
 			filtered = append(filtered, line)
 		}
 	}
-	_ = safeWriteFile(path, []byte(strings.Join(filtered, "\n")), perm, homeDir)
+	// Uninstall stays best-effort: if rewriting the filtered file fails, leave the
+	// user's rc file untouched and continue removing the rest of the hook artifacts.
+	return safeWriteFile(path, []byte(strings.Join(filtered, "\n")), perm, homeDir)
 }

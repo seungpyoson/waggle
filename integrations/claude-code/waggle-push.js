@@ -11,6 +11,7 @@ if (!home) process.exit(0);
 const rtDir = path.join(home, '.waggle', 'runtime');
 // Use WAGGLE_PPID (agent PID) not process.ppid (intermediate shell PID)
 const ppid = process.env.WAGGLE_PPID || String(process.ppid);
+if (!/^\d+$/.test(ppid)) process.exit(0);
 const pointerFile = path.join(rtDir, 'agent-ppid-' + ppid);
 
 try {
@@ -25,7 +26,9 @@ try {
     const lines = fs.readFileSync(sessionFile, 'utf8').trim().split('\n');
     const agent = lines[0];
     const project = lines[1] || '';
+    const tokenPattern = /^[a-zA-Z0-9_-]+$/;
     if (!agent) process.exit(0);
+    if (!tokenPattern.test(agent) || !tokenPattern.test(project)) process.exit(0);
 
     const now = new Date();
     try { fs.utimesSync(sessionFile, now, now); } catch {}
