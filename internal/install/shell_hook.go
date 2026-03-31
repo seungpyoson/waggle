@@ -18,7 +18,6 @@ const (
 
 var shellHookBlock = strings.Join([]string{
 	shellHookBegin,
-	`export WAGGLE_AGENT_PPID="${WAGGLE_AGENT_PPID:-$PPID}"`,
 	`[ -f "$HOME/.waggle/shell-hook.sh" ] && source "$HOME/.waggle/shell-hook.sh"`,
 	`export BASH_ENV="$HOME/.waggle/shell-hook.sh"`,
 	shellHookEnd,

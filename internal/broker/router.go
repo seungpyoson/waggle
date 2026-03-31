@@ -92,9 +92,9 @@ func handleConnect(s *Session, req protocol.Request) protocol.Response {
 	if len(req.Name) > config.Defaults.MaxFieldLength {
 		return protocol.ErrResponse(protocol.ErrInvalidRequest, fmt.Sprintf("name too long (max %d chars)", config.Defaults.MaxFieldLength))
 	}
-	// Reserve -push suffix for push listeners — prevents routing collisions
-	if strings.HasSuffix(req.Name, "-push") && !req.PushListener {
-		return protocol.ErrResponse(protocol.ErrInvalidRequest, `names ending in "-push" are reserved; set push_listener: true to connect as a push listener`)
+	// Reserve -push suffix for authenticated push listeners to prevent routing collisions.
+	if strings.HasSuffix(req.Name, "-push") && req.PushToken != s.broker.pushToken {
+		return protocol.ErrResponse(protocol.ErrForbidden, "invalid push listener token")
 	}
 	if s.name != "" {
 		return protocol.ErrResponse(protocol.ErrAlreadyConnected, "already connected")
@@ -795,4 +795,3 @@ func handleSpawnUpdatePID(s *Session, req protocol.Request) protocol.Response {
 
 	return protocol.OKResponse(nil)
 }
-

@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/seungpyoson/waggle/internal/client"
@@ -12,7 +15,9 @@ import (
 )
 
 // BrokerListenerFactory connects runtime watches directly to the broker push stream.
-type BrokerListenerFactory struct{}
+type BrokerListenerFactory struct {
+	PushToken string
+}
 
 func NewBrokerListenerFactory() *BrokerListenerFactory {
 	return &BrokerListenerFactory{}
@@ -33,6 +38,7 @@ func (f *BrokerListenerFactory) NewListener(w Watch) (Listener, error) {
 	return &brokerListener{
 		socketPath: paths.Socket,
 		name:       w.AgentName + "-push",
+		pushToken:  f.PushToken,
 	}, nil
 }
 
@@ -110,6 +116,7 @@ func (f *BrokerListenerFactory) CatchUp(w Watch, handler DeliveryHandler) error 
 type brokerListener struct {
 	socketPath string
 	name       string
+	pushToken  string
 }
 
 func (l *brokerListener) Listen(ctx context.Context, handler DeliveryHandler) error {
@@ -119,10 +126,25 @@ func (l *brokerListener) Listen(ctx context.Context, handler DeliveryHandler) er
 	}
 	defer c.Close()
 
+	// Read push token from broker's token file (cross-process sharing).
+	// Falls back to factory-provided token for in-process tests.
+	pushToken := l.pushToken
+	if pushToken == "" {
+		tokenPath := filepath.Join(filepath.Dir(l.socketPath), "push-token")
+		if data, err := os.ReadFile(tokenPath); err == nil {
+			pushToken = strings.TrimSpace(string(data))
+		}
+	}
+
 	if err := c.SetDeadline(config.Defaults.ConnectTimeout); err != nil {
 		return fmt.Errorf("set handshake deadline: %w", err)
 	}
-	resp, err := c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: l.name, PushListener: true})
+	resp, err := c.Send(protocol.Request{
+		Cmd:          protocol.CmdConnect,
+		Name:         l.name,
+		PushListener: true,
+		PushToken:    pushToken,
+	})
 	if err != nil {
 		return err
 	}

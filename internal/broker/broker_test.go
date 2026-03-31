@@ -317,7 +317,9 @@ func TestBroker_FullRoundTrip_CreateClaimComplete(t *testing.T) {
 		Cmd:    protocol.CmdTaskGet,
 		TaskID: taskIDStr,
 	})
-	var task struct{ State string `json:"State"` }
+	var task struct {
+		State string `json:"State"`
+	}
 	json.Unmarshal(resp.Data, &task)
 	if task.State != "completed" {
 		t.Errorf("state = %q, want completed", task.State)
@@ -539,7 +541,9 @@ func TestBroker_DisconnectUnsubscribesEvents(t *testing.T) {
 		t.Fatalf("status: %s", resp.Error)
 	}
 	// Status should show 0 subscribers after disconnect
-	var status struct{ Subscribers int `json:"subscribers"` }
+	var status struct {
+		Subscribers int `json:"subscribers"`
+	}
 	json.Unmarshal(resp.Data, &status)
 	if status.Subscribers != 0 {
 		t.Errorf("subscribers = %d, want 0 after disconnect", status.Subscribers)
@@ -610,7 +614,6 @@ func TestBroker_InvalidJSONReturnsError(t *testing.T) {
 	}
 }
 
-
 // Test: Worker A disconnects, Worker B's claimed task should NOT be re-queued
 func TestBroker_DisconnectOnlyRequeuesOwnTasks(t *testing.T) {
 	sockPath, _, cleanup := startTestBroker(t)
@@ -621,7 +624,9 @@ func TestBroker_DisconnectOnlyRequeuesOwnTasks(t *testing.T) {
 	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "worker-a"})
 	c1.Send(protocol.Request{Cmd: protocol.CmdTaskCreate, Payload: json.RawMessage(`{"desc":"task1"}`), Type: "test"})
 	resp1, _ := c1.Send(protocol.Request{Cmd: protocol.CmdTaskClaim})
-	var claim1 struct{ ID int64 `json:"ID"` }
+	var claim1 struct {
+		ID int64 `json:"ID"`
+	}
 	json.Unmarshal(resp1.Data, &claim1)
 
 	// Worker B connects and claims task 2
@@ -629,7 +634,9 @@ func TestBroker_DisconnectOnlyRequeuesOwnTasks(t *testing.T) {
 	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "worker-b"})
 	c2.Send(protocol.Request{Cmd: protocol.CmdTaskCreate, Payload: json.RawMessage(`{"desc":"task2"}`), Type: "test"})
 	resp2, _ := c2.Send(protocol.Request{Cmd: protocol.CmdTaskClaim})
-	var claim2 struct{ ID int64 `json:"ID"` }
+	var claim2 struct {
+		ID int64 `json:"ID"`
+	}
 	json.Unmarshal(resp2.Data, &claim2)
 
 	// Worker A disconnects
@@ -638,7 +645,9 @@ func TestBroker_DisconnectOnlyRequeuesOwnTasks(t *testing.T) {
 
 	// Verify Worker B's task is still claimed
 	resp, _ := c2.Send(protocol.Request{Cmd: protocol.CmdTaskGet, TaskID: fmt.Sprintf("%d", claim2.ID)})
-	var task struct{ State string `json:"State"` }
+	var task struct {
+		State string `json:"State"`
+	}
 	json.Unmarshal(resp.Data, &task)
 	if task.State != "claimed" {
 		t.Errorf("Worker B's task state = %q, want claimed (should NOT be re-queued when Worker A disconnects)", task.State)
@@ -803,7 +812,6 @@ func TestIsConnectionClosed_UnrelatedError(t *testing.T) {
 		t.Error("unrelated error should return false")
 	}
 }
-
 
 // ========== Direct Messaging Tests (Task 43) ==========
 
@@ -1390,6 +1398,31 @@ func TestBroker_DuplicateNameRejected(t *testing.T) {
 	json.Unmarshal(pushResp.Data, &pushData)
 	if pushData["body"] != "still alive" {
 		t.Errorf("push body = %q, want 'still alive'", pushData["body"])
+	}
+}
+
+func TestConnect_RejectsPushWithoutToken(t *testing.T) {
+	sockPath, _, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c := connectClient(t, sockPath)
+	defer c.Close()
+
+	resp, err := c.Send(protocol.Request{
+		Cmd:  protocol.CmdConnect,
+		Name: "alice-push",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.OK {
+		t.Fatal("expected push listener connect without token to fail")
+	}
+	if resp.Code != protocol.ErrForbidden {
+		t.Fatalf("error code = %q, want %q", resp.Code, protocol.ErrForbidden)
+	}
+	if resp.Error != "invalid push listener token" {
+		t.Fatalf("error message = %q, want invalid push listener token", resp.Error)
 	}
 }
 
@@ -3056,7 +3089,7 @@ func TestBroker_CustomEventEmptyMessage(t *testing.T) {
 
 // TestBroker_PushToListenerSession verifies that messages sent to "alice" are also pushed to "alice-push" session (L5)
 func TestBroker_PushToListenerSession(t *testing.T) {
-	sockPath, _, cleanup := startTestBroker(t)
+	sockPath, b, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	// Connect as "alice-push" (the persistent listener)
@@ -3070,6 +3103,7 @@ func TestBroker_PushToListenerSession(t *testing.T) {
 		Cmd:          "connect",
 		Name:         "alice-push",
 		PushListener: true,
+		PushToken:    b.PushToken(),
 	}
 	if _, err := listenerConn.Send(connectReq); err != nil {
 		t.Fatal(err)
@@ -3128,7 +3162,7 @@ func TestBroker_PushToListenerSession(t *testing.T) {
 
 // TestBroker_ListenReceivesPush verifies that waggle listen receives pushed messages (L1)
 func TestBroker_ListenReceivesPush(t *testing.T) {
-	sockPath, _, cleanup := startTestBroker(t)
+	sockPath, b, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	// Connect listener using ReadMessages
@@ -3142,6 +3176,7 @@ func TestBroker_ListenReceivesPush(t *testing.T) {
 		Cmd:          "connect",
 		Name:         "bob-push",
 		PushListener: true,
+		PushToken:    b.PushToken(),
 	}
 	if _, err := listenerConn.Send(connectReq); err != nil {
 		t.Fatal(err)
@@ -3194,13 +3229,18 @@ func TestBroker_ListenReceivesPush(t *testing.T) {
 
 // TestClient_ReadMessagesFilters verifies that ReadMessages only emits message-type responses (L10)
 func TestClient_ReadMessagesFilters(t *testing.T) {
-	sockPath, _, cleanup := startTestBroker(t)
+	sockPath, b, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	// Connect a listener as "filter-test-push"
 	listenerConn := connectClient(t, sockPath)
 	defer listenerConn.Close()
-	listenerConn.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "filter-test-push", PushListener: true})
+	listenerConn.Send(protocol.Request{
+		Cmd:          protocol.CmdConnect,
+		Name:         "filter-test-push",
+		PushListener: true,
+		PushToken:    b.PushToken(),
+	})
 
 	// Start ReadMessages — it now owns the scanner
 	msgCh, err := listenerConn.ReadMessages()
@@ -3243,12 +3283,17 @@ func TestClient_ReadMessagesFilters(t *testing.T) {
 }
 
 func TestPresence_StripsPushAndDeduplicates(t *testing.T) {
-	sockPath, _, cleanup := startTestBroker(t)
+	sockPath, b, cleanup := startTestBroker(t)
 	defer cleanup()
 
 	c1 := connectClient(t, sockPath)
 	defer c1.Close()
-	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice-push", PushListener: true})
+	c1.Send(protocol.Request{
+		Cmd:          protocol.CmdConnect,
+		Name:         "alice-push",
+		PushListener: true,
+		PushToken:    b.PushToken(),
+	})
 
 	c2 := connectClient(t, sockPath)
 	defer c2.Close()

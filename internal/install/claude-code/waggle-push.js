@@ -29,6 +29,23 @@ try {
 
     const now = new Date();
     try { fs.utimesSync(sessionFile, now, now); } catch {}
+    try { fs.utimesSync(pointerFile, now, now); } catch {}
+
+    let orphanContent = '';
+    try {
+        const sigDirPath = path.join(rtDir, 'signals', project);
+        const entries = fs.readdirSync(sigDirPath);
+        for (const f of entries) {
+            if (f.startsWith(agent + '.c-')) {
+                const orphanPath = path.join(sigDirPath, f);
+                try {
+                    const data = fs.readFileSync(orphanPath, 'utf8').trim();
+                    if (data) orphanContent += (orphanContent ? '\n' : '') + data;
+                    fs.unlinkSync(orphanPath);
+                } catch {}
+            }
+        }
+    } catch {}
 
     const sigFile = path.join(rtDir, 'signals', project, agent);
     if (!fs.existsSync(sigFile)) process.exit(0);
@@ -40,10 +57,11 @@ try {
     const content = fs.readFileSync(tmpFile, 'utf8').trim();
     try { fs.unlinkSync(tmpFile); } catch {}
 
-    if (!content) process.exit(0);
+    const allContent = [orphanContent, content].filter(Boolean).join('\n');
+    if (!allContent) process.exit(0);
 
     console.log(JSON.stringify({
-        additionalContext: '\n' + content +
+        additionalContext: '\n' + allContent +
             '\nRespond to waggle messages using: ' +
             'WAGGLE_AGENT_NAME="' + agent + '" waggle send <sender> "<reply>"\n'
     }));

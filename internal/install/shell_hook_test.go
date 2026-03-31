@@ -41,6 +41,20 @@ func TestInstallShellHook_ZshenvWithMarkers(t *testing.T) {
 	}
 }
 
+func TestInstallShellHook_ZshenvDoesNotExportAgentPPID(t *testing.T) {
+	home := t.TempDir()
+	if err := installShellHook(home); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".zshenv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "export WAGGLE_AGENT_PPID") {
+		t.Fatal("unexpected WAGGLE_AGENT_PPID export in shell hook block")
+	}
+}
+
 func TestInstallShellHook_BashrcWithMarkers(t *testing.T) {
 	home := t.TempDir()
 	os.WriteFile(filepath.Join(home, ".bashrc"), []byte("# bash\n"), 0o644)
@@ -48,6 +62,24 @@ func TestInstallShellHook_BashrcWithMarkers(t *testing.T) {
 	data, _ := os.ReadFile(filepath.Join(home, ".bashrc"))
 	if !strings.Contains(string(data), "WAGGLE-SHELL-HOOK-BEGIN") {
 		t.Fatal("missing marker in .bashrc")
+	}
+}
+
+func TestInstallShellHook_ScriptTouchesPointerAndRecoversOrphans(t *testing.T) {
+	home := t.TempDir()
+	if err := installShellHook(home); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".waggle", "shell-hook.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	if !strings.Contains(content, `for _orphan in "$_ws".c-*; do`) {
+		t.Fatal("missing orphan recovery loop")
+	}
+	if !strings.Contains(content, `touch "$_sm" "$_pm" 2>/dev/null`) {
+		t.Fatal("missing pointer file touch")
 	}
 }
 
