@@ -130,6 +130,7 @@ func migrate(db *sql.DB) error {
 
 // UpsertWatch inserts or updates a watch keyed by (project_id, agent_name).
 func (s *Store) UpsertWatch(w Watch) error {
+	w.AgentName = SanitizeAgentName(w.AgentName)
 	if w.ProjectID == "" || w.AgentName == "" {
 		return fmt.Errorf("project_id and agent_name required")
 	}

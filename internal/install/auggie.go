@@ -8,96 +8,6 @@ import (
 	"strings"
 )
 
-// safeWriteFile writes content to path atomically by writing to a temp file
-// in the same directory and renaming. This prevents symlink-following writes
-// and hard-link inode mutation.
-func safeWriteFile(path string, content []byte, perm os.FileMode) error {
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, ".waggle-*.tmp")
-	if err != nil {
-		return fmt.Errorf("creating temp file: %w", err)
-	}
-	tmpPath := tmp.Name()
-
-	// Clean up temp file on any failure
-	defer func() {
-		if tmpPath != "" {
-			os.Remove(tmpPath)
-		}
-	}()
-
-	if _, err := tmp.Write(content); err != nil {
-		tmp.Close()
-		return fmt.Errorf("writing temp file: %w", err)
-	}
-	if err := tmp.Chmod(perm); err != nil {
-		tmp.Close()
-		return fmt.Errorf("setting permissions: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("closing temp file: %w", err)
-	}
-
-	if err := os.Rename(tmpPath, path); err != nil {
-		return fmt.Errorf("renaming temp file: %w", err)
-	}
-	tmpPath = "" // prevent deferred cleanup
-	return nil
-}
-
-// validateAncestorPath checks that the directory path resolves to the expected
-// location under homeDir. This prevents ancestor-symlink attacks where
-// ~/.augment/ or ~/.augment/rules/ is a symlink to an attacker-controlled
-// directory.
-func validateAncestorPath(dir, homeDir string) error {
-	resolvedHome, err := filepath.EvalSymlinks(homeDir)
-	if err != nil {
-		return fmt.Errorf("resolving home dir: %w", err)
-	}
-
-	// Build expected resolved path using the resolved homeDir
-	expectedResolved := filepath.Join(resolvedHome, ".augment", "rules")
-
-	// Find the longest existing prefix of dir to resolve
-	resolved, err := resolveExistingPrefix(dir)
-	if err != nil {
-		return fmt.Errorf("resolving path %s: %w", dir, err)
-	}
-
-	// The resolved existing prefix must be a prefix of expectedResolved
-	// (or equal to it). This ensures no symlink diverts the path.
-	if resolved != expectedResolved && !strings.HasPrefix(expectedResolved, resolved+string(filepath.Separator)) {
-		return fmt.Errorf("directory %s resolves to %s (expected under %s); possible symlink in ancestor path", dir, resolved, expectedResolved)
-	}
-	return nil
-}
-
-// resolveExistingPrefix walks up the directory tree from path until it finds
-// an existing directory, resolves symlinks on that prefix, then appends the
-// remaining unresolved components. This lets us validate paths where some
-// trailing components don't exist yet.
-func resolveExistingPrefix(path string) (string, error) {
-	resolved, err := filepath.EvalSymlinks(path)
-	if err == nil {
-		return resolved, nil
-	}
-	if !os.IsNotExist(err) {
-		return "", err
-	}
-
-	parent := filepath.Dir(path)
-	if parent == path {
-		return path, nil // reached root
-	}
-
-	resolvedParent, err := resolveExistingPrefix(parent)
-	if err != nil {
-		return "", err
-	}
-
-	return filepath.Join(resolvedParent, filepath.Base(path)), nil
-}
-
 //go:embed all:auggie
 var auggieFiles embed.FS
 
@@ -140,15 +50,19 @@ func rejectNonRegularFile(path string) error {
 func installAuggie(homeDir string) error {
 	rulesDir := filepath.Join(homeDir, ".augment", "rules")
 
-	// Validate ancestor path before creating directories
-	if err := validateAncestorPath(rulesDir, homeDir); err != nil {
-		return err
-	}
-
-	if err := os.MkdirAll(rulesDir, 0755); err != nil {
+	if err := safeMkdirAll(rulesDir, homeDir, 0o755); err != nil {
 		return fmt.Errorf("creating Auggie rules dir: %w", err)
 	}
 	rulesPath := filepath.Join(rulesDir, "waggle.md")
+	if info, err := os.Lstat(rulesPath); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			if err := os.Remove(rulesPath); err != nil {
+				return fmt.Errorf("removing existing symlink %s: %w", rulesPath, err)
+			}
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("lstat %s: %w", rulesPath, err)
+	}
 
 	content, err := canonicalAuggieFile()
 	if err != nil {
@@ -156,23 +70,25 @@ func installAuggie(homeDir string) error {
 	}
 
 	// Atomic write: detaches hard links, replaces leaf symlinks
-	return safeWriteFile(rulesPath, []byte(content), 0644)
+	if err := safeWriteFile(rulesPath, []byte(content), 0o644, homeDir); err != nil {
+		return err
+	}
+
+	if err := installShellHook(homeDir); err != nil {
+		return fmt.Errorf("installing shell hook: %w", err)
+	}
+
+	return nil
 }
 
 func uninstallAuggie(homeDir string) error {
 	rulesPath := filepath.Join(homeDir, ".augment", "rules", "waggle.md")
-	rulesDir := filepath.Dir(rulesPath)
-
-	// Validate ancestor path
-	if err := validateAncestorPath(rulesDir, homeDir); err != nil {
-		return err
-	}
 
 	if err := rejectNonRegularFile(rulesPath); err != nil {
 		return err
 	}
 
-	err := os.Remove(rulesPath)
+	err := safeRemove(rulesPath, homeDir)
 	if os.IsNotExist(err) {
 		return nil
 	}

@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -85,6 +86,10 @@ func route(s *Session, req protocol.Request) protocol.Response {
 	}
 }
 
+type connectResponseData struct {
+	PushToken string `json:"push_token,omitempty"`
+}
+
 func handleConnect(s *Session, req protocol.Request) protocol.Response {
 	if req.Name == "" {
 		return protocol.ErrResponse(protocol.ErrInvalidRequest, "name required")
@@ -92,14 +97,40 @@ func handleConnect(s *Session, req protocol.Request) protocol.Response {
 	if len(req.Name) > config.Defaults.MaxFieldLength {
 		return protocol.ErrResponse(protocol.ErrInvalidRequest, fmt.Sprintf("name too long (max %d chars)", config.Defaults.MaxFieldLength))
 	}
+	// Reserve -push suffix for push listeners — prevents routing collisions
+	if strings.HasSuffix(req.Name, "-push") && !req.PushListener {
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, `names ending in "-push" are reserved; set push_listener: true to connect as a push listener`)
+	}
 	if s.name != "" {
 		return protocol.ErrResponse(protocol.ErrAlreadyConnected, "already connected")
 	}
 
+	var pushToken string
 	s.broker.mu.Lock()
 	if existing, ok := s.broker.sessions[req.Name]; ok && existing != s {
 		s.broker.mu.Unlock()
 		return protocol.ErrResponse(protocol.ErrAlreadyConnected, "session name already in use")
+	}
+	if strings.HasSuffix(req.Name, "-push") {
+		baseName := strings.TrimSuffix(req.Name, "-push")
+		expectedToken, exists := s.broker.pushTokens[baseName]
+		if !exists || req.PushToken == "" || subtle.ConstantTimeCompare([]byte(req.PushToken), []byte(expectedToken)) != 1 {
+			s.broker.mu.Unlock()
+			return protocol.ErrResponse(protocol.ErrForbidden, "invalid push listener token")
+		}
+	} else {
+		if existingToken, exists := s.broker.pushTokens[req.Name]; exists {
+			pushToken = existingToken
+		} else {
+			var err error
+			pushToken, err = newPushToken()
+			if err != nil {
+				s.broker.mu.Unlock()
+				return protocol.ErrResponse(protocol.ErrInternalError, err.Error())
+			}
+			s.broker.pushTokens[req.Name] = pushToken
+			s.ownsPushToken = true
+		}
 	}
 	s.name = req.Name
 	s.broker.sessions[s.name] = s
@@ -108,6 +139,13 @@ func handleConnect(s *Session, req protocol.Request) protocol.Response {
 	// Publish presence.online event
 	publishPresenceEvent(s.broker, "presence.online", s.name)
 
+	if pushToken != "" {
+		data, err := json.Marshal(connectResponseData{PushToken: pushToken})
+		if err != nil {
+			return protocol.ErrResponse(protocol.ErrInternalError, err.Error())
+		}
+		return protocol.OKResponse(data)
+	}
 	return protocol.OKResponse(nil)
 }
 
@@ -524,7 +562,10 @@ func publishTaskEvent(b *Broker, event string, task *tasks.Task) {
 }
 
 func mustMarshal(v interface{}) json.RawMessage {
-	data, _ := json.Marshal(v)
+	data, err := json.Marshal(v)
+	if err != nil {
+		panic(fmt.Sprintf("mustMarshal: %v", err))
+	}
 	return data
 }
 
@@ -573,9 +614,14 @@ func handleSend(s *Session, req protocol.Request) protocol.Response {
 		s.broker.ackWaitersMu.Unlock()
 	}
 
-	// Push to recipient if connected
+	// Push to recipient if connected — fall back to name-push listener
 	s.broker.mu.RLock()
 	recipient, online := s.broker.sessions[req.Name]
+	usedPushFallback := false
+	if !online {
+		recipient, online = s.broker.sessions[req.Name+"-push"]
+		usedPushFallback = online
+	}
 	s.broker.mu.RUnlock()
 
 	// CLASS 2 FIX (B3): Skip push delivery when sending to self to prevent protocol corruption
@@ -595,22 +641,24 @@ func handleSend(s *Session, req protocol.Request) protocol.Response {
 		if err := recipient.enc.Encode(pushMsg); err != nil {
 			recipient.writeMu.Unlock()
 			// Don't mark as pushed if delivery failed
-			log.Printf("session %s: failed to push message %d to %s: %v", s.name, msg.ID, req.Name, err)
+			log.Printf("session %q: failed to push message %d to %q: %v", s.name, msg.ID, req.Name, err)
 		} else {
 			recipient.writeMu.Unlock()
 			if err := s.broker.msgStore.MarkPushed(msg.ID); err != nil {
-				log.Printf("session %s: failed to mark message %d as pushed: %v", s.name, msg.ID, err)
+				log.Printf("session %q: failed to mark message %d as pushed: %v", s.name, msg.ID, err)
 			}
 		}
 	}
 
-	// Also push to persistent listener (<name>-push) if connected
+	// Also push to persistent listener (<name>-push) if connected.
+	// Skip if fallback already sent to -push above (prevents double-push).
 	pushName := req.Name + "-push"
+	senderName := strings.TrimSuffix(s.name, "-push")
 	s.broker.mu.RLock()
 	pushRecipient, pushOnline := s.broker.sessions[pushName]
 	s.broker.mu.RUnlock()
 
-	if pushOnline && pushRecipient != s {
+	if pushOnline && pushRecipient != s && !usedPushFallback && req.Name != senderName {
 		pushResp := protocol.Response{
 			OK: true,
 			Data: mustMarshal(map[string]any{
@@ -624,7 +672,7 @@ func handleSend(s *Session, req protocol.Request) protocol.Response {
 		pushRecipient.writeMu.Lock()
 		if err := pushRecipient.enc.Encode(pushResp); err != nil {
 			pushRecipient.writeMu.Unlock()
-			log.Printf("session %s: failed to push message %d to %s: %v", s.name, msg.ID, pushName, err)
+			log.Printf("session %q: failed to push message %d to %q: %v", s.name, msg.ID, pushName, err)
 		} else {
 			pushRecipient.writeMu.Unlock()
 		}
@@ -657,7 +705,8 @@ func handleSend(s *Session, req protocol.Request) protocol.Response {
 }
 
 func handleInbox(s *Session, req protocol.Request) protocol.Response {
-	messages, err := s.broker.msgStore.Inbox(s.name)
+	caller := strings.TrimSuffix(s.name, "-push")
+	messages, err := s.broker.msgStore.Inbox(caller)
 	if err != nil {
 		return protocol.ErrResponse(protocol.ErrInternalError, err.Error())
 	}
@@ -669,7 +718,8 @@ func handleAck(s *Session, req protocol.Request) protocol.Response {
 		return protocol.ErrResponse(protocol.ErrInvalidRequest, "message_id required")
 	}
 
-	err := s.broker.msgStore.Ack(req.MessageID, s.name)
+	caller := strings.TrimSuffix(s.name, "-push")
+	err := s.broker.msgStore.Ack(req.MessageID, caller)
 	if err != nil {
 		if errors.Is(err, messages.ErrMessageNotFound) {
 			return protocol.ErrResponse(protocol.ErrMessageNotFound, err.Error())
@@ -695,13 +745,33 @@ func handleAck(s *Session, req protocol.Request) protocol.Response {
 
 func handlePresence(s *Session) protocol.Response {
 	s.broker.mu.RLock()
+	// Collect all raw session names first
+	allNames := make(map[string]bool, len(s.broker.sessions))
+	for name := range s.broker.sessions {
+		allNames[name] = true
+	}
+	// Build presence list, hiding -push listeners only when the base agent exists
+	seen := make(map[string]bool)
 	agents := make([]map[string]string, 0, len(s.broker.sessions))
 	for name := range s.broker.sessions {
-		agents = append(agents, map[string]string{"name": name, "state": "online"})
+		displayName := name
+		if base := strings.TrimSuffix(name, "-push"); base != name {
+			// This is a -push listener. Hide it if the base agent session exists.
+			if allNames[base] {
+				continue
+			}
+			// Base agent not connected — show the -push listener under the base name
+			// so the agent is still discoverable.
+			displayName = base
+		}
+		if seen[displayName] {
+			continue
+		}
+		seen[displayName] = true
+		agents = append(agents, map[string]string{"name": displayName, "state": "online"})
 	}
 	s.broker.mu.RUnlock()
 
-	// Sort by name for deterministic output
 	sort.Slice(agents, func(i, j int) bool { return agents[i]["name"] < agents[j]["name"] })
 
 	return protocol.OKResponse(mustMarshal(agents))
@@ -761,4 +831,3 @@ func handleSpawnUpdatePID(s *Session, req protocol.Request) protocol.Response {
 
 	return protocol.OKResponse(nil)
 }
-

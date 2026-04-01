@@ -2,7 +2,10 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -66,6 +69,7 @@ type Manager struct {
 	lastDeliveryErr map[string]error
 	workers         map[watchKey]*watchWorker
 	recentErrors    []ErrorEntry // ring buffer, capped at config.Defaults.RuntimeRecentErrorCap
+	signalDir       string       // set via SetSignalDir; enables shell-hook signal files
 }
 
 func NewManager(store *Store, factory ListenerFactory, notifier Notifier) *Manager {
@@ -80,6 +84,11 @@ func NewManager(store *Store, factory ListenerFactory, notifier Notifier) *Manag
 		lastDeliveryErr: make(map[string]error),
 		workers:         make(map[watchKey]*watchWorker),
 	}
+}
+
+// SetSignalDir enables signal file writing for shell-hook delivery.
+func (m *Manager) SetSignalDir(dir string) {
+	m.signalDir = dir
 }
 
 func (m *Manager) Start(ctx context.Context) error {
@@ -267,7 +276,9 @@ func (m *Manager) stopWatch(key watchKey) {
 	m.clearDeliveryError(watchListenerErrorKey(worker.watch))
 	m.clearDeliveryError(watchCatchUpErrorKey(worker.watch))
 	m.clearDeliveryError(watchDeliveryErrorKey(worker.watch.ProjectID, worker.watch.AgentName))
-	_ = m.refreshWatchDeliveryState(worker.watch.ProjectID, worker.watch.AgentName)
+	if err := m.refreshWatchDeliveryState(worker.watch.ProjectID, worker.watch.AgentName); err != nil {
+		log.Printf("warning: refresh delivery state for %q/%q: %v", worker.watch.ProjectID, worker.watch.AgentName, err)
+	}
 }
 
 func (m *Manager) stopAllWorkers() {
@@ -398,10 +409,14 @@ func (m *Manager) handleDelivery(w Watch, d Delivery) error {
 		}
 		m.setDeliveryFailureCause(watchKey{projectID: w.ProjectID, agentName: w.AgentName}, err)
 		releasePending()
-		_ = m.refreshWatchDeliveryState(w.ProjectID, w.AgentName)
+		if refreshErr := m.refreshWatchDeliveryState(w.ProjectID, w.AgentName); refreshErr != nil {
+			log.Printf("warning: refresh delivery state for %q/%q: %v", w.ProjectID, w.AgentName, refreshErr)
+		}
 		return nil
 	}
-	_ = m.refreshWatchDeliveryState(w.ProjectID, w.AgentName)
+	if err := m.refreshWatchDeliveryState(w.ProjectID, w.AgentName); err != nil {
+		log.Printf("warning: refresh delivery state for %q/%q: %v", w.ProjectID, w.AgentName, err)
+	}
 	return nil
 }
 
@@ -439,7 +454,9 @@ func (m *Manager) retryPendingNotifications() error {
 		release()
 	}
 	for watch := range affected {
-		_ = m.refreshWatchDeliveryState(watch.projectID, watch.agentName)
+		if err := m.refreshWatchDeliveryState(watch.projectID, watch.agentName); err != nil {
+			log.Printf("warning: refresh delivery state for %q/%q: %v", watch.projectID, watch.agentName, err)
+		}
 	}
 	if firstErr == nil {
 		m.clearDeliveryError("retry-sweep")
@@ -464,15 +481,25 @@ func (m *Manager) runRetrySweepLoop(ctx context.Context) {
 }
 
 func (m *Manager) notifyRecord(projectID, agentName string, messageID int64, title, body string) error {
-	if m.notifier != nil {
-		notifyCtx, cancel := context.WithTimeout(m.ctx, config.Defaults.RuntimeNotificationTimeout)
-		defer cancel()
-		if err := m.notifier.Notify(notifyCtx, title, body); err != nil {
-			return err
+	if m.signalDir != "" {
+		if err := WriteSignal(m.signalDir, projectID, agentName, senderFromTitle(title), body, config.Defaults.SignalMaxBytes); err != nil {
+			if errors.Is(err, ErrSignalCapExceeded) {
+				log.Printf("warning: signal cap exceeded for %q/%q message %d", projectID, agentName, messageID)
+				return nil
+			}
+			return fmt.Errorf("write signal: %w", err)
 		}
 	}
 	if err := m.store.MarkNotified(projectID, agentName, messageID, time.Now().UTC()); err != nil {
 		return err
+	}
+	if m.notifier != nil {
+		notifyCtx, cancel := context.WithTimeout(m.ctx, config.Defaults.RuntimeNotificationTimeout)
+		err := m.notifier.Notify(notifyCtx, title, body)
+		cancel()
+		if err != nil {
+			log.Printf("warning: best-effort notifier failed for %q/%q message %d: %v", projectID, agentName, messageID, err)
+		}
 	}
 	return nil
 }
@@ -592,6 +619,14 @@ func notificationTitle(d Delivery) string {
 		return "New waggle message"
 	}
 	return fmt.Sprintf("Message from %s", d.FromName)
+}
+
+func senderFromTitle(title string) string {
+	const prefix = "Message from "
+	if strings.HasPrefix(title, prefix) {
+		return strings.TrimPrefix(title, prefix)
+	}
+	return "unknown"
 }
 
 type deliveryKey struct {
@@ -754,6 +789,11 @@ func (m *Manager) runMaintenanceLoop(ctx context.Context) {
 			if _, err := m.store.PruneDeliveryRecords(now.Add(-config.Defaults.RuntimeDeliveryRetention)); err != nil {
 				hadErr = true
 				m.captureDeliveryError("maintenance", fmt.Errorf("prune delivery records: %w", err))
+			}
+			if m.signalDir != "" {
+				PruneStaleFiles(filepath.Dir(m.signalDir), "agent-ppid-", 24*time.Hour)
+				PruneStaleFiles(filepath.Dir(m.signalDir), "agent-session-", 24*time.Hour)
+				PruneStaleSignals(m.signalDir, 24*time.Hour)
 			}
 			if err := m.refreshTrackedDeliveryStates(); err != nil {
 				hadErr = true

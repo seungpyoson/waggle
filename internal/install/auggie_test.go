@@ -293,10 +293,8 @@ func TestInstallAuggie_ReplacesLeafSymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Atomic write replaces the symlink directory entry, doesn't follow it
-	err := installAuggie(tmpHome)
-	if err != nil {
-		t.Fatalf("install should succeed (atomic write replaces symlink): %v", err)
+	if err := installAuggie(tmpHome); err != nil {
+		t.Fatalf("install should replace leaf symlink: %v", err)
 	}
 
 	// Target must be unchanged
@@ -305,18 +303,21 @@ func TestInstallAuggie_ReplacesLeafSymlink(t *testing.T) {
 		t.Fatalf("target file was modified through symlink: %q", string(data))
 	}
 
-	// waggle.md should now be a regular file with canonical content
+	// waggle.md should now be a regular managed file with canonical content.
 	info, err := os.Lstat(rulesPath)
 	if err != nil {
 		t.Fatalf("lstat waggle.md: %v", err)
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
-		t.Fatal("waggle.md is still a symlink after install")
+		t.Fatal("waggle.md should no longer be a symlink after install")
 	}
-	waggleData, _ := os.ReadFile(rulesPath)
-	canonical := canonicalAuggieFileForTest(t)
-	if string(waggleData) != canonical {
-		t.Fatalf("waggle.md content wrong after replacing symlink")
+
+	got, err := os.ReadFile(rulesPath)
+	if err != nil {
+		t.Fatalf("read waggle.md: %v", err)
+	}
+	if string(got) != canonicalAuggieFileForTest(t) {
+		t.Fatal("waggle.md should be restored to canonical content")
 	}
 }
 

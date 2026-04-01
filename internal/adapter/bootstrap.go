@@ -1,11 +1,15 @@
 package adapter
 
 import (
+	"errors"
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/seungpyoson/waggle/internal/broker"
 	"github.com/seungpyoson/waggle/internal/config"
@@ -77,6 +81,14 @@ func Bootstrap(input BootstrapInput) (BootstrapResult, error) {
 		return BootstrapResult{}, err
 	}
 
+	ppid := resolveAgentPPID()
+	nonce := fmt.Sprintf("%d-%d", ppid, time.Now().UnixNano())
+	// Best-effort: runtime delivery is driven by the watch store, and this mapping only
+	// enables shell-hook signal discovery for the current terminal session.
+	if err := WriteSessionMapping(runtimePaths.RuntimeDir, ppid, nonce, agentName, projectID); err != nil {
+		log.Printf("warning: write session mapping failed: %v; push delivery degraded", err)
+	}
+
 	records, err := store.Unread(projectID, agentName)
 	if err != nil {
 		return BootstrapResult{}, err
@@ -103,10 +115,10 @@ func Bootstrap(input BootstrapInput) (BootstrapResult, error) {
 
 func ResolveAgentName(tool, explicit, tty string, ppid, pid int) string {
 	if explicit != "" {
-		return explicit
+		return sanitizeToken(explicit)
 	}
 	if env := os.Getenv("WAGGLE_AGENT_NAME"); env != "" {
-		return env
+		return sanitizeToken(env)
 	}
 
 	tool = sanitizeToken(tool)
@@ -138,7 +150,7 @@ func resolveProjectID(explicit string) (string, error) {
 	return config.ResolveProjectID()
 }
 
-func ensureRuntimeStarted(runtimePaths config.Paths) error {
+func ensureRuntimeStarted(runtimePaths config.Paths) (retErr error) {
 	if rt.IsRunning(runtimePaths) {
 		return nil
 	}
@@ -154,7 +166,13 @@ func ensureRuntimeStarted(runtimePaths config.Paths) error {
 		return err
 	}
 	defer func() {
-		_ = releaseLock()
+		if err := releaseLock(); err != nil {
+			if retErr == nil {
+				retErr = fmt.Errorf("release runtime start lock: %w", err)
+				return
+			}
+			log.Printf("warning: release runtime start lock: %v", err)
+		}
 	}()
 
 	daemonArgs := []string{os.Args[0], "runtime", "start", "--foreground"}
@@ -194,6 +212,81 @@ func sanitizeTTY(tty string) string {
 		return ""
 	}
 	return sanitizeToken(base)
+}
+
+// WriteSessionMapping writes the PPID pointer and unique session mapping for hook discovery.
+// The projectID is hashed to the same opaque key used for signal directory names,
+// so shell/JS hooks never receive raw project paths in session mapping files.
+func WriteSessionMapping(runtimeDir string, ppid int, nonce, agentName, projectID string) error {
+	if err := os.MkdirAll(runtimeDir, 0o700); err != nil {
+		return err
+	}
+
+	projectKey := rt.ProjectPathKey(projectID)
+	sessionPath := filepath.Join(runtimeDir, "agent-session-"+nonce)
+	if err := writeRuntimeFileAtomic(sessionPath, []byte(agentName+"\n"+projectKey+"\n"), 0o600); err != nil {
+		return err
+	}
+
+	ppidPath := filepath.Join(runtimeDir, fmt.Sprintf("agent-ppid-%d", ppid))
+	return writeRuntimeFileAtomic(ppidPath, []byte(nonce+"\n"), 0o600)
+}
+
+func writeRuntimeFileAtomic(path string, data []byte, perm os.FileMode) (retErr error) {
+	dir := filepath.Dir(path)
+	base := filepath.Base(path)
+
+	tmp, err := os.CreateTemp(dir, base+".*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	tmpOpen := true
+	cleanupPending := true
+	defer func() {
+		if tmpOpen {
+			if err := tmp.Close(); err != nil {
+				retErr = errors.Join(retErr, fmt.Errorf("close temp %s: %w", tmpName, err))
+			}
+		}
+		if cleanupPending {
+			if err := os.Remove(tmpName); err != nil && !os.IsNotExist(err) {
+				retErr = errors.Join(retErr, fmt.Errorf("remove temp %s: %w", tmpName, err))
+			}
+		}
+	}()
+
+	if err := tmp.Chmod(perm); err != nil {
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		return err
+	}
+	closeErr := tmp.Close()
+	tmpOpen = false
+	if closeErr != nil {
+		return closeErr
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return err
+	}
+	cleanupPending = false
+	return nil
+}
+
+// resolveAgentPPID returns the agent process PID for PPID mapping.
+// Prefers WAGGLE_AGENT_PPID env var (set by callers who know the real agent PID)
+// over os.Getppid() (which returns the intermediate shell, not the agent).
+func resolveAgentPPID() int {
+	if ep := os.Getenv("WAGGLE_AGENT_PPID"); ep != "" {
+		if p, err := strconv.Atoi(ep); err == nil && p > 0 {
+			return p
+		}
+	}
+	return os.Getppid()
 }
 
 func sanitizeToken(v string) string {

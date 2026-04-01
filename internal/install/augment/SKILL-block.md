@@ -2,7 +2,7 @@
 
 At the start of every session, run:
 
-    waggle adapter bootstrap augment --format markdown
+    WAGGLE_AGENT_PPID=$PPID waggle adapter bootstrap augment --format markdown
 
 What to do with the result:
 

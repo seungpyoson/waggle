@@ -65,7 +65,7 @@ func validateMarkerTopology(content, begin, end string) error {
 	return nil
 }
 
-func upsertManagedBlock(path, begin, end, body string) error {
+func upsertManagedBlock(path, begin, end, body, root string) error {
 	current, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("reading %s: %w", path, err)
@@ -84,15 +84,15 @@ func upsertManagedBlock(path, begin, end, body string) error {
 			// Begin without end — replace everything from begin to EOF with canonical block.
 			// This self-heals truncated files (e.g., OS crash during write).
 			replaced := content[:idx] + block
-			return os.WriteFile(path, managedBlockBytes(replaced, true), 0644)
+			return safeWriteFile(path, managedBlockBytes(replaced, true), 0o644, root)
 		}
 		endAbs := idx + endIdx + len(end)
 		replaced := content[:idx] + block + content[endAbs:]
-		return os.WriteFile(path, managedBlockBytes(replaced, content[endAbs:] == ""), 0644)
+		return safeWriteFile(path, managedBlockBytes(replaced, content[endAbs:] == ""), 0o644, root)
 	}
 
 	if content == "" {
-		return os.WriteFile(path, managedBlockBytes(block, true), 0644)
+		return safeWriteFile(path, managedBlockBytes(block, true), 0o644, root)
 	}
 
 	// Separator: if the existing file doesn't end with a newline, we add one
@@ -107,10 +107,10 @@ func upsertManagedBlock(path, begin, end, body string) error {
 	}
 
 	merged := content + separator + block
-	return os.WriteFile(path, managedBlockBytes(merged, true), 0644)
+	return safeWriteFile(path, managedBlockBytes(merged, true), 0o644, root)
 }
 
-func removeManagedBlock(path, begin, end string) error {
+func removeManagedBlock(path, begin, end, root string) error {
 	current, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -133,7 +133,7 @@ func removeManagedBlock(path, begin, end string) error {
 		// Begin without end — remove everything from begin to EOF.
 		// This self-heals truncated files.
 		updated := content[:idx]
-		return os.WriteFile(path, []byte(updated), 0644)
+		return safeWriteFile(path, []byte(updated), 0o644, root)
 	}
 	endAbs := idx + endIdx + len(end)
 	after := content[endAbs:]
@@ -144,7 +144,7 @@ func removeManagedBlock(path, begin, end string) error {
 	}
 
 	updated := content[:idx] + after
-	return os.WriteFile(path, []byte(updated), 0644)
+	return safeWriteFile(path, []byte(updated), 0o644, root)
 }
 
 func canonicalManagedBlock(begin, end, body string) string {

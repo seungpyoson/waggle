@@ -37,7 +37,7 @@ func UninstallCodex() error {
 func installCodex(homeDir string) error {
 	codexDir := filepath.Join(homeDir, ".codex")
 	skillDir := filepath.Join(codexDir, "skills", "waggle-runtime")
-	if err := os.MkdirAll(skillDir, 0755); err != nil {
+	if err := safeMkdirAll(skillDir, homeDir, 0o755); err != nil {
 		return fmt.Errorf("creating Codex skill dir: %w", err)
 	}
 
@@ -45,7 +45,7 @@ func installCodex(homeDir string) error {
 	if err != nil {
 		return fmt.Errorf("reading embedded Codex skill: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), skillData, 0644); err != nil {
+	if err := safeWriteFile(filepath.Join(skillDir, "SKILL.md"), skillData, 0o644, homeDir); err != nil {
 		return fmt.Errorf("writing Codex skill: %w", err)
 	}
 
@@ -53,8 +53,12 @@ func installCodex(homeDir string) error {
 	if err != nil {
 		return fmt.Errorf("reading embedded Codex AGENTS block: %w", err)
 	}
-	if err := upsertManagedBlock(filepath.Join(codexDir, "AGENTS.md"), codexBlockBegin, codexBlockEnd, string(blockData)); err != nil {
+	if err := upsertManagedBlock(filepath.Join(codexDir, "AGENTS.md"), codexBlockBegin, codexBlockEnd, string(blockData), homeDir); err != nil {
 		return fmt.Errorf("updating Codex AGENTS.md: %w", err)
+	}
+
+	if err := installShellHook(homeDir); err != nil {
+		return fmt.Errorf("installing shell hook: %w", err)
 	}
 
 	return nil
@@ -63,11 +67,11 @@ func installCodex(homeDir string) error {
 func uninstallCodex(homeDir string) error {
 	codexDir := filepath.Join(homeDir, ".codex")
 
-	if err := os.RemoveAll(filepath.Join(codexDir, "skills", "waggle-runtime")); err != nil && !os.IsNotExist(err) {
+	if err := safeRemoveAll(filepath.Join(codexDir, "skills", "waggle-runtime"), homeDir); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("removing Codex skill directory: %w", err)
 	}
 
-	if err := removeManagedBlock(filepath.Join(codexDir, "AGENTS.md"), codexBlockBegin, codexBlockEnd); err != nil {
+	if err := removeManagedBlock(filepath.Join(codexDir, "AGENTS.md"), codexBlockBegin, codexBlockEnd, homeDir); err != nil {
 		return fmt.Errorf("updating Codex AGENTS.md: %w", err)
 	}
 

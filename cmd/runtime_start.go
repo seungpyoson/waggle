@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"os/signal"
 	"syscall"
@@ -18,7 +19,9 @@ var runtimeForeground bool
 
 func init() {
 	runtimeStartCmd.Flags().BoolVar(&runtimeForeground, "foreground", false, "Run machine runtime in foreground")
-	_ = runtimeStartCmd.Flags().MarkHidden("foreground")
+	if err := runtimeStartCmd.Flags().MarkHidden("foreground"); err != nil {
+		panic(fmt.Sprintf("hide runtime foreground flag: %v", err))
+	}
 
 	runtimeCmd.AddCommand(runtimeStartCmd)
 	runtimeCmd.AddCommand(runtimeStopCmd)
@@ -28,7 +31,7 @@ func init() {
 var runtimeStartCmd = &cobra.Command{
 	Use:   "start",
 	Short: "Start the local machine runtime daemon",
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(cmd *cobra.Command, args []string) (retErr error) {
 		runtimePaths, err := resolveRuntimePaths()
 		if err != nil {
 			return err
@@ -42,6 +45,7 @@ var runtimeStartCmd = &cobra.Command{
 			defer store.Close()
 
 			manager := rt.NewManager(store, rt.NewBrokerListenerFactory(), rt.NewCommandNotifier())
+			manager.SetSignalDir(runtimePaths.RuntimeSignalDir)
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 			return rt.RunDaemon(ctx, runtimePaths, manager)
@@ -67,7 +71,13 @@ var runtimeStartCmd = &cobra.Command{
 			return err
 		}
 		defer func() {
-			_ = releaseLock()
+			if err := releaseLock(); err != nil {
+				if retErr == nil {
+					retErr = fmt.Errorf("release runtime start lock: %w", err)
+					return
+				}
+				log.Printf("warning: release runtime start lock: %v", err)
+			}
 		}()
 
 		daemonArgs := []string{os.Args[0], "runtime", "start", "--foreground"}

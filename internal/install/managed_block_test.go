@@ -24,7 +24,7 @@ func TestUpsertRejectsOrphanedEndMarker(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := upsertManagedBlock(path, testBegin, testEnd, testBody)
+	err := upsertManagedBlock(path, testBegin, testEnd, testBody, filepath.Dir(path))
 	if err == nil {
 		t.Fatal("expected error for orphaned end marker, got nil")
 	}
@@ -47,7 +47,7 @@ func TestUpsertRejectsDuplicateMarkers(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := upsertManagedBlock(path, testBegin, testEnd, testBody)
+	err := upsertManagedBlock(path, testBegin, testEnd, testBody, filepath.Dir(path))
 	if err == nil {
 		t.Fatal("expected error for duplicate markers, got nil")
 	}
@@ -70,7 +70,7 @@ func TestRemoveRejectsOrphanedEndMarker(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := removeManagedBlock(path, testBegin, testEnd)
+	err := removeManagedBlock(path, testBegin, testEnd, filepath.Dir(path))
 	if err == nil {
 		t.Fatal("expected error for orphaned end marker, got nil")
 	}
@@ -93,7 +93,7 @@ func TestRemoveRejectsDuplicateMarkers(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := removeManagedBlock(path, testBegin, testEnd)
+	err := removeManagedBlock(path, testBegin, testEnd, filepath.Dir(path))
 	if err == nil {
 		t.Fatal("expected error for duplicate markers, got nil")
 	}
@@ -117,7 +117,7 @@ func TestUpsertRejectsGluedBeginMarker(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := upsertManagedBlock(path, testBegin, testEnd, testBody)
+	err := upsertManagedBlock(path, testBegin, testEnd, testBody, filepath.Dir(path))
 	if err == nil {
 		t.Fatal("expected error for glued begin marker, got nil")
 	}
@@ -141,7 +141,7 @@ func TestUpsertRejectsGluedEndMarker(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := upsertManagedBlock(path, testBegin, testEnd, testBody)
+	err := upsertManagedBlock(path, testBegin, testEnd, testBody, filepath.Dir(path))
 	if err == nil {
 		t.Fatal("expected error for glued end marker, got nil")
 	}
@@ -167,7 +167,7 @@ func TestUpsertAcceptsBeginAtFileStart(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := upsertManagedBlock(path, testBegin, testEnd, testBody)
+	err := upsertManagedBlock(path, testBegin, testEnd, testBody, filepath.Dir(path))
 	if err != nil {
 		t.Fatalf("unexpected error for valid topology: %v", err)
 	}
@@ -183,7 +183,7 @@ func TestUpsertAcceptsEndAtEOF(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := upsertManagedBlock(path, testBegin, testEnd, testBody)
+	err := upsertManagedBlock(path, testBegin, testEnd, testBody, filepath.Dir(path))
 	if err != nil {
 		t.Fatalf("unexpected error for valid topology: %v", err)
 	}
@@ -199,7 +199,7 @@ func TestUpsertAcceptsBeginOnlyWithLineStart(t *testing.T) {
 	}
 
 	// Should self-heal: replace from begin to EOF with canonical block
-	err := upsertManagedBlock(path, testBegin, testEnd, testBody)
+	err := upsertManagedBlock(path, testBegin, testEnd, testBody, filepath.Dir(path))
 	if err != nil {
 		t.Fatalf("expected self-heal for begin-without-end, got error: %v", err)
 	}
@@ -220,7 +220,7 @@ func TestUpsertSelfHealsBeginWithoutEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := upsertManagedBlock(path, testBegin, testEnd, testBody)
+	err := upsertManagedBlock(path, testBegin, testEnd, testBody, filepath.Dir(path))
 	if err != nil {
 		t.Fatalf("expected self-heal, got error: %v", err)
 	}
@@ -252,7 +252,7 @@ func TestRemoveSelfHealsBeginWithoutEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := removeManagedBlock(path, testBegin, testEnd)
+	err := removeManagedBlock(path, testBegin, testEnd, filepath.Dir(path))
 	if err != nil {
 		t.Fatalf("expected self-heal, got error: %v", err)
 	}
@@ -276,7 +276,7 @@ func TestUpsertRejectsReversedMarkers(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := upsertManagedBlock(path, testBegin, testEnd, testBody)
+	err := upsertManagedBlock(path, testBegin, testEnd, testBody, filepath.Dir(path))
 	if err == nil {
 		t.Fatal("expected error for reversed markers, got nil")
 	}
@@ -299,7 +299,7 @@ func TestRemoveRejectsReversedMarkers(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := removeManagedBlock(path, testBegin, testEnd)
+	err := removeManagedBlock(path, testBegin, testEnd, filepath.Dir(path))
 	if err == nil {
 		t.Fatal("expected error for reversed markers, got nil")
 	}
@@ -325,10 +325,10 @@ func TestRoundTripNewlineBehavior(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		if err := upsertManagedBlock(path, testBegin, testEnd, testBody); err != nil {
+		if err := upsertManagedBlock(path, testBegin, testEnd, testBody, filepath.Dir(path)); err != nil {
 			t.Fatalf("install failed: %v", err)
 		}
-		if err := removeManagedBlock(path, testBegin, testEnd); err != nil {
+		if err := removeManagedBlock(path, testBegin, testEnd, filepath.Dir(path)); err != nil {
 			t.Fatalf("uninstall failed: %v", err)
 		}
 
@@ -347,10 +347,10 @@ func TestRoundTripNewlineBehavior(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		if err := upsertManagedBlock(path, testBegin, testEnd, testBody); err != nil {
+		if err := upsertManagedBlock(path, testBegin, testEnd, testBody, filepath.Dir(path)); err != nil {
 			t.Fatalf("install failed: %v", err)
 		}
-		if err := removeManagedBlock(path, testBegin, testEnd); err != nil {
+		if err := removeManagedBlock(path, testBegin, testEnd, filepath.Dir(path)); err != nil {
 			t.Fatalf("uninstall failed: %v", err)
 		}
 
@@ -378,7 +378,7 @@ func TestUpsertAcceptsCRLFLineEndings(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := upsertManagedBlock(path, testBegin, testEnd, testBody)
+	err := upsertManagedBlock(path, testBegin, testEnd, testBody, filepath.Dir(path))
 	if err != nil {
 		t.Fatalf("CRLF file should be accepted: %v", err)
 	}
@@ -410,7 +410,7 @@ func TestRemoveAcceptsCRLFLineEndings(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := removeManagedBlock(path, testBegin, testEnd)
+	err := removeManagedBlock(path, testBegin, testEnd, filepath.Dir(path))
 	if err != nil {
 		t.Fatalf("CRLF file should be accepted: %v", err)
 	}
@@ -433,7 +433,7 @@ func TestTopologyRejectsGluedBeginEvenWithCR(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := upsertManagedBlock(path, testBegin, testEnd, testBody)
+	err := upsertManagedBlock(path, testBegin, testEnd, testBody, filepath.Dir(path))
 	if err == nil {
 		t.Fatal("expected error for begin marker after bare \\r, got nil")
 	}

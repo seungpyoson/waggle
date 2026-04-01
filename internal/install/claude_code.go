@@ -12,10 +12,27 @@ import (
 // Used by install, uninstall, and health checks. Single source of truth.
 const waggleHookCommand = "bash $HOME/.claude/hooks/waggle-connect.sh"
 
+// wagglePushCommand is the PreToolUse hook command for signal file delivery.
+// WAGGLE_PPID=$PPID passes Claude Code's PID (expanded by the shell that runs
+// the hook), avoiding the intermediate-shell PPID problem.
+const wagglePushCommand = "WAGGLE_PPID=$PPID node $HOME/.claude/hooks/waggle-push.js"
+
 // The canonical Claude Code integration assets live in integrations/claude-code/.
 // This mirrored copy exists in-package so go:embed can bundle them for install.
 //go:embed all:claude-code
 var claudeCodeFiles embed.FS
+
+// hookFiles is the single source of truth for hook file installation.
+// Maps embedded asset name → installed filename under ~/.claude/hooks/.
+// Used by both install and uninstall to prevent orphaned files.
+var hookFiles = []struct {
+	embedded, installed string
+	perm               os.FileMode
+}{
+	{"claude-code/hook.sh", "waggle-connect.sh", 0o755},
+	{"claude-code/heartbeat.sh", "waggle-heartbeat.sh", 0o755},
+	{"claude-code/waggle-push.js", "waggle-push.js", 0o755},
+}
 
 // InstallClaudeCode installs waggle integration for Claude Code.
 // Copies hook, heartbeat, and skills to ~/.claude/ and registers the hook in settings.json.
@@ -42,31 +59,24 @@ func UninstallClaudeCode() error {
 func installClaudeCode(homeDir string) error {
 	claudeDir := filepath.Join(homeDir, ".claude")
 
-	// 1. Copy hook
+	// 1. Copy hook files (from single source of truth: hookFiles)
 	hookDir := filepath.Join(claudeDir, "hooks")
-	if err := os.MkdirAll(hookDir, 0755); err != nil {
+	if err := safeMkdirAll(hookDir, homeDir, 0o755); err != nil {
 		return fmt.Errorf("creating hooks dir: %w", err)
 	}
-	hookData, err := claudeCodeFiles.ReadFile("claude-code/hook.sh")
-	if err != nil {
-		return fmt.Errorf("reading embedded hook.sh: %w", err)
-	}
-	if err := os.WriteFile(filepath.Join(hookDir, "waggle-connect.sh"), hookData, 0755); err != nil {
-		return fmt.Errorf("writing hook: %w", err)
-	}
-
-	// 2. Copy heartbeat script
-	heartbeatData, err := claudeCodeFiles.ReadFile("claude-code/heartbeat.sh")
-	if err != nil {
-		return fmt.Errorf("reading embedded heartbeat.sh: %w", err)
-	}
-	if err := os.WriteFile(filepath.Join(hookDir, "waggle-heartbeat.sh"), heartbeatData, 0755); err != nil {
-		return fmt.Errorf("writing heartbeat: %w", err)
+	for _, hf := range hookFiles {
+		data, err := claudeCodeFiles.ReadFile(hf.embedded)
+		if err != nil {
+			return fmt.Errorf("reading embedded %s: %w", hf.embedded, err)
+		}
+		if err := safeWriteFile(filepath.Join(hookDir, hf.installed), data, hf.perm, homeDir); err != nil {
+			return fmt.Errorf("writing %s: %w", hf.installed, err)
+		}
 	}
 
-	// 3. Copy skills
+	// 2. Copy skills
 	skillDir := filepath.Join(claudeDir, "skills", "waggle")
-	if err := os.MkdirAll(skillDir, 0755); err != nil {
+	if err := safeMkdirAll(skillDir, homeDir, 0o755); err != nil {
 		return fmt.Errorf("creating skills dir: %w", err)
 	}
 	skillFiles := []string{"waggle.md", "send.md", "inbox.md", "ack.md", "status.md", "claim.md", "done.md", "presence.md"}
@@ -75,14 +85,23 @@ func installClaudeCode(homeDir string) error {
 		if err != nil {
 			return fmt.Errorf("reading embedded skill %s: %w", name, err)
 		}
-		if err := os.WriteFile(filepath.Join(skillDir, name), data, 0644); err != nil {
+		if err := safeWriteFile(filepath.Join(skillDir, name), data, 0o644, homeDir); err != nil {
 			return fmt.Errorf("writing skill %s: %w", name, err)
 		}
 	}
 
-	// 4. Register hook in settings.json
+	// 3. Register hooks in settings.json
 	if err := registerSessionStartHook(claudeDir); err != nil {
 		return fmt.Errorf("registering hook: %w", err)
+	}
+
+	if err := registerPreToolUseHook(claudeDir); err != nil {
+		return fmt.Errorf("registering push hook: %w", err)
+	}
+
+	// 4. Install universal shell hook
+	if err := installShellHook(homeDir); err != nil {
+		return fmt.Errorf("installing shell hook: %w", err)
 	}
 
 	return nil
@@ -92,21 +111,25 @@ func installClaudeCode(homeDir string) error {
 func uninstallClaudeCode(homeDir string) error {
 	claudeDir := filepath.Join(homeDir, ".claude")
 
-	// Remove hook files
-	for _, name := range []string{"waggle-connect.sh", "waggle-heartbeat.sh"} {
-		if err := os.Remove(filepath.Join(claudeDir, "hooks", name)); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("removing %s: %w", name, err)
+	// Remove hook files (from single source of truth: hookFiles)
+	for _, hf := range hookFiles {
+		if err := safeRemove(filepath.Join(claudeDir, "hooks", hf.installed), homeDir); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("removing %s: %w", hf.installed, err)
 		}
 	}
 
 	// Remove skill directory
-	if err := os.RemoveAll(filepath.Join(claudeDir, "skills", "waggle")); err != nil && !os.IsNotExist(err) {
+	if err := safeRemoveAll(filepath.Join(claudeDir, "skills", "waggle"), homeDir); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("removing skills directory: %w", err)
 	}
 
-	// Deregister hook from settings.json
+	// Deregister hooks from settings.json
 	if err := deregisterSessionStartHook(claudeDir); err != nil {
 		return fmt.Errorf("deregistering hook: %w", err)
+	}
+
+	if err := deregisterPreToolUseHook(claudeDir); err != nil {
+		return fmt.Errorf("deregistering push hook: %w", err)
 	}
 
 	return nil
@@ -131,6 +154,7 @@ func readSettingsJSON(path string) (map[string]interface{}, error) {
 // Uses JSON parsing to safely merge without overwriting existing hooks.
 func registerSessionStartHook(claudeDir string) error {
 	settingsPath := filepath.Join(claudeDir, "settings.json")
+	root := filepath.Dir(claudeDir)
 
 	// Read existing settings
 	settings, _ := readSettingsJSON(settingsPath)
@@ -180,12 +204,13 @@ func registerSessionStartHook(claudeDir string) error {
 		return fmt.Errorf("marshaling settings: %w", err)
 	}
 
-	return os.WriteFile(settingsPath, out, 0644)
+	return safeWriteFile(settingsPath, out, 0o644, root)
 }
 
 // deregisterSessionStartHook removes the waggle hook from settings.json.
 func deregisterSessionStartHook(claudeDir string) error {
 	settingsPath := filepath.Join(claudeDir, "settings.json")
+	root := filepath.Dir(claudeDir)
 
 	settings, _ := readSettingsJSON(settingsPath)
 
@@ -229,5 +254,93 @@ func deregisterSessionStartHook(claudeDir string) error {
 		return fmt.Errorf("marshaling settings: %w", err)
 	}
 
-	return os.WriteFile(settingsPath, out, 0644)
+	return safeWriteFile(settingsPath, out, 0o644, root)
+}
+
+// registerPreToolUseHook adds the waggle push hook to settings.json PreToolUse array.
+func registerPreToolUseHook(claudeDir string) error {
+	settingsPath := filepath.Join(claudeDir, "settings.json")
+	root := filepath.Dir(claudeDir)
+	settings, _ := readSettingsJSON(settingsPath)
+
+	hooks, _ := settings["hooks"].(map[string]interface{})
+	if hooks == nil {
+		hooks = make(map[string]interface{})
+	}
+
+	preToolUse, _ := hooks["PreToolUse"].([]interface{})
+	for _, entry := range preToolUse {
+		em, ok := entry.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		hs, _ := em["hooks"].([]interface{})
+		for _, h := range hs {
+			hm, _ := h.(map[string]interface{})
+			if cmd, _ := hm["command"].(string); cmd == wagglePushCommand {
+				return nil // already registered
+			}
+		}
+	}
+
+	preToolUse = append(preToolUse, map[string]interface{}{
+		"hooks": []interface{}{
+			map[string]interface{}{"type": "command", "command": wagglePushCommand},
+		},
+	})
+	hooks["PreToolUse"] = preToolUse
+	settings["hooks"] = hooks
+
+	out, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return err
+	}
+	return safeWriteFile(settingsPath, out, 0o644, root)
+}
+
+// deregisterPreToolUseHook removes the waggle push hook from settings.json.
+func deregisterPreToolUseHook(claudeDir string) error {
+	settingsPath := filepath.Join(claudeDir, "settings.json")
+	root := filepath.Dir(claudeDir)
+	settings, _ := readSettingsJSON(settingsPath)
+
+	hooks, _ := settings["hooks"].(map[string]interface{})
+	if hooks == nil {
+		return nil
+	}
+
+	preToolUse, _ := hooks["PreToolUse"].([]interface{})
+	if preToolUse == nil {
+		return nil
+	}
+
+	var filtered []interface{}
+	for _, entry := range preToolUse {
+		entryMap, ok := entry.(map[string]interface{})
+		if !ok {
+			filtered = append(filtered, entry)
+			continue
+		}
+		entryHooks, _ := entryMap["hooks"].([]interface{})
+		isWaggle := false
+		for _, h := range entryHooks {
+			hMap, _ := h.(map[string]interface{})
+			if cmd, _ := hMap["command"].(string); cmd == wagglePushCommand {
+				isWaggle = true
+				break
+			}
+		}
+		if !isWaggle {
+			filtered = append(filtered, entry)
+		}
+	}
+
+	hooks["PreToolUse"] = filtered
+	settings["hooks"] = hooks
+
+	out, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshaling settings: %w", err)
+	}
+	return safeWriteFile(settingsPath, out, 0o644, root)
 }

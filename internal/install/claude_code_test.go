@@ -280,6 +280,188 @@ func TestInstall_CreatesSettingsIfMissing(t *testing.T) {
 	}
 }
 
+func TestInstall_PushHookCreated(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	if err := installClaudeCode(tmpHome); err != nil {
+		t.Fatalf("install failed: %v", err)
+	}
+
+	pushPath := filepath.Join(tmpHome, ".claude", "hooks", "waggle-push.js")
+	info, err := os.Stat(pushPath)
+	if err != nil {
+		t.Fatalf("push hook not created: %v", err)
+	}
+
+	// Check executable
+	if info.Mode().Perm()&0111 == 0 {
+		t.Errorf("push hook not executable: %o", info.Mode().Perm())
+	}
+
+	// Verify content uses WAGGLE_PPID env var
+	data, _ := os.ReadFile(pushPath)
+	content := string(data)
+	if !strings.Contains(content, "WAGGLE_PPID") {
+		t.Error("push hook missing WAGGLE_PPID env var usage")
+	}
+	if !strings.Contains(content, "agent-ppid-") {
+		t.Error("push hook missing agent-ppid- map file reference")
+	}
+	if !strings.Contains(content, "additionalContext") {
+		t.Error("push hook missing additionalContext output")
+	}
+	if !strings.Contains(content, `if (!/^\d+$/.test(ppid)) process.exit(0);`) {
+		t.Error("push hook missing non-numeric PPID early exit")
+	}
+}
+
+func TestInstall_PushHookRecoversOrphansAndRefreshesBothMappings(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	if err := installClaudeCode(tmpHome); err != nil {
+		t.Fatalf("install failed: %v", err)
+	}
+
+	pushPath := filepath.Join(tmpHome, ".claude", "hooks", "waggle-push.js")
+	data, err := os.ReadFile(pushPath)
+	if err != nil {
+		t.Fatalf("read push hook: %v", err)
+	}
+
+	content := string(data)
+	if !strings.Contains(content, "fs.utimesSync(pointerFile, now, now)") {
+		t.Fatal("push hook should refresh pointer mapping alongside session mapping")
+	}
+	if !strings.Contains(content, "fs.readdirSync(") {
+		t.Fatal("push hook should recover orphaned consumed signal files")
+	}
+}
+
+func TestInstall_PushHookValidatesSessionTokens(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	if err := installClaudeCode(tmpHome); err != nil {
+		t.Fatalf("install failed: %v", err)
+	}
+
+	pushPath := filepath.Join(tmpHome, ".claude", "hooks", "waggle-push.js")
+	data, err := os.ReadFile(pushPath)
+	if err != nil {
+		t.Fatalf("read push hook: %v", err)
+	}
+
+	content := string(data)
+	if !strings.Contains(content, "const tokenPattern = /^[a-zA-Z0-9_-]+$/;") {
+		t.Fatal("push hook should define session token validation regex")
+	}
+	if !strings.Contains(content, "if (!tokenPattern.test(agent) || !tokenPattern.test(project)) process.exit(0);") {
+		t.Fatal("push hook should reject invalid agent/project tokens from session file")
+	}
+}
+
+func TestPushHookSourcesStayIdentical(t *testing.T) {
+	installCopy, err := os.ReadFile(filepath.Join("claude-code", "waggle-push.js"))
+	if err != nil {
+		t.Fatalf("read install copy: %v", err)
+	}
+
+	integrationCopy, err := os.ReadFile(filepath.Join("..", "..", "integrations", "claude-code", "waggle-push.js"))
+	if err != nil {
+		t.Fatalf("read integration copy: %v", err)
+	}
+
+	if string(installCopy) != string(integrationCopy) {
+		t.Fatal("waggle-push.js copies diverged")
+	}
+}
+
+func TestInstall_PreToolUseHookRegistered(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	if err := installClaudeCode(tmpHome); err != nil {
+		t.Fatalf("install failed: %v", err)
+	}
+
+	settingsPath := filepath.Join(tmpHome, ".claude", "settings.json")
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("settings.json not created: %v", err)
+	}
+
+	var settings map[string]interface{}
+	if err := json.Unmarshal(data, &settings); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+
+	hooks, ok := settings["hooks"].(map[string]interface{})
+	if !ok {
+		t.Fatal("hooks section missing")
+	}
+
+	preToolUse, ok := hooks["PreToolUse"].([]interface{})
+	if !ok {
+		t.Fatal("PreToolUse array missing")
+	}
+
+	found := false
+	for _, entry := range preToolUse {
+		entryMap, _ := entry.(map[string]interface{})
+		entryHooks, _ := entryMap["hooks"].([]interface{})
+		for _, h := range entryHooks {
+			hMap, _ := h.(map[string]interface{})
+			if cmd, _ := hMap["command"].(string); cmd == wagglePushCommand {
+				found = true
+				break
+			}
+		}
+	}
+
+	if !found {
+		t.Error("waggle push hook not registered in PreToolUse")
+	}
+
+	// Verify the command uses WAGGLE_PPID=$PPID prefix
+	if !strings.Contains(wagglePushCommand, "WAGGLE_PPID=$PPID") {
+		t.Error("wagglePushCommand missing WAGGLE_PPID=$PPID prefix")
+	}
+}
+
+func TestInstall_PreToolUseNoDuplicate(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	// Install twice
+	if err := installClaudeCode(tmpHome); err != nil {
+		t.Fatalf("first install failed: %v", err)
+	}
+	if err := installClaudeCode(tmpHome); err != nil {
+		t.Fatalf("second install failed: %v", err)
+	}
+
+	settingsPath := filepath.Join(tmpHome, ".claude", "settings.json")
+	data, _ := os.ReadFile(settingsPath)
+	var settings map[string]interface{}
+	json.Unmarshal(data, &settings)
+
+	hooks := settings["hooks"].(map[string]interface{})
+	preToolUse := hooks["PreToolUse"].([]interface{})
+
+	count := 0
+	for _, entry := range preToolUse {
+		entryMap, _ := entry.(map[string]interface{})
+		entryHooks, _ := entryMap["hooks"].([]interface{})
+		for _, h := range entryHooks {
+			hMap, _ := h.(map[string]interface{})
+			if cmd, _ := hMap["command"].(string); cmd == wagglePushCommand {
+				count++
+			}
+		}
+	}
+
+	if count != 1 {
+		t.Errorf("expected 1 PreToolUse waggle entry, got %d", count)
+	}
+}
+
 func TestUninstall_Clean(t *testing.T) {
 	tmpHome := t.TempDir()
 
@@ -302,6 +484,11 @@ func TestUninstall_Clean(t *testing.T) {
 	heartbeatPath := filepath.Join(tmpHome, ".claude", "hooks", "waggle-heartbeat.sh")
 	if _, err := os.Stat(heartbeatPath); !os.IsNotExist(err) {
 		t.Error("heartbeat still exists after uninstall")
+	}
+
+	pushPath := filepath.Join(tmpHome, ".claude", "hooks", "waggle-push.js")
+	if _, err := os.Stat(pushPath); !os.IsNotExist(err) {
+		t.Error("push hook still exists after uninstall")
 	}
 
 	skillDir := filepath.Join(tmpHome, ".claude", "skills", "waggle")
@@ -335,19 +522,28 @@ func TestUninstall_DeregistersHook(t *testing.T) {
 		return
 	}
 
-	sessionStart, ok := hooks["SessionStart"].([]interface{})
-	if !ok {
-		return
-	}
-
-	// Check no waggle entry
+	// Check no SessionStart waggle entry
+	sessionStart, _ := hooks["SessionStart"].([]interface{})
 	for _, entry := range sessionStart {
 		entryMap, _ := entry.(map[string]interface{})
 		entryHooks, _ := entryMap["hooks"].([]interface{})
 		for _, h := range entryHooks {
 			hMap, _ := h.(map[string]interface{})
-			if cmd, _ := hMap["command"].(string); cmd == "bash $HOME/.claude/hooks/waggle-connect.sh" {
-				t.Error("waggle hook still in settings.json after uninstall")
+			if cmd, _ := hMap["command"].(string); cmd == waggleHookCommand {
+				t.Error("waggle SessionStart hook still in settings.json after uninstall")
+			}
+		}
+	}
+
+	// Check no PreToolUse waggle entry
+	preToolUse, _ := hooks["PreToolUse"].([]interface{})
+	for _, entry := range preToolUse {
+		entryMap, _ := entry.(map[string]interface{})
+		entryHooks, _ := entryMap["hooks"].([]interface{})
+		for _, h := range entryHooks {
+			hMap, _ := h.(map[string]interface{})
+			if cmd, _ := hMap["command"].(string); cmd == wagglePushCommand {
+				t.Error("waggle PreToolUse hook still in settings.json after uninstall")
 			}
 		}
 	}

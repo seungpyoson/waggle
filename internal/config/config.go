@@ -66,6 +66,8 @@ var Defaults = struct {
 	RuntimePIDFile          string
 	RuntimeLogFile          string
 	RuntimeStateFile        string
+	SignalDirName           string
+	SignalMaxBytes          int64
 
 	ShutdownTimeout                       time.Duration
 	RuntimeNotificationTimeout            time.Duration
@@ -131,6 +133,8 @@ var Defaults = struct {
 	RuntimePIDFile:          "runtime.pid",
 	RuntimeLogFile:          "runtime.log",
 	RuntimeStateFile:        "state.json",
+	SignalDirName:           "signals",
+	SignalMaxBytes:          65536,
 
 	ShutdownTimeout:                       5 * time.Second,
 	RuntimeNotificationTimeout:            2 * time.Second,
@@ -190,6 +194,7 @@ type Paths struct {
 	RuntimeLog          string
 	RuntimeState        string
 	RuntimeStartLockDir string
+	RuntimeSignalDir    string
 	DB                  string
 	PID                 string
 	Lock                string
@@ -209,7 +214,9 @@ func NewPaths(projectID string) Paths {
 	}
 
 	f := fnv.New64a()
-	_, _ = f.Write([]byte(projectID))
+	if _, err := f.Write([]byte(projectID)); err != nil {
+		panic(fmt.Sprintf("hash project ID: %v", err))
+	}
 	hash := fmt.Sprintf("%012x", f.Sum64()&0xffffffffffff)
 
 	dataDir := filepath.Join(home, Defaults.DirName, "data", hash)
@@ -225,6 +232,7 @@ func NewPaths(projectID string) Paths {
 		RuntimeLog:          filepath.Join(runtimeDir, Defaults.RuntimeLogFile),
 		RuntimeState:        filepath.Join(runtimeDir, Defaults.RuntimeStateFile),
 		RuntimeStartLockDir: filepath.Join(runtimeDir, Defaults.RuntimeStartLockDirName),
+		RuntimeSignalDir:    filepath.Join(runtimeDir, Defaults.SignalDirName),
 		DB:                  filepath.Join(dataDir, Defaults.DBFile),
 		PID:                 filepath.Join(dataDir, Defaults.PIDFile),
 		Lock:                filepath.Join(dataDir, Defaults.LockFile),

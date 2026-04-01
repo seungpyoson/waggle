@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"time"
 
+	"github.com/seungpyoson/waggle/internal/broker"
 	"github.com/seungpyoson/waggle/internal/client"
 	"github.com/seungpyoson/waggle/internal/config"
 	"github.com/seungpyoson/waggle/internal/protocol"
@@ -32,6 +34,7 @@ func (f *BrokerListenerFactory) NewListener(w Watch) (Listener, error) {
 	}
 	return &brokerListener{
 		socketPath: paths.Socket,
+		agentName:  w.AgentName,
 		name:       w.AgentName + "-push",
 	}, nil
 }
@@ -46,15 +49,18 @@ func (f *BrokerListenerFactory) CatchUp(w Watch, handler DeliveryHandler) error 
 		return fmt.Errorf("cannot determine broker socket path")
 	}
 
+	pushToken, err := pushTokenForAgent(paths.Socket, w.AgentName)
+	if err != nil {
+		return err
+	}
+
 	c, err := client.Connect(paths.Socket, config.Defaults.ConnectTimeout)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		// Clean disconnect prevents task requeue and lock release.
-		if err := c.SetDeadline(config.Defaults.DisconnectTimeout); err == nil {
-			_, _ = c.Send(protocol.Request{Cmd: protocol.CmdDisconnect})
-		}
+		sendDisconnect(c, fmt.Sprintf("catch-up %q/%q", w.ProjectID, w.AgentName))
 		c.Close()
 	}()
 
@@ -62,11 +68,18 @@ func (f *BrokerListenerFactory) CatchUp(w Watch, handler DeliveryHandler) error 
 	if err := c.SetDeadline(config.Defaults.ConnectTimeout); err != nil {
 		return fmt.Errorf("set deadline: %w", err)
 	}
-	resp, err := c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: w.AgentName})
+	resp, err := c.Send(protocol.Request{
+		Cmd:          protocol.CmdConnect,
+		Name:         w.AgentName + "-push",
+		PushListener: true,
+		PushToken:    pushToken,
+	})
 	if err != nil {
 		return err
 	}
 	if !resp.OK {
+		// protocol.ErrAlreadyConnected is transient during restarts or duplicate workers;
+		// Manager.runWatch treats the returned Listen error as retryable and reconnects.
 		return fmt.Errorf("%s: %s", resp.Code, resp.Error)
 	}
 
@@ -109,20 +122,31 @@ func (f *BrokerListenerFactory) CatchUp(w Watch, handler DeliveryHandler) error 
 
 type brokerListener struct {
 	socketPath string
+	agentName  string
 	name       string
 }
 
 func (l *brokerListener) Listen(ctx context.Context, handler DeliveryHandler) error {
+	pushToken, err := pushTokenForAgent(l.socketPath, l.agentName)
+	if err != nil {
+		return err
+	}
+
 	c, err := client.Connect(l.socketPath, config.Defaults.ConnectTimeout)
 	if err != nil {
 		return err
 	}
-	defer c.Close()
+	defer disconnectClient(c)
 
 	if err := c.SetDeadline(config.Defaults.ConnectTimeout); err != nil {
 		return fmt.Errorf("set handshake deadline: %w", err)
 	}
-	resp, err := c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: l.name})
+	resp, err := c.Send(protocol.Request{
+		Cmd:          protocol.CmdConnect,
+		Name:         l.name,
+		PushListener: true,
+		PushToken:    pushToken,
+	})
 	if err != nil {
 		return err
 	}
@@ -169,4 +193,36 @@ func pushedMessageToDelivery(msg client.PushedMessage) (Delivery, error) {
 		SentAt:     sentAt,
 		ReceivedAt: time.Now().UTC(),
 	}, nil
+}
+
+func disconnectClient(c *client.Client) {
+	if c == nil {
+		return
+	}
+	sendDisconnect(c, "listener")
+	c.Close()
+}
+
+func sendDisconnect(c *client.Client, context string) {
+	if c == nil {
+		return
+	}
+	if err := c.SetDeadline(config.Defaults.DisconnectTimeout); err != nil {
+		log.Printf("warning: set disconnect deadline for %s: %v", context, err)
+		return
+	}
+	if _, err := c.Send(protocol.Request{Cmd: protocol.CmdDisconnect}); err != nil {
+		log.Printf("warning: disconnect %s: %v", context, err)
+	}
+}
+
+func pushTokenForAgent(socketPath, agent string) (string, error) {
+	b := broker.LookupBySocket(socketPath)
+	if b == nil {
+		return "", fmt.Errorf("no in-process broker available for %s", agent)
+	}
+	if token := b.GetPushToken(agent); token != "" {
+		return token, nil
+	}
+	return b.GeneratePushToken(agent)
 }

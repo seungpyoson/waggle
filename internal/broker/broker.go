@@ -1,7 +1,9 @@
 package broker
 
 import (
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"net"
@@ -40,12 +42,15 @@ type Broker struct {
 	spawnMgr     *spawn.Manager
 	listener     net.Listener
 	sessions     map[string]*Session
+	pushTokens   map[string]string
 	mu           sync.RWMutex
 	stopCh       chan struct{}
 	wg           sync.WaitGroup
 	ackWaiters   map[int64]chan struct{}
 	ackWaitersMu sync.Mutex
 }
+
+var brokersBySocket sync.Map
 
 // New creates a new broker instance
 func New(cfg Config) (*Broker, error) {
@@ -135,11 +140,74 @@ func New(cfg Config) (*Broker, error) {
 		spawnMgr:   spawn.NewManager(),
 		listener:   listener,
 		sessions:   make(map[string]*Session),
+		pushTokens: make(map[string]string),
 		stopCh:     make(chan struct{}),
 		ackWaiters: make(map[int64]chan struct{}),
 	}
+	brokersBySocket.Store(cfg.SocketPath, b)
 
 	return b, nil
+}
+
+func LookupBySocket(socketPath string) *Broker {
+	if socketPath == "" {
+		return nil
+	}
+	if b, ok := brokersBySocket.Load(socketPath); ok {
+		if broker, ok := b.(*Broker); ok {
+			return broker
+		}
+	}
+	return nil
+}
+
+func (b *Broker) GetPushToken(agent string) string {
+	if b == nil {
+		return ""
+	}
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.pushTokens[agent]
+}
+
+func (b *Broker) GeneratePushToken(agent string) (string, error) {
+	if b == nil {
+		return "", fmt.Errorf("broker unavailable")
+	}
+	if agent == "" {
+		return "", fmt.Errorf("agent required")
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if token := b.pushTokens[agent]; token != "" {
+		return token, nil
+	}
+
+	token, err := newPushToken()
+	if err != nil {
+		return "", err
+	}
+	b.pushTokens[agent] = token
+	return token, nil
+}
+
+func (b *Broker) DeletePushToken(agent string) {
+	if b == nil || agent == "" {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	delete(b.pushTokens, agent)
+}
+
+func newPushToken() (string, error) {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("generate push token: %w", err)
+	}
+	return hex.EncodeToString(buf), nil
 }
 
 // Serve starts the broker's accept loop and background tasks
@@ -204,6 +272,8 @@ func (b *Broker) Serve() error {
 
 // Shutdown gracefully shuts down the broker
 func (b *Broker) Shutdown() error {
+	brokersBySocket.Delete(b.config.SocketPath)
+
 	// Kill spawned agents before stopping
 	if b.spawnMgr != nil {
 		b.spawnMgr.StopAll()
@@ -233,6 +303,7 @@ func (b *Broker) Shutdown() error {
 
 	// Remove socket file
 	if b.config.SocketPath != "" {
+		// Best-effort cleanup: listener shutdown may already have removed the socket.
 		os.Remove(b.config.SocketPath)
 	}
 
@@ -280,4 +351,3 @@ func cleanupSocket(path string) error {
 	}
 	return nil
 }
-

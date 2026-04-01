@@ -29,7 +29,7 @@ fi
 
 # Bootstrap this Claude session into the waggle mesh.
 # The adapter bootstrap command is the single authoritative path for tool registration.
-OUTPUT=$($TIMEOUT_CMD 3 waggle adapter bootstrap claude-code --format markdown 2>/dev/null) || OUTPUT=""
+OUTPUT=$($TIMEOUT_CMD 3 env WAGGLE_AGENT_PPID=$PPID waggle adapter bootstrap claude-code --format markdown 2>/dev/null) || OUTPUT=""
 if [ -n "$OUTPUT" ]; then
     echo ""
     echo "$OUTPUT"

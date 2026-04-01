@@ -8,26 +8,28 @@ import (
 // TestRequest_RoundTrip verifies P1: Request round-trips through JSON without data loss
 func TestRequest_RoundTrip(t *testing.T) {
 	original := Request{
-		Cmd:             CmdPublish,
-		Name:            "test-task",
-		Topic:           "test.topic",
-		Message:         "test message",
-		Payload:         json.RawMessage(`{"key":"value"}`),
-		Type:            "work",
-		Tags:            "tag1,tag2",
-		DependsOn:       "dep1,dep2",
-		Priority:        5,
-		Lease:           60,
-		MaxRetries:      3,
-		IdempotencyKey:  "unique-key",
-		Resource:        "resource1",
-		TaskID:          "task-123",
-		ClaimToken:      "token-456",
-		Result:          json.RawMessage(`{"status":"done"}`),
-		Reason:          "completed",
-		Last:            "last-id",
-		State:           "active",
-		Owner:           "worker-1",
+		Cmd:            CmdPublish,
+		Name:           "test-task",
+		Topic:          "test.topic",
+		Message:        "test message",
+		Payload:        json.RawMessage(`{"key":"value"}`),
+		Type:           "work",
+		Tags:           "tag1,tag2",
+		DependsOn:      "dep1,dep2",
+		Priority:       5,
+		Lease:          60,
+		MaxRetries:     3,
+		IdempotencyKey: "unique-key",
+		Resource:       "resource1",
+		TaskID:         "task-123",
+		ClaimToken:     "token-456",
+		Result:         json.RawMessage(`{"status":"done"}`),
+		Reason:         "completed",
+		Last:           "last-id",
+		State:          "active",
+		Owner:          "worker-1",
+		PushListener:   true,
+		PushToken:      "push-token-789",
 	}
 
 	// Marshal to JSON
@@ -102,6 +104,12 @@ func TestRequest_RoundTrip(t *testing.T) {
 	}
 	if decoded.Owner != original.Owner {
 		t.Errorf("Owner mismatch: got %q, want %q", decoded.Owner, original.Owner)
+	}
+	if decoded.PushListener != original.PushListener {
+		t.Errorf("PushListener mismatch: got %t, want %t", decoded.PushListener, original.PushListener)
+	}
+	if decoded.PushToken != original.PushToken {
+		t.Errorf("PushToken mismatch: got %q, want %q", decoded.PushToken, original.PushToken)
 	}
 }
 
@@ -215,4 +223,3 @@ func TestErrorCodes_Unique(t *testing.T) {
 		t.Errorf("Expected %d unique error codes, got %d", len(errorCodes), len(seen))
 	}
 }
-

@@ -73,6 +73,34 @@ func connectClient(t *testing.T, sockPath string) *client.Client {
 	return c
 }
 
+func pushTokenFromResponse(t *testing.T, resp *protocol.Response) string {
+	t.Helper()
+	var payload struct {
+		PushToken string `json:"push_token"`
+	}
+	if err := json.Unmarshal(resp.Data, &payload); err != nil {
+		t.Fatalf("parse connect response: %v", err)
+	}
+	if payload.PushToken == "" {
+		t.Fatal("expected connect response to include push token")
+	}
+	return payload.PushToken
+}
+
+func TestMustMarshal_PanicsOnMarshalError(t *testing.T) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected mustMarshal to panic")
+		}
+		if !strings.Contains(fmt.Sprint(r), "mustMarshal:") {
+			t.Fatalf("panic = %v, want mustMarshal prefix", r)
+		}
+	}()
+
+	_ = mustMarshal(func() {})
+}
+
 // readStream starts reading events and fatals on error.
 func readStream(t *testing.T, c *client.Client) <-chan protocol.Event {
 	t.Helper()
@@ -317,7 +345,9 @@ func TestBroker_FullRoundTrip_CreateClaimComplete(t *testing.T) {
 		Cmd:    protocol.CmdTaskGet,
 		TaskID: taskIDStr,
 	})
-	var task struct{ State string `json:"State"` }
+	var task struct {
+		State string `json:"State"`
+	}
 	json.Unmarshal(resp.Data, &task)
 	if task.State != "completed" {
 		t.Errorf("state = %q, want completed", task.State)
@@ -539,7 +569,9 @@ func TestBroker_DisconnectUnsubscribesEvents(t *testing.T) {
 		t.Fatalf("status: %s", resp.Error)
 	}
 	// Status should show 0 subscribers after disconnect
-	var status struct{ Subscribers int `json:"subscribers"` }
+	var status struct {
+		Subscribers int `json:"subscribers"`
+	}
 	json.Unmarshal(resp.Data, &status)
 	if status.Subscribers != 0 {
 		t.Errorf("subscribers = %d, want 0 after disconnect", status.Subscribers)
@@ -610,7 +642,6 @@ func TestBroker_InvalidJSONReturnsError(t *testing.T) {
 	}
 }
 
-
 // Test: Worker A disconnects, Worker B's claimed task should NOT be re-queued
 func TestBroker_DisconnectOnlyRequeuesOwnTasks(t *testing.T) {
 	sockPath, _, cleanup := startTestBroker(t)
@@ -621,7 +652,9 @@ func TestBroker_DisconnectOnlyRequeuesOwnTasks(t *testing.T) {
 	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "worker-a"})
 	c1.Send(protocol.Request{Cmd: protocol.CmdTaskCreate, Payload: json.RawMessage(`{"desc":"task1"}`), Type: "test"})
 	resp1, _ := c1.Send(protocol.Request{Cmd: protocol.CmdTaskClaim})
-	var claim1 struct{ ID int64 `json:"ID"` }
+	var claim1 struct {
+		ID int64 `json:"ID"`
+	}
 	json.Unmarshal(resp1.Data, &claim1)
 
 	// Worker B connects and claims task 2
@@ -629,7 +662,9 @@ func TestBroker_DisconnectOnlyRequeuesOwnTasks(t *testing.T) {
 	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "worker-b"})
 	c2.Send(protocol.Request{Cmd: protocol.CmdTaskCreate, Payload: json.RawMessage(`{"desc":"task2"}`), Type: "test"})
 	resp2, _ := c2.Send(protocol.Request{Cmd: protocol.CmdTaskClaim})
-	var claim2 struct{ ID int64 `json:"ID"` }
+	var claim2 struct {
+		ID int64 `json:"ID"`
+	}
 	json.Unmarshal(resp2.Data, &claim2)
 
 	// Worker A disconnects
@@ -638,7 +673,9 @@ func TestBroker_DisconnectOnlyRequeuesOwnTasks(t *testing.T) {
 
 	// Verify Worker B's task is still claimed
 	resp, _ := c2.Send(protocol.Request{Cmd: protocol.CmdTaskGet, TaskID: fmt.Sprintf("%d", claim2.ID)})
-	var task struct{ State string `json:"State"` }
+	var task struct {
+		State string `json:"State"`
+	}
 	json.Unmarshal(resp.Data, &task)
 	if task.State != "claimed" {
 		t.Errorf("Worker B's task state = %q, want claimed (should NOT be re-queued when Worker A disconnects)", task.State)
@@ -803,7 +840,6 @@ func TestIsConnectionClosed_UnrelatedError(t *testing.T) {
 		t.Error("unrelated error should return false")
 	}
 }
-
 
 // ========== Direct Messaging Tests (Task 43) ==========
 
@@ -3055,9 +3091,389 @@ func TestBroker_CustomEventEmptyMessage(t *testing.T) {
 }
 
 // TestBroker_PushToListenerSession verifies that messages sent to "alice" are also pushed to "alice-push" session (L5)
+func TestBroker_NonPushListenerCannotUsePushSuffix(t *testing.T) {
+	sockPath, _, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c := connectClient(t, sockPath)
+	defer c.Close()
+
+	resp, err := c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice-push"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.OK {
+		t.Fatal("expected non-push listener connect to fail for -push suffix")
+	}
+	if resp.Code != protocol.ErrInvalidRequest {
+		t.Fatalf("response code = %q, want %q", resp.Code, protocol.ErrInvalidRequest)
+	}
+	if !strings.Contains(resp.Error, "reserved") {
+		t.Fatalf("expected reserved-suffix error, got %q", resp.Error)
+	}
+}
+
+func TestBroker_PushListenerRejectsMissingToken(t *testing.T) {
+	sockPath, b, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	base := connectClient(t, sockPath)
+	defer base.Close()
+	resp, err := base.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.OK {
+		t.Fatalf("base connect failed: %s", resp.Error)
+	}
+
+	if token := b.GetPushToken("alice"); token == "" {
+		t.Fatal("expected broker to generate push token for alice")
+	}
+
+	listener := connectClient(t, sockPath)
+	defer listener.Close()
+	resp, err = listener.Send(protocol.Request{
+		Cmd:          protocol.CmdConnect,
+		Name:         "alice-push",
+		PushListener: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.OK {
+		t.Fatal("expected push listener connect without token to fail")
+	}
+	if resp.Code != protocol.ErrForbidden {
+		t.Fatalf("response code = %q, want %q", resp.Code, protocol.ErrForbidden)
+	}
+}
+
+func TestBroker_PushListenerRejectedWhenBaseNeverConnected(t *testing.T) {
+	sockPath, _, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	listener := connectClient(t, sockPath)
+	defer listener.Close()
+
+	resp, err := listener.Send(protocol.Request{
+		Cmd:          protocol.CmdConnect,
+		Name:         "alice-push",
+		PushListener: true,
+		PushToken:    "never-issued-token",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.OK {
+		t.Fatal("expected push listener connect to fail when base never connected")
+	}
+	if resp.Code != protocol.ErrForbidden {
+		t.Fatalf("response code = %q, want %q", resp.Code, protocol.ErrForbidden)
+	}
+}
+
+func TestBroker_PushListenerRejectsWrongToken(t *testing.T) {
+	sockPath, b, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	base := connectClient(t, sockPath)
+	defer base.Close()
+	resp, err := base.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.OK {
+		t.Fatalf("base connect failed: %s", resp.Error)
+	}
+
+	token := b.GetPushToken("alice")
+	if token == "" {
+		t.Fatal("expected broker to generate push token for alice")
+	}
+	wrongToken := token[:len(token)-1] + "0"
+	if wrongToken == token {
+		wrongToken = token[:len(token)-1] + "1"
+	}
+
+	listener := connectClient(t, sockPath)
+	defer listener.Close()
+	resp, err = listener.Send(protocol.Request{
+		Cmd:          protocol.CmdConnect,
+		Name:         "alice-push",
+		PushListener: true,
+		PushToken:    wrongToken,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.OK {
+		t.Fatal("expected push listener connect with wrong token to fail")
+	}
+	if resp.Code != protocol.ErrForbidden {
+		t.Fatalf("response code = %q, want %q", resp.Code, protocol.ErrForbidden)
+	}
+}
+
+func TestBroker_PushListenerAcceptsValidToken(t *testing.T) {
+	sockPath, b, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	base := connectClient(t, sockPath)
+	defer base.Close()
+	resp, err := base.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.OK {
+		t.Fatalf("base connect failed: %s", resp.Error)
+	}
+
+	token := b.GetPushToken("alice")
+	if token == "" {
+		t.Fatal("expected broker to generate push token for alice")
+	}
+
+	listener := connectClient(t, sockPath)
+	defer listener.Close()
+	resp, err = listener.Send(protocol.Request{
+		Cmd:          protocol.CmdConnect,
+		Name:         "alice-push",
+		PushListener: true,
+		PushToken:    token,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.OK {
+		t.Fatalf("expected push listener connect with valid token to succeed: %s", resp.Error)
+	}
+}
+
+func TestBroker_PushListenerDisconnectedWhenBaseDisconnects(t *testing.T) {
+	sockPath, _, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	base := connectClient(t, sockPath)
+	defer base.Close()
+	baseResp, err := base.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !baseResp.OK {
+		t.Fatalf("base connect failed: %s", baseResp.Error)
+	}
+	pushToken := pushTokenFromResponse(t, baseResp)
+
+	listener := connectClient(t, sockPath)
+	defer listener.Close()
+	pushResp, err := listener.Send(protocol.Request{
+		Cmd:          protocol.CmdConnect,
+		Name:         "alice-push",
+		PushListener: true,
+		PushToken:    pushToken,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !pushResp.OK {
+		t.Fatalf("push listener connect failed: %s", pushResp.Error)
+	}
+
+	disconnectResp, err := base.Send(protocol.Request{Cmd: protocol.CmdDisconnect})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !disconnectResp.OK {
+		t.Fatalf("disconnect failed: %s", disconnectResp.Error)
+	}
+
+	if err := listener.SetDeadline(2 * time.Second); err != nil {
+		t.Fatalf("set deadline: %v", err)
+	}
+	_, err = listener.Receive()
+	if err == nil {
+		t.Fatal("expected push listener connection to close after base disconnect")
+	}
+	if !strings.Contains(err.Error(), "closed") && !strings.Contains(err.Error(), "EOF") {
+		t.Fatalf("expected closed-connection error, got %v", err)
+	}
+}
+
+func TestBroker_ListenerDoesNotBlockAgentCLI(t *testing.T) {
+	sockPath, b, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	pushToken, err := b.GeneratePushToken("alice")
+	if err != nil {
+		t.Fatalf("generate push token: %v", err)
+	}
+
+	pushListener := connectClient(t, sockPath)
+	defer pushListener.Close()
+	pushResp, err := pushListener.Send(protocol.Request{
+		Cmd:          protocol.CmdConnect,
+		Name:         "alice-push",
+		PushListener: true,
+		PushToken:    pushToken,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !pushResp.OK {
+		t.Fatalf("push listener connect failed: %s", pushResp.Error)
+	}
+
+	cli := connectClient(t, sockPath)
+	defer cli.Close()
+	cliResp, err := cli.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cliResp.OK {
+		t.Fatalf("cli connect failed while listener connected: %s", cliResp.Error)
+	}
+
+	disconnectResp, err := cli.Send(protocol.Request{Cmd: protocol.CmdDisconnect})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !disconnectResp.OK {
+		t.Fatalf("cli disconnect failed: %s", disconnectResp.Error)
+	}
+
+	sender := connectClient(t, sockPath)
+	defer sender.Close()
+	senderResp, err := sender.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "sender"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !senderResp.OK {
+		t.Fatalf("sender connect failed: %s", senderResp.Error)
+	}
+
+	sendResp, err := sender.Send(protocol.Request{
+		Cmd:     protocol.CmdSend,
+		Name:    "alice",
+		Message: "hello from sender",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sendResp.OK {
+		t.Fatalf("send failed: %s", sendResp.Error)
+	}
+
+	msg, err := pushListener.Receive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !msg.OK {
+		t.Fatalf("push receive failed: %s", msg.Error)
+	}
+
+	inboxResp, err := pushListener.Send(protocol.Request{Cmd: protocol.CmdInbox})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !inboxResp.OK {
+		t.Fatalf("listener inbox failed: %s", inboxResp.Error)
+	}
+
+	var inbox []map[string]any
+	if err := json.Unmarshal(inboxResp.Data, &inbox); err != nil {
+		t.Fatal(err)
+	}
+	if len(inbox) != 1 {
+		t.Fatalf("inbox length = %d, want 1", len(inbox))
+	}
+	if inbox[0]["from"] != "sender" {
+		t.Fatalf("inbox sender = %v, want sender", inbox[0]["from"])
+	}
+}
+
+func TestBroker_GeneratePushTokenReusesExistingToken(t *testing.T) {
+	sockPath, b, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c := connectClient(t, sockPath)
+	defer c.Close()
+
+	resp, err := c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.OK {
+		t.Fatalf("connect failed: %s", resp.Error)
+	}
+
+	want := pushTokenFromResponse(t, resp)
+	got, err := b.GeneratePushToken("alice")
+	if err != nil {
+		t.Fatalf("GeneratePushToken() error = %v", err)
+	}
+	if got != want {
+		t.Fatalf("GeneratePushToken() = %q, want %q", got, want)
+	}
+}
+
+func TestBroker_DeletePushTokenRevokesListenerToken(t *testing.T) {
+	sockPath, b, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	token, err := b.GeneratePushToken("alice")
+	if err != nil {
+		t.Fatalf("GeneratePushToken() error = %v", err)
+	}
+	if token == "" {
+		t.Fatal("expected non-empty push token")
+	}
+
+	b.DeletePushToken("alice")
+	if got := b.GetPushToken("alice"); got != "" {
+		t.Fatalf("GetPushToken() after delete = %q, want empty", got)
+	}
+
+	listener := connectClient(t, sockPath)
+	defer listener.Close()
+	resp, err := listener.Send(protocol.Request{
+		Cmd:          protocol.CmdConnect,
+		Name:         "alice-push",
+		PushListener: true,
+		PushToken:    token,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.OK {
+		t.Fatal("expected revoked push token to be rejected")
+	}
+	if resp.Code != protocol.ErrForbidden {
+		t.Fatalf("response code = %q, want %q", resp.Code, protocol.ErrForbidden)
+	}
+}
+
 func TestBroker_PushToListenerSession(t *testing.T) {
 	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
+
+	baseConn, err := client.Connect(sockPath, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer baseConn.Close()
+
+	baseResp, err := baseConn.Send(protocol.Request{
+		Cmd:  protocol.CmdConnect,
+		Name: "alice",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !baseResp.OK {
+		t.Fatalf("expected base connect to succeed: %s", baseResp.Error)
+	}
+	pushToken := pushTokenFromResponse(t, baseResp)
 
 	// Connect as "alice-push" (the persistent listener)
 	listenerConn, err := client.Connect(sockPath, 5*time.Second)
@@ -3067,11 +3483,17 @@ func TestBroker_PushToListenerSession(t *testing.T) {
 	defer listenerConn.Close()
 
 	connectReq := protocol.Request{
-		Cmd:  "connect",
-		Name: "alice-push",
+		Cmd:          "connect",
+		Name:         "alice-push",
+		PushListener: true,
+		PushToken:    pushToken,
 	}
-	if _, err := listenerConn.Send(connectReq); err != nil {
+	pushResp, err := listenerConn.Send(connectReq)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if !pushResp.OK {
+		t.Fatalf("push listener connect failed: %s", pushResp.Error)
 	}
 
 	// Connect as sender
@@ -3100,17 +3522,17 @@ func TestBroker_PushToListenerSession(t *testing.T) {
 	}
 
 	// Listener should receive the push
-	resp, err := listenerConn.Receive()
+	recvResp, err := listenerConn.Receive()
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if !resp.OK {
-		t.Fatalf("expected OK response, got error: %s", resp.Error)
+	if !recvResp.OK {
+		t.Fatalf("expected OK response, got error: %s", recvResp.Error)
 	}
 
 	var data map[string]any
-	if err := json.Unmarshal(resp.Data, &data); err != nil {
+	if err := json.Unmarshal(recvResp.Data, &data); err != nil {
 		t.Fatal(err)
 	}
 
@@ -3125,10 +3547,93 @@ func TestBroker_PushToListenerSession(t *testing.T) {
 	}
 }
 
+func TestBroker_SelfSendDoesNotPushToListener(t *testing.T) {
+	sockPath, _, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	baseConn, err := client.Connect(sockPath, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer baseConn.Close()
+
+	baseResp, err := baseConn.Send(protocol.Request{
+		Cmd:  protocol.CmdConnect,
+		Name: "alice",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !baseResp.OK {
+		t.Fatalf("base connect failed: %s", baseResp.Error)
+	}
+	pushToken := pushTokenFromResponse(t, baseResp)
+
+	listenerConn, err := client.Connect(sockPath, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listenerConn.Close()
+
+	pushResp, err := listenerConn.Send(protocol.Request{
+		Cmd:          protocol.CmdConnect,
+		Name:         "alice-push",
+		PushListener: true,
+		PushToken:    pushToken,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !pushResp.OK {
+		t.Fatalf("push listener connect failed: %s", pushResp.Error)
+	}
+
+	sendResp, err := baseConn.Send(protocol.Request{
+		Cmd:     protocol.CmdSend,
+		Name:    "alice",
+		Message: "self send should not push",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sendResp.OK {
+		t.Fatalf("self send failed: %s", sendResp.Error)
+	}
+
+	if err := listenerConn.SetDeadline(200 * time.Millisecond); err != nil {
+		t.Fatalf("set deadline: %v", err)
+	}
+	_, err = listenerConn.Receive()
+	if err == nil {
+		t.Fatal("expected self-send to avoid push delivery to alice-push")
+	}
+	if !strings.Contains(err.Error(), "i/o timeout") {
+		t.Fatalf("expected read timeout when no push is delivered, got %v", err)
+	}
+}
+
 // TestBroker_ListenReceivesPush verifies that waggle listen receives pushed messages (L1)
 func TestBroker_ListenReceivesPush(t *testing.T) {
 	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
+
+	baseConn, err := client.Connect(sockPath, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer baseConn.Close()
+
+	baseResp, err := baseConn.Send(protocol.Request{
+		Cmd:  protocol.CmdConnect,
+		Name: "bob",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !baseResp.OK {
+		t.Fatalf("base connect failed: %s", baseResp.Error)
+	}
+	pushToken := pushTokenFromResponse(t, baseResp)
 
 	// Connect listener using ReadMessages
 	listenerConn, err := client.Connect(sockPath, 5*time.Second)
@@ -3138,11 +3643,17 @@ func TestBroker_ListenReceivesPush(t *testing.T) {
 	defer listenerConn.Close()
 
 	connectReq := protocol.Request{
-		Cmd:  "connect",
-		Name: "bob-push",
+		Cmd:          "connect",
+		Name:         "bob-push",
+		PushListener: true,
+		PushToken:    pushToken,
 	}
-	if _, err := listenerConn.Send(connectReq); err != nil {
+	pushResp, err := listenerConn.Send(connectReq)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if !pushResp.OK {
+		t.Fatalf("push listener connect failed: %s", pushResp.Error)
 	}
 
 	// Start reading messages
@@ -3195,10 +3706,32 @@ func TestClient_ReadMessagesFilters(t *testing.T) {
 	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
+	baseConn := connectClient(t, sockPath)
+	defer baseConn.Close()
+	baseResp, err := baseConn.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "filter-test"})
+	if err != nil {
+		t.Fatalf("base connect: %v", err)
+	}
+	if !baseResp.OK {
+		t.Fatalf("base connect failed: %s", baseResp.Error)
+	}
+	pushToken := pushTokenFromResponse(t, baseResp)
+
 	// Connect a listener as "filter-test-push"
 	listenerConn := connectClient(t, sockPath)
 	defer listenerConn.Close()
-	listenerConn.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "filter-test-push"})
+	pushResp, err := listenerConn.Send(protocol.Request{
+		Cmd:          protocol.CmdConnect,
+		Name:         "filter-test-push",
+		PushListener: true,
+		PushToken:    pushToken,
+	})
+	if err != nil {
+		t.Fatalf("push connect: %v", err)
+	}
+	if !pushResp.OK {
+		t.Fatalf("push connect failed: %s", pushResp.Error)
+	}
 
 	// Start ReadMessages — it now owns the scanner
 	msgCh, err := listenerConn.ReadMessages()
@@ -3211,7 +3744,7 @@ func TestClient_ReadMessagesFilters(t *testing.T) {
 	sender := connectClient(t, sockPath)
 	defer sender.Close()
 	sender.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "sender-filter"})
-	resp, err := sender.Send(protocol.Request{
+	sendResp, err := sender.Send(protocol.Request{
 		Cmd:     protocol.CmdSend,
 		Name:    "filter-test",
 		Message: "filter test message",
@@ -3219,8 +3752,8 @@ func TestClient_ReadMessagesFilters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("send: %v", err)
 	}
-	if !resp.OK {
-		t.Fatalf("send failed: %s", resp.Error)
+	if !sendResp.OK {
+		t.Fatalf("send failed: %s", sendResp.Error)
 	}
 
 	// The listener should receive the pushed message
@@ -3237,5 +3770,62 @@ func TestClient_ReadMessagesFilters(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timeout waiting for pushed message")
+	}
+}
+
+func TestPresence_StripsPushAndDeduplicates(t *testing.T) {
+	sockPath, _, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	base := connectClient(t, sockPath)
+	defer base.Close()
+	baseResp, err := base.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	if err != nil {
+		t.Fatalf("base connect: %v", err)
+	}
+	if !baseResp.OK {
+		t.Fatalf("base connect failed: %s", baseResp.Error)
+	}
+	pushToken := pushTokenFromResponse(t, baseResp)
+
+	c1 := connectClient(t, sockPath)
+	defer c1.Close()
+	pushResp, err := c1.Send(protocol.Request{
+		Cmd:          protocol.CmdConnect,
+		Name:         "alice-push",
+		PushListener: true,
+		PushToken:    pushToken,
+	})
+	if err != nil {
+		t.Fatalf("push connect: %v", err)
+	}
+	if !pushResp.OK {
+		t.Fatalf("push connect failed: %s", pushResp.Error)
+	}
+
+	c2 := connectClient(t, sockPath)
+	defer c2.Close()
+	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+
+	c3 := connectClient(t, sockPath)
+	defer c3.Close()
+	c3.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "probe"})
+
+	resp, _ := c3.Send(protocol.Request{Cmd: protocol.CmdPresence})
+	var agents []map[string]string
+	json.Unmarshal(resp.Data, &agents)
+
+	names := make(map[string]bool)
+	for _, a := range agents {
+		if strings.HasSuffix(a["name"], "-push") {
+			t.Fatalf("name %q should not have -push suffix", a["name"])
+		}
+		names[a["name"]] = true
+	}
+	if !names["alice"] {
+		t.Fatal("expected alice (stripped from alice-push)")
+	}
+	if !names["bob"] {
+		t.Fatal("expected bob")
 	}
 }

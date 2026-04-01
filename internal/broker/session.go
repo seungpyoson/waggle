@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 	"net"
+	"strings"
 	"sync"
 	"syscall"
 
@@ -20,6 +21,7 @@ type Session struct {
 	enc             *json.Encoder
 	scan            *bufio.Scanner
 	broker          *Broker
+	ownsPushToken   bool
 	cleanDisconnect bool // Set to true when disconnect command is received
 	cleanupOnce     sync.Once
 	writeMu         sync.Mutex // protects enc writes
@@ -98,6 +100,7 @@ func (s *Session) cleanup() {
 }
 
 func (s *Session) doCleanup() {
+	var pushListener *Session
 	if s.name != "" {
 		// Release all locks
 		s.broker.lockMgr.ReleaseAll(s.name)
@@ -125,8 +128,19 @@ func (s *Session) doCleanup() {
 		if s.broker.sessions[s.name] == s {
 			delete(s.broker.sessions, s.name)
 			shouldPublish = true
+			if !strings.HasSuffix(s.name, "-push") && s.ownsPushToken {
+				delete(s.broker.pushTokens, s.name)
+				pushListener = s.broker.sessions[s.name+"-push"]
+			}
 		}
 		s.broker.mu.Unlock()
+
+		// Base agent disconnects should tear down the paired push listener, too.
+		// Close it outside broker.mu so its cleanup can safely mutate broker state.
+		if pushListener != nil {
+			pushListener.cleanDisconnect = true
+			pushListener.cleanup()
+		}
 
 		// Publish presence event OUTSIDE the lock to avoid deadlock
 		// If any event subscriber tries to read broker.sessions, publishing inside
@@ -139,5 +153,3 @@ func (s *Session) doCleanup() {
 
 	s.conn.Close()
 }
-
-
