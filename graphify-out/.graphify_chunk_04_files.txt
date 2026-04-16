@@ -1,0 +1,8 @@
+/Users/spson/Projects/Claude/waggle/integrations/claude-code/skills/waggle.md
+/Users/spson/Projects/Claude/waggle/integrations/claude-code/skills/presence.md
+/Users/spson/Projects/Claude/waggle/integrations/claude-code/skills/send.md
+/Users/spson/Projects/Claude/waggle/integrations/gemini/GEMINI-block.md
+/Users/spson/Projects/Claude/waggle/integrations/codex/AGENTS-block.md
+/Users/spson/Projects/Claude/waggle/integrations/codex/skills/waggle-runtime/SKILL.md
+/Users/spson/Projects/Claude/waggle/integrations/augment/SKILL-block.md
+/Users/spson/Projects/Claude/waggle/integrations/auggie/RULE-block.md
