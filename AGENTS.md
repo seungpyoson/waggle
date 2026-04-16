@@ -28,3 +28,12 @@
 1. Do not hardcode defaults outside `internal/config/`.
 2. Treat `internal/protocol/` changes as public contract changes.
 3. Startup-path commands must stay fast, resilient, and non-fatal in degraded environments.
+
+## graphify
+
+This project has a graphify knowledge graph at graphify-out/.
+
+Rules:
+- Before answering architecture or codebase questions, read graphify-out/GRAPH_REPORT.md for god nodes and community structure
+- If graphify-out/wiki/index.md exists, navigate it instead of reading raw files
+- After modifying code files in this session, run `graphify update .` to keep the graph current (AST-only, no API cost)

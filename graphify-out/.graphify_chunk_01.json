@@ -1,0 +1,224 @@
+{
+  "nodes": [
+    {"id": "2026-03-31-last-mile-push-delivery_plan", "label": "Last-Mile Push Delivery Master Plan v4", "file_type": "document", "source_file": "docs/superpowers/plans/2026-03-31-last-mile-push-delivery.md"},
+    {"id": "2026-03-31-last-mile-push-delivery_signal_file_writer", "label": "Signal File Writer (WriteSignal/ConsumeSignal)", "file_type": "document", "source_file": "docs/superpowers/plans/2026-03-31-last-mile-push-delivery.md"},
+    {"id": "2026-03-31-last-mile-push-delivery_ppid_mapping", "label": "PPID Mapping via WAGGLE_AGENT_PPID", "file_type": "document", "source_file": "docs/superpowers/plans/2026-03-31-last-mile-push-delivery.md"},
+    {"id": "2026-03-31-last-mile-push-delivery_shell_hook", "label": "Shell Hook Script (.zshenv/.bashrc)", "file_type": "document", "source_file": "docs/superpowers/plans/2026-03-31-last-mile-push-delivery.md"},
+    {"id": "2026-03-31-last-mile-push-delivery_claude_code_hook", "label": "Claude Code PreToolUse Hook", "file_type": "document", "source_file": "docs/superpowers/plans/2026-03-31-last-mile-push-delivery.md"},
+    {"id": "2026-03-31-last-mile-push-delivery_delivery_pipeline", "label": "Delivery Pipeline Wiring (Manager.SetSignalDir)", "file_type": "document", "source_file": "docs/superpowers/plans/2026-03-31-last-mile-push-delivery.md"},
+
+    {"id": "2026-03-29-runtime-cheapness_plan", "label": "Runtime Cheapness Plan", "file_type": "document", "source_file": "docs/superpowers/plans/2026-03-29-runtime-cheapness.md"},
+    {"id": "2026-03-29-runtime-cheapness_runtime_cadence_defaults", "label": "Runtime Cadence Defaults (ReconcileInterval/RetrySweepInterval)", "file_type": "document", "source_file": "docs/superpowers/plans/2026-03-29-runtime-cheapness.md"},
+    {"id": "2026-03-29-runtime-cheapness_global_retry_sweep", "label": "Manager-Wide Retry Sweep Loop", "file_type": "document", "source_file": "docs/superpowers/plans/2026-03-29-runtime-cheapness.md"},
+    {"id": "2026-03-29-runtime-cheapness_reconcile_decouple", "label": "Decouple Reconcile From PollInterval", "file_type": "document", "source_file": "docs/superpowers/plans/2026-03-29-runtime-cheapness.md"},
+    {"id": "2026-03-29-runtime-cheapness_cheapness_rules", "label": "Cheapness Merge Gate Rules", "file_type": "document", "source_file": "docs/superpowers/plans/2026-03-29-runtime-cheapness.md"},
+
+    {"id": "2026-03-24-waggle-v1_plan", "label": "Waggle v1 Master Implementation Plan", "file_type": "document", "source_file": "docs/superpowers/plans/2026-03-24-waggle-v1.md"},
+    {"id": "2026-03-24-waggle-v1_per_project_isolation", "label": "Per-Project Isolation (hash socket per root)", "file_type": "document", "source_file": "docs/superpowers/plans/2026-03-24-waggle-v1.md"},
+    {"id": "2026-03-24-waggle-v1_crash_recovery", "label": "Crash Recovery (stale socket/PID, RequeueAllClaimed)", "file_type": "document", "source_file": "docs/superpowers/plans/2026-03-24-waggle-v1.md"},
+    {"id": "2026-03-24-waggle-v1_socket_security", "label": "Socket Security (0700 perms)", "file_type": "document", "source_file": "docs/superpowers/plans/2026-03-24-waggle-v1.md"},
+    {"id": "2026-03-24-waggle-v1_file_structure", "label": "v1 File Structure (cmd + internal)", "file_type": "document", "source_file": "docs/superpowers/plans/2026-03-24-waggle-v1.md"},
+    {"id": "2026-03-24-waggle-v1_task_index", "label": "v1 Task Index (13 tasks)", "file_type": "document", "source_file": "docs/superpowers/plans/2026-03-24-waggle-v1.md"},
+
+    {"id": "2026-03-26-zombie-broker-timeout_plan", "label": "Zombie Broker Timeout Plan", "file_type": "document", "source_file": "docs/superpowers/plans/2026-03-26-zombie-broker-timeout.md"},
+    {"id": "2026-03-26-zombie-broker-timeout_connect_timeout", "label": "client.Connect with DialTimeout", "file_type": "document", "source_file": "docs/superpowers/plans/2026-03-26-zombie-broker-timeout.md"},
+    {"id": "2026-03-26-zombie-broker-timeout_is_responding", "label": "broker.IsResponding Health Probe", "file_type": "document", "source_file": "docs/superpowers/plans/2026-03-26-zombie-broker-timeout.md"},
+    {"id": "2026-03-26-zombie-broker-timeout_handshake_deadline", "label": "Deadline-Scoped Handshake in connectToBroker", "file_type": "document", "source_file": "docs/superpowers/plans/2026-03-26-zombie-broker-timeout.md"},
+    {"id": "2026-03-26-zombie-broker-timeout_zombie_recovery", "label": "Zombie Recovery PersistentPreRunE Flow", "file_type": "document", "source_file": "docs/superpowers/plans/2026-03-26-zombie-broker-timeout.md"},
+
+    {"id": "08-client_task", "label": "Task 8: Client Library", "file_type": "document", "source_file": "docs/superpowers/plans/tasks/08-client.md"},
+    {"id": "08-client_client_type", "label": "client.Client (Send/ReadStream/Close)", "file_type": "document", "source_file": "docs/superpowers/plans/tasks/08-client.md"},
+
+    {"id": "02-protocol_task", "label": "Task 2: Protocol Types", "file_type": "document", "source_file": "docs/superpowers/plans/tasks/02-protocol.md"},
+    {"id": "02-protocol_request_response", "label": "protocol.Request / Response / Event", "file_type": "document", "source_file": "docs/superpowers/plans/tasks/02-protocol.md"},
+    {"id": "02-protocol_codes", "label": "Protocol Cmd / Error Code Constants", "file_type": "document", "source_file": "docs/superpowers/plans/tasks/02-protocol.md"},
+
+    {"id": "03-events_task", "label": "Task 3: Events Hub", "file_type": "document", "source_file": "docs/superpowers/plans/tasks/03-events.md"},
+    {"id": "03-events_hub", "label": "events.Hub (Subscribe/Unsubscribe/Publish)", "file_type": "document", "source_file": "docs/superpowers/plans/tasks/03-events.md"},
+
+    {"id": "06-task-deps_task", "label": "Task 6: Task Dependencies", "file_type": "document", "source_file": "docs/superpowers/plans/tasks/06-task-deps.md"},
+    {"id": "06-task-deps_resolve_deps", "label": "ResolveDeps / FailDependents", "file_type": "document", "source_file": "docs/superpowers/plans/tasks/06-task-deps.md"},
+    {"id": "06-task-deps_validate_deps", "label": "ValidateDeps Cycle Detection", "file_type": "document", "source_file": "docs/superpowers/plans/tasks/06-task-deps.md"},
+
+    {"id": "11-cli_task", "label": "Task 11: CLI Commands (cobra tree)", "file_type": "document", "source_file": "docs/superpowers/plans/tasks/11-cli.md"},
+    {"id": "11-cli_root_autostart", "label": "Root Command Auto-Start Logic", "file_type": "document", "source_file": "docs/superpowers/plans/tasks/11-cli.md"},
+
+    {"id": "04-locks_task", "label": "Task 4: Lock Manager", "file_type": "document", "source_file": "docs/superpowers/plans/tasks/04-locks.md"},
+    {"id": "04-locks_manager", "label": "locks.Manager (Acquire/Release/ReleaseAll)", "file_type": "document", "source_file": "docs/superpowers/plans/tasks/04-locks.md"},
+
+    {"id": "05-task-store_task", "label": "Task 5: Task Store (SQLite)", "file_type": "document", "source_file": "docs/superpowers/plans/tasks/05-task-store.md"},
+    {"id": "05-task-store_store", "label": "tasks.Store (Create/Claim/Complete/Fail/Cancel/List)", "file_type": "document", "source_file": "docs/superpowers/plans/tasks/05-task-store.md"},
+    {"id": "05-task-store_idempotency_key", "label": "Idempotency Key Support", "file_type": "document", "source_file": "docs/superpowers/plans/tasks/05-task-store.md"},
+    {"id": "05-task-store_requeue_all_claimed", "label": "RequeueAllClaimed (crash recovery)", "file_type": "document", "source_file": "docs/superpowers/plans/tasks/05-task-store.md"},
+
+    {"id": "10-broker-lifecycle_task", "label": "Task 10: Broker Lifecycle", "file_type": "document", "source_file": "docs/superpowers/plans/tasks/10-broker-lifecycle.md"},
+    {"id": "10-broker-lifecycle_pid", "label": "WritePID/ReadPID/IsRunning", "file_type": "document", "source_file": "docs/superpowers/plans/tasks/10-broker-lifecycle.md"},
+    {"id": "10-broker-lifecycle_start_daemon", "label": "StartDaemon Fork", "file_type": "document", "source_file": "docs/superpowers/plans/tasks/10-broker-lifecycle.md"},
+
+    {"id": "07-task-lease_task", "label": "Task 7: Lease Checker", "file_type": "document", "source_file": "docs/superpowers/plans/tasks/07-task-lease.md"},
+    {"id": "07-task-lease_requeue_expired", "label": "RequeueExpired (lease expiry/max retries)", "file_type": "document", "source_file": "docs/superpowers/plans/tasks/07-task-lease.md"},
+    {"id": "07-task-lease_heartbeat", "label": "Store.Heartbeat (lease renewal)", "file_type": "document", "source_file": "docs/superpowers/plans/tasks/07-task-lease.md"},
+
+    {"id": "13-docs_task", "label": "Task 13: Documentation and Cleanup", "file_type": "document", "source_file": "docs/superpowers/plans/tasks/13-docs.md"},
+
+    {"id": "01-config_task", "label": "Task 1: Config Module", "file_type": "document", "source_file": "docs/superpowers/plans/tasks/01-config.md"},
+    {"id": "01-config_defaults", "label": "config.Defaults (single source of truth)", "file_type": "document", "source_file": "docs/superpowers/plans/tasks/01-config.md"},
+    {"id": "01-config_find_project_root", "label": "FindProjectRoot (.git walk + WAGGLE_ROOT)", "file_type": "document", "source_file": "docs/superpowers/plans/tasks/01-config.md"},
+    {"id": "01-config_new_paths", "label": "NewPaths (derived paths + projectHash)", "file_type": "document", "source_file": "docs/superpowers/plans/tasks/01-config.md"},
+
+    {"id": "12-e2e_task", "label": "Task 12: End-to-End Integration Test", "file_type": "document", "source_file": "docs/superpowers/plans/tasks/12-e2e.md"},
+
+    {"id": "09-broker-core_task", "label": "Task 9: Broker Core", "file_type": "document", "source_file": "docs/superpowers/plans/tasks/09-broker-core.md"},
+    {"id": "09-broker-core_broker", "label": "broker.Broker (New/Serve/Shutdown)", "file_type": "document", "source_file": "docs/superpowers/plans/tasks/09-broker-core.md"},
+    {"id": "09-broker-core_session", "label": "broker.Session readLoop/cleanup", "file_type": "document", "source_file": "docs/superpowers/plans/tasks/09-broker-core.md"},
+    {"id": "09-broker-core_router", "label": "broker.route (command dispatcher)", "file_type": "document", "source_file": "docs/superpowers/plans/tasks/09-broker-core.md"},
+
+    {"id": "task-8-verify_task", "label": "Universal Project ID — Task 8 Verify", "file_type": "document", "source_file": "docs/superpowers/plans/tasks/2026-03-25-universal-project-id/task-8-verify.md"},
+
+    {"id": "task-4-daemon-inject_task", "label": "Universal Project ID — Task 4 StartDaemon Inject", "file_type": "document", "source_file": "docs/superpowers/plans/tasks/2026-03-25-universal-project-id/task-4-daemon-inject.md"},
+    {"id": "task-4-daemon-inject_env_injection", "label": "WAGGLE_PROJECT_ID env injection into daemon fork", "file_type": "document", "source_file": "docs/superpowers/plans/tasks/2026-03-25-universal-project-id/task-4-daemon-inject.md"},
+
+    {"id": "task-1-resolve-tests_task", "label": "Universal Project ID — Task 1 ResolveProjectID TDD", "file_type": "document", "source_file": "docs/superpowers/plans/tasks/2026-03-25-universal-project-id/task-1-resolve-tests.md"},
+
+    {"id": "task-2-resolve-impl_task", "label": "Universal Project ID — Task 2 ResolveProjectID Implementation", "file_type": "document", "source_file": "docs/superpowers/plans/tasks/2026-03-25-universal-project-id/task-2-resolve-impl.md"},
+    {"id": "task-2-resolve-impl_cascade", "label": "4-Level Resolve Cascade (env / git root commit / WAGGLE_ROOT / error)", "file_type": "document", "source_file": "docs/superpowers/plans/tasks/2026-03-25-universal-project-id/task-2-resolve-impl.md"},
+    {"id": "task-2-resolve-impl_git_root_commit", "label": "gitRootCommit (worktree + merged-histories)", "file_type": "document", "source_file": "docs/superpowers/plans/tasks/2026-03-25-universal-project-id/task-2-resolve-impl.md"},
+
+    {"id": "task-3-paths-update_task", "label": "Universal Project ID — Task 3 Paths Update", "file_type": "document", "source_file": "docs/superpowers/plans/tasks/2026-03-25-universal-project-id/task-3-paths-update.md"},
+    {"id": "task-3-paths-update_new_paths", "label": "NewPaths(projectID) + ~/.waggle/data/<hash>/", "file_type": "document", "source_file": "docs/superpowers/plans/tasks/2026-03-25-universal-project-id/task-3-paths-update.md"}
+  ],
+  "edges": [
+    {"source": "2026-03-31-last-mile-push-delivery_plan", "target": "2026-03-31-last-mile-push-delivery_signal_file_writer", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/2026-03-31-last-mile-push-delivery.md", "weight": 1.0},
+    {"source": "2026-03-31-last-mile-push-delivery_plan", "target": "2026-03-31-last-mile-push-delivery_ppid_mapping", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/2026-03-31-last-mile-push-delivery.md", "weight": 1.0},
+    {"source": "2026-03-31-last-mile-push-delivery_plan", "target": "2026-03-31-last-mile-push-delivery_shell_hook", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/2026-03-31-last-mile-push-delivery.md", "weight": 1.0},
+    {"source": "2026-03-31-last-mile-push-delivery_plan", "target": "2026-03-31-last-mile-push-delivery_claude_code_hook", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/2026-03-31-last-mile-push-delivery.md", "weight": 1.0},
+    {"source": "2026-03-31-last-mile-push-delivery_plan", "target": "2026-03-31-last-mile-push-delivery_delivery_pipeline", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/2026-03-31-last-mile-push-delivery.md", "weight": 1.0},
+    {"source": "2026-03-31-last-mile-push-delivery_delivery_pipeline", "target": "2026-03-31-last-mile-push-delivery_signal_file_writer", "relation": "shares_data_with", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/2026-03-31-last-mile-push-delivery.md", "weight": 1.0},
+    {"source": "2026-03-31-last-mile-push-delivery_shell_hook", "target": "2026-03-31-last-mile-push-delivery_signal_file_writer", "relation": "shares_data_with", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/2026-03-31-last-mile-push-delivery.md", "weight": 1.0},
+    {"source": "2026-03-31-last-mile-push-delivery_shell_hook", "target": "2026-03-31-last-mile-push-delivery_ppid_mapping", "relation": "shares_data_with", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/2026-03-31-last-mile-push-delivery.md", "weight": 1.0},
+    {"source": "2026-03-31-last-mile-push-delivery_claude_code_hook", "target": "2026-03-31-last-mile-push-delivery_ppid_mapping", "relation": "shares_data_with", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/2026-03-31-last-mile-push-delivery.md", "weight": 1.0},
+
+    {"source": "2026-03-29-runtime-cheapness_plan", "target": "2026-03-29-runtime-cheapness_runtime_cadence_defaults", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/2026-03-29-runtime-cheapness.md", "weight": 1.0},
+    {"source": "2026-03-29-runtime-cheapness_plan", "target": "2026-03-29-runtime-cheapness_global_retry_sweep", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/2026-03-29-runtime-cheapness.md", "weight": 1.0},
+    {"source": "2026-03-29-runtime-cheapness_plan", "target": "2026-03-29-runtime-cheapness_reconcile_decouple", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/2026-03-29-runtime-cheapness.md", "weight": 1.0},
+    {"source": "2026-03-29-runtime-cheapness_plan", "target": "2026-03-29-runtime-cheapness_cheapness_rules", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/2026-03-29-runtime-cheapness.md", "weight": 1.0},
+    {"source": "2026-03-29-runtime-cheapness_global_retry_sweep", "target": "2026-03-29-runtime-cheapness_runtime_cadence_defaults", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/2026-03-29-runtime-cheapness.md", "weight": 1.0},
+    {"source": "2026-03-29-runtime-cheapness_reconcile_decouple", "target": "2026-03-29-runtime-cheapness_runtime_cadence_defaults", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/2026-03-29-runtime-cheapness.md", "weight": 1.0},
+    {"source": "2026-03-29-runtime-cheapness_cheapness_rules", "target": "2026-03-29-runtime-cheapness_global_retry_sweep", "relation": "rationale_for", "confidence": "INFERRED", "confidence_score": 0.9, "source_file": "docs/superpowers/plans/2026-03-29-runtime-cheapness.md", "weight": 0.9},
+
+    {"source": "2026-03-24-waggle-v1_plan", "target": "2026-03-24-waggle-v1_per_project_isolation", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/2026-03-24-waggle-v1.md", "weight": 1.0},
+    {"source": "2026-03-24-waggle-v1_plan", "target": "2026-03-24-waggle-v1_crash_recovery", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/2026-03-24-waggle-v1.md", "weight": 1.0},
+    {"source": "2026-03-24-waggle-v1_plan", "target": "2026-03-24-waggle-v1_socket_security", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/2026-03-24-waggle-v1.md", "weight": 1.0},
+    {"source": "2026-03-24-waggle-v1_plan", "target": "2026-03-24-waggle-v1_file_structure", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/2026-03-24-waggle-v1.md", "weight": 1.0},
+    {"source": "2026-03-24-waggle-v1_plan", "target": "2026-03-24-waggle-v1_task_index", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/2026-03-24-waggle-v1.md", "weight": 1.0},
+    {"source": "2026-03-24-waggle-v1_task_index", "target": "01-config_task", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/2026-03-24-waggle-v1.md", "weight": 1.0},
+    {"source": "2026-03-24-waggle-v1_task_index", "target": "02-protocol_task", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/2026-03-24-waggle-v1.md", "weight": 1.0},
+    {"source": "2026-03-24-waggle-v1_task_index", "target": "03-events_task", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/2026-03-24-waggle-v1.md", "weight": 1.0},
+    {"source": "2026-03-24-waggle-v1_task_index", "target": "04-locks_task", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/2026-03-24-waggle-v1.md", "weight": 1.0},
+    {"source": "2026-03-24-waggle-v1_task_index", "target": "05-task-store_task", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/2026-03-24-waggle-v1.md", "weight": 1.0},
+    {"source": "2026-03-24-waggle-v1_task_index", "target": "06-task-deps_task", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/2026-03-24-waggle-v1.md", "weight": 1.0},
+    {"source": "2026-03-24-waggle-v1_task_index", "target": "07-task-lease_task", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/2026-03-24-waggle-v1.md", "weight": 1.0},
+    {"source": "2026-03-24-waggle-v1_task_index", "target": "08-client_task", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/2026-03-24-waggle-v1.md", "weight": 1.0},
+    {"source": "2026-03-24-waggle-v1_task_index", "target": "09-broker-core_task", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/2026-03-24-waggle-v1.md", "weight": 1.0},
+    {"source": "2026-03-24-waggle-v1_task_index", "target": "10-broker-lifecycle_task", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/2026-03-24-waggle-v1.md", "weight": 1.0},
+    {"source": "2026-03-24-waggle-v1_task_index", "target": "11-cli_task", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/2026-03-24-waggle-v1.md", "weight": 1.0},
+    {"source": "2026-03-24-waggle-v1_task_index", "target": "12-e2e_task", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/2026-03-24-waggle-v1.md", "weight": 1.0},
+    {"source": "2026-03-24-waggle-v1_task_index", "target": "13-docs_task", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/2026-03-24-waggle-v1.md", "weight": 1.0},
+    {"source": "2026-03-24-waggle-v1_per_project_isolation", "target": "01-config_find_project_root", "relation": "implements", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/2026-03-24-waggle-v1.md", "weight": 1.0},
+    {"source": "2026-03-24-waggle-v1_per_project_isolation", "target": "01-config_new_paths", "relation": "implements", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/2026-03-24-waggle-v1.md", "weight": 1.0},
+    {"source": "2026-03-24-waggle-v1_crash_recovery", "target": "05-task-store_requeue_all_claimed", "relation": "implements", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/2026-03-24-waggle-v1.md", "weight": 1.0},
+    {"source": "2026-03-24-waggle-v1_socket_security", "target": "10-broker-lifecycle_task", "relation": "implements", "confidence": "INFERRED", "confidence_score": 0.8, "source_file": "docs/superpowers/plans/2026-03-24-waggle-v1.md", "weight": 0.8},
+
+    {"source": "2026-03-26-zombie-broker-timeout_plan", "target": "2026-03-26-zombie-broker-timeout_connect_timeout", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/2026-03-26-zombie-broker-timeout.md", "weight": 1.0},
+    {"source": "2026-03-26-zombie-broker-timeout_plan", "target": "2026-03-26-zombie-broker-timeout_is_responding", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/2026-03-26-zombie-broker-timeout.md", "weight": 1.0},
+    {"source": "2026-03-26-zombie-broker-timeout_plan", "target": "2026-03-26-zombie-broker-timeout_handshake_deadline", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/2026-03-26-zombie-broker-timeout.md", "weight": 1.0},
+    {"source": "2026-03-26-zombie-broker-timeout_plan", "target": "2026-03-26-zombie-broker-timeout_zombie_recovery", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/2026-03-26-zombie-broker-timeout.md", "weight": 1.0},
+    {"source": "2026-03-26-zombie-broker-timeout_handshake_deadline", "target": "2026-03-26-zombie-broker-timeout_connect_timeout", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/2026-03-26-zombie-broker-timeout.md", "weight": 1.0},
+    {"source": "2026-03-26-zombie-broker-timeout_zombie_recovery", "target": "2026-03-26-zombie-broker-timeout_is_responding", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/2026-03-26-zombie-broker-timeout.md", "weight": 1.0},
+    {"source": "2026-03-26-zombie-broker-timeout_zombie_recovery", "target": "10-broker-lifecycle_start_daemon", "relation": "references", "confidence": "INFERRED", "confidence_score": 0.8, "source_file": "docs/superpowers/plans/2026-03-26-zombie-broker-timeout.md", "weight": 0.8},
+    {"source": "2026-03-26-zombie-broker-timeout_connect_timeout", "target": "08-client_client_type", "relation": "implements", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/2026-03-26-zombie-broker-timeout.md", "weight": 1.0},
+    {"source": "2026-03-26-zombie-broker-timeout_is_responding", "target": "10-broker-lifecycle_task", "relation": "implements", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/2026-03-26-zombie-broker-timeout.md", "weight": 1.0},
+
+    {"source": "08-client_task", "target": "08-client_client_type", "relation": "implements", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/08-client.md", "weight": 1.0},
+    {"source": "08-client_task", "target": "02-protocol_task", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/08-client.md", "weight": 1.0},
+    {"source": "08-client_client_type", "target": "02-protocol_request_response", "relation": "shares_data_with", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/08-client.md", "weight": 1.0},
+
+    {"source": "02-protocol_task", "target": "02-protocol_request_response", "relation": "implements", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/02-protocol.md", "weight": 1.0},
+    {"source": "02-protocol_task", "target": "02-protocol_codes", "relation": "implements", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/02-protocol.md", "weight": 1.0},
+    {"source": "02-protocol_request_response", "target": "02-protocol_codes", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/02-protocol.md", "weight": 1.0},
+
+    {"source": "03-events_task", "target": "03-events_hub", "relation": "implements", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/03-events.md", "weight": 1.0},
+
+    {"source": "06-task-deps_task", "target": "06-task-deps_resolve_deps", "relation": "implements", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/06-task-deps.md", "weight": 1.0},
+    {"source": "06-task-deps_task", "target": "06-task-deps_validate_deps", "relation": "implements", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/06-task-deps.md", "weight": 1.0},
+    {"source": "06-task-deps_task", "target": "05-task-store_task", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/06-task-deps.md", "weight": 1.0},
+    {"source": "06-task-deps_resolve_deps", "target": "05-task-store_store", "relation": "shares_data_with", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/06-task-deps.md", "weight": 1.0},
+
+    {"source": "11-cli_task", "target": "11-cli_root_autostart", "relation": "implements", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/11-cli.md", "weight": 1.0},
+    {"source": "11-cli_task", "target": "01-config_task", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/11-cli.md", "weight": 1.0},
+    {"source": "11-cli_task", "target": "08-client_task", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/11-cli.md", "weight": 1.0},
+    {"source": "11-cli_task", "target": "09-broker-core_task", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/11-cli.md", "weight": 1.0},
+    {"source": "11-cli_task", "target": "10-broker-lifecycle_task", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/11-cli.md", "weight": 1.0},
+    {"source": "11-cli_root_autostart", "target": "10-broker-lifecycle_pid", "relation": "shares_data_with", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/11-cli.md", "weight": 1.0},
+
+    {"source": "04-locks_task", "target": "04-locks_manager", "relation": "implements", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/04-locks.md", "weight": 1.0},
+
+    {"source": "05-task-store_task", "target": "05-task-store_store", "relation": "implements", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/05-task-store.md", "weight": 1.0},
+    {"source": "05-task-store_task", "target": "05-task-store_idempotency_key", "relation": "implements", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/05-task-store.md", "weight": 1.0},
+    {"source": "05-task-store_task", "target": "05-task-store_requeue_all_claimed", "relation": "implements", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/05-task-store.md", "weight": 1.0},
+    {"source": "05-task-store_task", "target": "01-config_task", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/05-task-store.md", "weight": 1.0},
+
+    {"source": "10-broker-lifecycle_task", "target": "10-broker-lifecycle_pid", "relation": "implements", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/10-broker-lifecycle.md", "weight": 1.0},
+    {"source": "10-broker-lifecycle_task", "target": "10-broker-lifecycle_start_daemon", "relation": "implements", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/10-broker-lifecycle.md", "weight": 1.0},
+    {"source": "10-broker-lifecycle_task", "target": "09-broker-core_task", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/10-broker-lifecycle.md", "weight": 1.0},
+
+    {"source": "07-task-lease_task", "target": "07-task-lease_requeue_expired", "relation": "implements", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/07-task-lease.md", "weight": 1.0},
+    {"source": "07-task-lease_task", "target": "07-task-lease_heartbeat", "relation": "implements", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/07-task-lease.md", "weight": 1.0},
+    {"source": "07-task-lease_task", "target": "05-task-store_task", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/07-task-lease.md", "weight": 1.0},
+    {"source": "07-task-lease_heartbeat", "target": "05-task-store_store", "relation": "shares_data_with", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/07-task-lease.md", "weight": 1.0},
+    {"source": "07-task-lease_requeue_expired", "target": "05-task-store_store", "relation": "shares_data_with", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/07-task-lease.md", "weight": 1.0},
+
+    {"source": "13-docs_task", "target": "12-e2e_task", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/13-docs.md", "weight": 1.0},
+
+    {"source": "01-config_task", "target": "01-config_defaults", "relation": "implements", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/01-config.md", "weight": 1.0},
+    {"source": "01-config_task", "target": "01-config_find_project_root", "relation": "implements", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/01-config.md", "weight": 1.0},
+    {"source": "01-config_task", "target": "01-config_new_paths", "relation": "implements", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/01-config.md", "weight": 1.0},
+    {"source": "01-config_new_paths", "target": "01-config_defaults", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/01-config.md", "weight": 1.0},
+
+    {"source": "12-e2e_task", "target": "11-cli_task", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/12-e2e.md", "weight": 1.0},
+
+    {"source": "09-broker-core_task", "target": "09-broker-core_broker", "relation": "implements", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/09-broker-core.md", "weight": 1.0},
+    {"source": "09-broker-core_task", "target": "09-broker-core_session", "relation": "implements", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/09-broker-core.md", "weight": 1.0},
+    {"source": "09-broker-core_task", "target": "09-broker-core_router", "relation": "implements", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/09-broker-core.md", "weight": 1.0},
+    {"source": "09-broker-core_task", "target": "03-events_task", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/09-broker-core.md", "weight": 1.0},
+    {"source": "09-broker-core_task", "target": "04-locks_task", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/09-broker-core.md", "weight": 1.0},
+    {"source": "09-broker-core_task", "target": "05-task-store_task", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/09-broker-core.md", "weight": 1.0},
+    {"source": "09-broker-core_task", "target": "06-task-deps_task", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/09-broker-core.md", "weight": 1.0},
+    {"source": "09-broker-core_task", "target": "07-task-lease_task", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/09-broker-core.md", "weight": 1.0},
+    {"source": "09-broker-core_task", "target": "08-client_task", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/09-broker-core.md", "weight": 1.0},
+    {"source": "09-broker-core_broker", "target": "05-task-store_requeue_all_claimed", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/09-broker-core.md", "weight": 1.0},
+    {"source": "09-broker-core_session", "target": "04-locks_manager", "relation": "shares_data_with", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/09-broker-core.md", "weight": 1.0},
+    {"source": "09-broker-core_router", "target": "02-protocol_request_response", "relation": "shares_data_with", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/09-broker-core.md", "weight": 1.0},
+
+    {"source": "task-4-daemon-inject_task", "target": "task-4-daemon-inject_env_injection", "relation": "implements", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/2026-03-25-universal-project-id/task-4-daemon-inject.md", "weight": 1.0},
+    {"source": "task-4-daemon-inject_task", "target": "10-broker-lifecycle_start_daemon", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/2026-03-25-universal-project-id/task-4-daemon-inject.md", "weight": 1.0},
+    {"source": "task-4-daemon-inject_env_injection", "target": "task-2-resolve-impl_cascade", "relation": "shares_data_with", "confidence": "INFERRED", "confidence_score": 0.9, "source_file": "docs/superpowers/plans/tasks/2026-03-25-universal-project-id/task-4-daemon-inject.md", "weight": 0.9},
+
+    {"source": "task-1-resolve-tests_task", "target": "task-2-resolve-impl_task", "relation": "references", "confidence": "INFERRED", "confidence_score": 0.9, "source_file": "docs/superpowers/plans/tasks/2026-03-25-universal-project-id/task-1-resolve-tests.md", "weight": 0.9},
+
+    {"source": "task-2-resolve-impl_task", "target": "task-2-resolve-impl_cascade", "relation": "implements", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/2026-03-25-universal-project-id/task-2-resolve-impl.md", "weight": 1.0},
+    {"source": "task-2-resolve-impl_task", "target": "task-2-resolve-impl_git_root_commit", "relation": "implements", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/2026-03-25-universal-project-id/task-2-resolve-impl.md", "weight": 1.0},
+    {"source": "task-2-resolve-impl_cascade", "target": "task-2-resolve-impl_git_root_commit", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/2026-03-25-universal-project-id/task-2-resolve-impl.md", "weight": 1.0},
+    {"source": "task-2-resolve-impl_cascade", "target": "01-config_find_project_root", "relation": "conceptually_related_to", "confidence": "INFERRED", "confidence_score": 0.8, "source_file": "docs/superpowers/plans/tasks/2026-03-25-universal-project-id/task-2-resolve-impl.md", "weight": 0.8},
+
+    {"source": "task-3-paths-update_task", "target": "task-3-paths-update_new_paths", "relation": "implements", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "docs/superpowers/plans/tasks/2026-03-25-universal-project-id/task-3-paths-update.md", "weight": 1.0},
+    {"source": "task-3-paths-update_new_paths", "target": "01-config_new_paths", "relation": "conceptually_related_to", "confidence": "INFERRED", "confidence_score": 0.9, "source_file": "docs/superpowers/plans/tasks/2026-03-25-universal-project-id/task-3-paths-update.md", "weight": 0.9},
+    {"source": "task-3-paths-update_new_paths", "target": "task-2-resolve-impl_cascade", "relation": "shares_data_with", "confidence": "INFERRED", "confidence_score": 0.9, "source_file": "docs/superpowers/plans/tasks/2026-03-25-universal-project-id/task-3-paths-update.md", "weight": 0.9},
+
+    {"source": "task-8-verify_task", "target": "task-3-paths-update_task", "relation": "references", "confidence": "INFERRED", "confidence_score": 0.8, "source_file": "docs/superpowers/plans/tasks/2026-03-25-universal-project-id/task-8-verify.md", "weight": 0.8},
+    {"source": "task-8-verify_task", "target": "task-4-daemon-inject_task", "relation": "references", "confidence": "INFERRED", "confidence_score": 0.8, "source_file": "docs/superpowers/plans/tasks/2026-03-25-universal-project-id/task-8-verify.md", "weight": 0.8}
+  ],
+  "hyperedges": [],
+  "input_tokens": 0,
+  "output_tokens": 0
+}
