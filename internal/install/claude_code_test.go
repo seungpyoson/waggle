@@ -757,26 +757,23 @@ func TestInstall_CorruptedSettingsJSON(t *testing.T) {
 	tmpHome := t.TempDir()
 	claudeDir := filepath.Join(tmpHome, ".claude")
 	os.MkdirAll(claudeDir, 0755)
-	os.WriteFile(filepath.Join(claudeDir, "settings.json"), []byte("not json{{"), 0644)
+	settingsPath := filepath.Join(claudeDir, "settings.json")
+	os.WriteFile(settingsPath, []byte("not json{{"), 0644)
 
 	err := installClaudeCode(tmpHome)
-	if err != nil {
-		t.Fatalf("install failed with corrupted settings.json: %v", err)
+	if err == nil {
+		t.Fatal("expected install to fail with corrupted settings.json")
+	}
+	if !strings.Contains(err.Error(), "parse settings.json") {
+		t.Fatalf("expected parse error, got: %v", err)
 	}
 
-	// Verify settings.json is now valid with waggle hook
-	data, _ := os.ReadFile(filepath.Join(claudeDir, "settings.json"))
-	var settings map[string]interface{}
-	if err := json.Unmarshal(data, &settings); err != nil {
-		t.Fatalf("settings.json is not valid JSON after install: %v", err)
+	data, readErr := os.ReadFile(settingsPath)
+	if readErr != nil {
+		t.Fatalf("failed to read settings.json after failed install: %v", readErr)
 	}
-	hooks, ok := settings["hooks"].(map[string]interface{})
-	if !ok {
-		t.Fatal("no hooks section in settings.json")
-	}
-	_, ok = hooks["SessionStart"].([]interface{})
-	if !ok {
-		t.Fatal("no SessionStart in hooks")
+	if string(data) != "not json{{" {
+		t.Fatalf("corrupted settings.json should be preserved, got %q", string(data))
 	}
 }
 
