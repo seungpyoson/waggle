@@ -134,6 +134,139 @@ func TestBrokerListenerListenReceivesPushWithoutBaseConnection(t *testing.T) {
 	}
 }
 
+func TestBrokerListenerListenReleasesPushTokenOnShutdown(t *testing.T) {
+	socketPath, cleanup := startRuntimeTestBroker(t, "proj-listen-release")
+	defer cleanup()
+
+	token, err := pushTokenForAgent(socketPath, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	listener, err := NewBrokerListenerFactory().NewListener(Watch{
+		ProjectID: "proj-listen-release",
+		AgentName: "alice",
+		Source:    "hook",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- listener.Listen(ctx, func(d Delivery) error {
+			cancel()
+			return nil
+		})
+	}()
+
+	sender := connectRuntimeClient(t, socketPath)
+	defer sender.Close()
+	resp, err := sender.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "sender"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.OK {
+		t.Fatalf("sender connect failed: %s", resp.Error)
+	}
+	waitForRuntimePresence(t, sender, "alice")
+
+	sendResp, err := sender.Send(protocol.Request{
+		Cmd:     protocol.CmdSend,
+		Name:    "alice",
+		Message: "release after delivery",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sendResp.OK {
+		t.Fatalf("send failed: %s", sendResp.Error)
+	}
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("Listen() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for listener shutdown")
+	}
+
+	waitForPushTokenRejected(t, socketPath, "alice-push", token)
+}
+
+func TestBrokerListenerFailedHandshakeDoesNotReleaseActiveListenerToken(t *testing.T) {
+	socketPath, cleanup := startRuntimeTestBroker(t, "proj-listen-duplicate")
+	defer cleanup()
+
+	token, err := pushTokenForAgent(socketPath, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	active := connectRuntimeClient(t, socketPath)
+	defer active.Close()
+	resp, err := active.Send(protocol.Request{
+		Cmd:          protocol.CmdConnect,
+		Name:         "alice-push",
+		PushListener: true,
+		PushToken:    token,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.OK {
+		t.Fatalf("active listener connect failed: %s: %s", resp.Code, resp.Error)
+	}
+
+	listener, err := NewBrokerListenerFactory().NewListener(Watch{
+		ProjectID: "proj-listen-duplicate",
+		AgentName: "alice",
+		Source:    "hook",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = listener.Listen(context.Background(), func(d Delivery) error {
+		t.Fatal("duplicate listener unexpectedly received delivery")
+		return nil
+	})
+	if err == nil {
+		t.Fatal("expected duplicate listener handshake to fail")
+	}
+
+	sender := connectRuntimeClient(t, socketPath)
+	defer sender.Close()
+	resp, err = sender.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "sender"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.OK {
+		t.Fatalf("sender connect failed: %s: %s", resp.Code, resp.Error)
+	}
+	resp, err = sender.Send(protocol.Request{
+		Cmd:     protocol.CmdSend,
+		Name:    "alice",
+		Message: "still active",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.OK {
+		t.Fatalf("send failed: %s: %s", resp.Code, resp.Error)
+	}
+
+	msg, err := active.Receive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !msg.OK {
+		t.Fatalf("active listener receive failed: %s", msg.Error)
+	}
+}
+
 func TestBrokerListenerCatchUpReadsInboxWithoutBaseConnection(t *testing.T) {
 	socketPath, cleanup := startRuntimeTestBroker(t, "proj-catchup")
 	defer cleanup()
@@ -183,6 +316,55 @@ func TestBrokerListenerCatchUpReadsInboxWithoutBaseConnection(t *testing.T) {
 	}
 }
 
+func TestBrokerListenerCatchUpReleasesPushToken(t *testing.T) {
+	socketPath, cleanup := startRuntimeTestBroker(t, "proj-catchup-release")
+	defer cleanup()
+
+	token, err := pushTokenForAgent(socketPath, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sender := connectRuntimeClient(t, socketPath)
+	defer sender.Close()
+	resp, err := sender.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "sender"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.OK {
+		t.Fatalf("sender connect failed: %s", resp.Error)
+	}
+
+	sendResp, err := sender.Send(protocol.Request{
+		Cmd:     protocol.CmdSend,
+		Name:    "alice",
+		Message: "catch-up release delivery",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sendResp.OK {
+		t.Fatalf("send failed: %s", sendResp.Error)
+	}
+
+	var got []Delivery
+	if err := NewBrokerListenerFactory().CatchUp(Watch{
+		ProjectID: "proj-catchup-release",
+		AgentName: "alice",
+		Source:    "hook",
+	}, func(d Delivery) error {
+		got = append(got, d)
+		return nil
+	}); err != nil {
+		t.Fatalf("CatchUp() error = %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("CatchUp() deliveries = %d, want 1", len(got))
+	}
+
+	waitForPushTokenRejected(t, socketPath, "alice-push", token)
+}
+
 func waitForRuntimePresence(t *testing.T, c *client.Client, name string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -206,4 +388,30 @@ func waitForRuntimePresence(t *testing.T, c *client.Client, name string) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for runtime listener %q in presence", name)
+}
+
+func waitForPushTokenRejected(t *testing.T, socketPath, listenerName, token string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		c := connectRuntimeClient(t, socketPath)
+		resp, err := c.Send(protocol.Request{
+			Cmd:          protocol.CmdConnect,
+			Name:         listenerName,
+			PushListener: true,
+			PushToken:    token,
+		})
+		c.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !resp.OK && resp.Code == protocol.ErrForbidden {
+			return
+		}
+		if resp.OK {
+			t.Fatal("expected released push token to be rejected")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for released push token to be rejected for %q", listenerName)
 }

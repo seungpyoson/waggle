@@ -29,6 +29,7 @@ const (
 	CmdPresence = "presence"
 
 	CmdPushReserve = "push.reserve"
+	CmdPushRelease = "push.release"
 
 	CmdSpawnRegister  = "spawn.register"
 	CmdSpawnUpdatePID = "spawn.update-pid"

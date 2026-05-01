@@ -55,12 +55,20 @@ func (f *BrokerListenerFactory) CatchUp(w Watch, handler DeliveryHandler) error 
 
 	c, err := client.Connect(paths.Socket, config.Defaults.ConnectTimeout)
 	if err != nil {
+		releasePushTokenForAgent(paths.Socket, w.AgentName, pushToken)
 		return err
 	}
+	connected := false
+	releaseOnReturn := true
 	defer func() {
 		// Clean disconnect prevents task requeue and lock release.
-		sendDisconnect(c, fmt.Sprintf("catch-up %q/%q", w.ProjectID, w.AgentName))
+		if connected {
+			sendDisconnect(c, fmt.Sprintf("catch-up %q/%q", w.ProjectID, w.AgentName))
+		}
 		c.Close()
+		if releaseOnReturn {
+			releasePushTokenForAgent(paths.Socket, w.AgentName, pushToken)
+		}
 	}()
 
 	// Set deadline for the entire catch-up operation (handshake + inbox + disconnect).
@@ -79,8 +87,10 @@ func (f *BrokerListenerFactory) CatchUp(w Watch, handler DeliveryHandler) error 
 	if !resp.OK {
 		// protocol.ErrAlreadyConnected is transient during restarts or duplicate workers;
 		// Manager.runWatch treats the returned Listen error as retryable and reconnects.
+		releaseOnReturn = false
 		return fmt.Errorf("%s: %s", resp.Code, resp.Error)
 	}
+	connected = true
 
 	resp, err = c.Send(protocol.Request{Cmd: protocol.CmdInbox})
 	if err != nil {
@@ -133,9 +143,16 @@ func (l *brokerListener) Listen(ctx context.Context, handler DeliveryHandler) er
 
 	c, err := client.Connect(l.socketPath, config.Defaults.ConnectTimeout)
 	if err != nil {
+		releasePushTokenForAgent(l.socketPath, l.agentName, pushToken)
 		return err
 	}
-	defer disconnectClient(c)
+	releaseOnReturn := true
+	defer func() {
+		c.Close()
+		if releaseOnReturn {
+			releasePushTokenForAgent(l.socketPath, l.agentName, pushToken)
+		}
+	}()
 
 	if err := c.SetDeadline(config.Defaults.ConnectTimeout); err != nil {
 		return fmt.Errorf("set handshake deadline: %w", err)
@@ -150,6 +167,7 @@ func (l *brokerListener) Listen(ctx context.Context, handler DeliveryHandler) er
 		return err
 	}
 	if !resp.OK {
+		releaseOnReturn = false
 		return fmt.Errorf("%s: %s", resp.Code, resp.Error)
 	}
 	if err := c.ClearDeadline(); err != nil {
@@ -246,4 +264,33 @@ func pushTokenForAgent(socketPath, agent string) (string, error) {
 		return "", fmt.Errorf("push reserve response missing token")
 	}
 	return data.PushToken, nil
+}
+
+func releasePushTokenForAgent(socketPath, agent, pushToken string) {
+	if socketPath == "" || agent == "" || pushToken == "" {
+		return
+	}
+	c, err := client.Connect(socketPath, config.Defaults.ConnectTimeout)
+	if err != nil {
+		log.Printf("warning: release push token for %s: %v", agent, err)
+		return
+	}
+	defer c.Close()
+
+	if err := c.SetDeadline(config.Defaults.DisconnectTimeout); err != nil {
+		log.Printf("warning: set push release deadline for %s: %v", agent, err)
+		return
+	}
+	resp, err := c.Send(protocol.Request{
+		Cmd:       protocol.CmdPushRelease,
+		Name:      agent,
+		PushToken: pushToken,
+	})
+	if err != nil {
+		log.Printf("warning: release push token for %s: %v", agent, err)
+		return
+	}
+	if !resp.OK {
+		log.Printf("warning: release push token for %s: %s: %s", agent, resp.Code, resp.Error)
+	}
 }
