@@ -132,6 +132,27 @@ func TestCheckClaudeCode_Healthy(t *testing.T) {
 	}
 }
 
+func TestCheckClaudeCode_BrokenStaleCanonicalContent(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	if err := installClaudeCode(tmpHome); err != nil {
+		t.Fatalf("install failed: %v", err)
+	}
+
+	hookPath := filepath.Join(tmpHome, ".claude", "hooks", "waggle-connect.sh")
+	if err := os.WriteFile(hookPath, []byte("#!/bin/sh\nwaggle runtime start\n"), 0755); err != nil {
+		t.Fatalf("write stale hook: %v", err)
+	}
+
+	issues, state := CheckClaudeCode(tmpHome)
+	if state != StateBroken {
+		t.Fatalf("expected StateBroken for stale hook content, got %q", state)
+	}
+	if len(issues) == 0 {
+		t.Fatal("expected health issues for stale hook content, got none")
+	}
+}
+
 func TestCheckClaudeCode_BrokenMissingHook(t *testing.T) {
 	tmpHome := t.TempDir()
 
@@ -370,6 +391,28 @@ func TestCheckCodex_Healthy(t *testing.T) {
 	}
 }
 
+func TestCheckCodex_BrokenStaleCanonicalContent(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	if err := installCodex(tmpHome); err != nil {
+		t.Fatalf("install failed: %v", err)
+	}
+
+	agentsPath := filepath.Join(tmpHome, ".codex", "AGENTS.md")
+	staleBlock := canonicalManagedBlock(codexBlockBegin, codexBlockEnd, "old bootstrap instructions")
+	if err := os.WriteFile(agentsPath, managedBlockBytes(staleBlock, true), 0644); err != nil {
+		t.Fatalf("write stale AGENTS.md: %v", err)
+	}
+
+	issues, state := CheckCodex(tmpHome)
+	if state != StateBroken {
+		t.Fatalf("expected StateBroken for stale AGENTS block content, got %q", state)
+	}
+	if len(issues) == 0 {
+		t.Fatal("expected health issues for stale AGENTS block content, got none")
+	}
+}
+
 func TestCheckCodex_Broken(t *testing.T) {
 	tmpHome := t.TempDir()
 
@@ -490,6 +533,7 @@ func TestCheckCodex_BrokenOrphanedInstall(t *testing.T) {
 		t.Errorf("did not find managed block issue in: %+v", issues)
 	}
 }
+
 // Topology-aware managed block validation tests for CheckCodex.
 // These verify that health matches the mutation contract: if validateMarkerTopology
 // would reject the file, health must report StateBroken (not StateHealthy).

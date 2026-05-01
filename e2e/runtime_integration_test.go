@@ -1,8 +1,13 @@
 package e2e
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -146,6 +151,88 @@ func TestRuntimeEndToEndPushStoreAndPull(t *testing.T) {
 	if len(unread) != 0 {
 		t.Fatalf("unread count after pull = %d, want 0", len(unread))
 	}
+}
+
+func TestRuntimeRealProcessesReceiveWatchedAgentMessage(t *testing.T) {
+	t.Setenv("GOTMPDIR", "/tmp") // keep socket path under macOS 104-byte limit
+	projectID := "proj-process-e2e"
+	agentName := "agent-process"
+
+	bin := filepath.Join(t.TempDir(), "waggle-e2e")
+	build := exec.Command("go", "build", "-o", bin, "..")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build waggle test binary: %v\n%s", err, out)
+	}
+
+	home, err := os.MkdirTemp("/tmp", "wge2e-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.RemoveAll(home)
+	})
+	t.Setenv("HOME", home)
+	t.Setenv("WAGGLE_PROJECT_ID", projectID)
+
+	env := append(os.Environ(),
+		"HOME="+home,
+		"WAGGLE_PROJECT_ID="+projectID,
+		"GOTMPDIR=/tmp",
+	)
+
+	paths := config.NewPaths(projectID)
+	brokerProc := startProcess(t, env, bin, "start", "--foreground")
+	t.Cleanup(func() {
+		stopProcess(t, brokerProc)
+	})
+
+	waitForProcessSocket(t, brokerProc, paths.Socket)
+
+	runCommand(t, env, bin, "runtime", "watch", agentName, "--project-id", projectID, "--source", "process-e2e")
+
+	runtimeProc := startProcess(t, env, bin, "runtime", "start", "--foreground")
+	t.Cleanup(func() {
+		stopProcess(t, runtimeProc)
+	})
+
+	waitForPresence(t, runtimeProc, paths.Socket, paths.RuntimeState, agentName)
+
+	sender, err := client.Connect(paths.Socket, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sender.Close()
+
+	if resp, err := sender.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "sender-process"}); err != nil {
+		t.Fatal(err)
+	} else if !resp.OK {
+		t.Fatalf("connect sender failed: %s", resp.Error)
+	}
+
+	resp, err := sender.Send(protocol.Request{
+		Cmd:     protocol.CmdSend,
+		Name:    agentName,
+		Message: "hello real processes",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.OK {
+		t.Fatalf("send failed: %s", resp.Error)
+	}
+
+	store, err := rt.NewStore(paths.RuntimeDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
+
+	waitForCondition(t, "real runtime store record", func() bool {
+		rec, err := store.GetRecord(projectID, agentName, 1)
+		return err == nil && !rec.NotifiedAt.IsZero() && rec.Body == "hello real processes"
+	})
 }
 
 func pullUnreadRecords(store *rt.Store, projectID, agentName string) ([]rt.DeliveryRecord, error) {
@@ -388,6 +475,146 @@ func TestRuntimeBrokerRestartReconnect(t *testing.T) {
 	if count := manager.WatchCount(); count != 1 {
 		t.Fatalf("watch count = %d, want 1", count)
 	}
+}
+
+type managedProcess struct {
+	cmd    *exec.Cmd
+	done   chan struct{}
+	output *bytes.Buffer
+	mu     sync.Mutex
+	err    error
+}
+
+func startProcess(t *testing.T, env []string, name string, args ...string) *managedProcess {
+	t.Helper()
+
+	cmd := exec.Command(name, args...)
+	cmd.Env = env
+	output := &bytes.Buffer{}
+	cmd.Stdout = output
+	cmd.Stderr = output
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start %s %v: %v", name, args, err)
+	}
+	proc := &managedProcess{cmd: cmd, done: make(chan struct{}), output: output}
+	go func() {
+		err := cmd.Wait()
+		proc.mu.Lock()
+		proc.err = err
+		proc.mu.Unlock()
+		close(proc.done)
+	}()
+	return proc
+}
+
+func stopProcess(t *testing.T, proc *managedProcess) {
+	t.Helper()
+	if proc == nil || proc.cmd == nil || proc.cmd.Process == nil {
+		return
+	}
+
+	select {
+	case <-proc.done:
+		return
+	default:
+	}
+
+	_ = proc.cmd.Process.Signal(os.Interrupt)
+	select {
+	case <-proc.done:
+	case <-time.After(2 * time.Second):
+		_ = proc.cmd.Process.Kill()
+		<-proc.done
+	}
+}
+
+func (p *managedProcess) waitErr() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.err
+}
+
+func runCommand(t *testing.T, env []string, name string, args ...string) {
+	t.Helper()
+
+	cmd := exec.Command(name, args...)
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("run %s %v: %v\n%s", name, args, err, out)
+	}
+}
+
+func waitForProcessSocket(t *testing.T, proc *managedProcess, socketPath string) {
+	t.Helper()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case <-proc.done:
+			err := proc.waitErr()
+			output := proc.output.String()
+			if strings.Contains(output, "bind: operation not permitted") {
+				t.Skipf("sandbox denied child process Unix socket bind: %v\n%s", err, output)
+			}
+			t.Fatalf("process exited before socket was ready: %v\n%s", err, output)
+		default:
+		}
+
+		c, err := client.Connect(socketPath, 200*time.Millisecond)
+		if err == nil {
+			c.Close()
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("timeout waiting for real broker socket; process output:\n%s", proc.output.String())
+}
+
+func waitForPresence(t *testing.T, proc *managedProcess, socketPath, runtimeStatePath, name string) {
+	t.Helper()
+
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case <-proc.done:
+			err := proc.waitErr()
+			t.Fatalf("process exited before presence was ready: %v\n%s", err, proc.output.String())
+		default:
+		}
+
+		c, err := client.Connect(socketPath, 200*time.Millisecond)
+		if err != nil {
+			time.Sleep(25 * time.Millisecond)
+			continue
+		}
+
+		resp, err := c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "_presence-process-e2e"})
+		if err != nil || !resp.OK {
+			c.Close()
+			time.Sleep(25 * time.Millisecond)
+			continue
+		}
+		resp, err = c.Send(protocol.Request{Cmd: protocol.CmdPresence})
+		c.Close()
+		if err != nil || !resp.OK {
+			time.Sleep(25 * time.Millisecond)
+			continue
+		}
+		var agents []map[string]string
+		if err := json.Unmarshal(resp.Data, &agents); err != nil {
+			time.Sleep(25 * time.Millisecond)
+			continue
+		}
+		for _, agent := range agents {
+			if agent["name"] == name && agent["state"] == "online" {
+				return
+			}
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+
+	state, _ := os.ReadFile(runtimeStatePath)
+	t.Fatalf("timeout waiting for presence for %s\nruntime state:\n%s\nprocess output:\n%s", name, state, proc.output.String())
 }
 
 func waitForCondition(t *testing.T, name string, fn func() bool) {

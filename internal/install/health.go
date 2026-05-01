@@ -1,6 +1,7 @@
 package install
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -17,6 +18,8 @@ const (
 	StateHealthy      AdapterState = "healthy"       // Adapter is installed and all files present
 	StateBroken       AdapterState = "broken"        // Adapter was installed but files are missing or inconsistent
 )
+
+var claudeCodeSkillFiles = []string{"waggle.md", "send.md", "inbox.md", "ack.md", "status.md", "claim.md", "done.md", "presence.md"}
 
 // HealthIssue represents a problem with an adapter installation.
 type HealthIssue struct {
@@ -136,8 +139,7 @@ func CheckClaudeCode(homeDir string) ([]HealthIssue, AdapterState) {
 			Repair:  repairCmd,
 		})
 	} else {
-		expectedSkills := []string{"waggle.md", "send.md", "inbox.md", "ack.md", "status.md", "claim.md", "done.md", "presence.md"}
-		for _, skill := range expectedSkills {
+		for _, skill := range claudeCodeSkillFiles {
 			skillPath := filepath.Join(skillDir, skill)
 			if !fileExists(skillPath) {
 				issues = append(issues, HealthIssue{
@@ -146,6 +148,25 @@ func CheckClaudeCode(homeDir string) ([]HealthIssue, AdapterState) {
 					Repair:  repairCmd,
 				})
 				break // Report only the first missing skill to avoid noise
+			}
+		}
+	}
+
+	if hookExists {
+		appendEmbeddedFileIssue(&issues, hookPath, claudeCodeFiles, "claude-code/hook.sh", "waggle-connect.sh", repairCmd)
+	}
+	if heartbeatExists {
+		appendEmbeddedFileIssue(&issues, heartbeatPath, claudeCodeFiles, "claude-code/heartbeat.sh", "waggle-heartbeat.sh", repairCmd)
+	}
+	pushPath := filepath.Join(claudeDir, "hooks", "waggle-push.js")
+	if fileExists(pushPath) {
+		appendEmbeddedFileIssue(&issues, pushPath, claudeCodeFiles, "claude-code/waggle-push.js", "waggle-push.js", repairCmd)
+	}
+	if skillDirExists {
+		for _, skill := range claudeCodeSkillFiles {
+			skillPath := filepath.Join(skillDir, skill)
+			if fileExists(skillPath) {
+				appendEmbeddedFileIssue(&issues, skillPath, claudeCodeFiles, "claude-code/skills/"+skill, "skill file "+skill, repairCmd)
 			}
 		}
 	}
@@ -223,6 +244,12 @@ func CheckCodex(homeDir string) ([]HealthIssue, AdapterState) {
 			Problem: "SKILL.md missing",
 			Repair:  repairCmd,
 		})
+	} else {
+		appendEmbeddedFileIssue(&issues, skillPath, codexFiles, "codex/skills/waggle-runtime/SKILL.md", "SKILL.md", repairCmd)
+	}
+
+	if hasBeginMarker && hasEndMarker && len(issues) == 0 {
+		appendManagedBlockContentIssue(&issues, agentsPath, string(data), codexBlockBegin, codexBlockEnd, codexFiles, "codex/AGENTS-block.md", repairCmd)
 	}
 
 	if len(issues) > 0 {
@@ -282,6 +309,10 @@ func CheckGemini(homeDir string) ([]HealthIssue, AdapterState) {
 			Problem: "managed block truncated (begin marker without end marker)",
 			Repair:  repairCmd,
 		})
+	}
+
+	if hasBeginMarker && hasEndMarker && len(issues) == 0 {
+		appendManagedBlockContentIssue(&issues, geminiFilePath, content, geminiBlockBegin, geminiBlockEnd, geminiFiles, "gemini/GEMINI-block.md", repairCmd)
 	}
 
 	if len(issues) > 0 {
@@ -397,10 +428,86 @@ func CheckAugment(homeDir string) ([]HealthIssue, AdapterState) {
 		})
 	}
 
+	if hasBeginMarker && hasEndMarker && len(issues) == 0 {
+		appendManagedBlockContentIssue(&issues, skillPath, content, augmentBlockBegin, augmentBlockEnd, augmentFiles, "augment/SKILL-block.md", repairCmd)
+	}
+
 	if len(issues) > 0 {
 		return issues, StateBroken
 	}
 	return nil, StateHealthy
+}
+
+type embeddedFileReader interface {
+	ReadFile(name string) ([]byte, error)
+}
+
+func appendEmbeddedFileIssue(issues *[]HealthIssue, path string, files embeddedFileReader, embeddedPath, assetName, repairCmd string) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		*issues = append(*issues, HealthIssue{
+			Asset:   path,
+			Problem: "unable to read " + assetName + ": " + err.Error(),
+			Repair:  repairCmd,
+		})
+		return
+	}
+
+	canonical, err := files.ReadFile(embeddedPath)
+	if err != nil {
+		*issues = append(*issues, HealthIssue{
+			Asset:   path,
+			Problem: "unable to determine canonical " + assetName + " content: " + err.Error(),
+			Repair:  repairCmd,
+		})
+		return
+	}
+
+	if !bytes.Equal(data, canonical) {
+		*issues = append(*issues, HealthIssue{
+			Asset:   path,
+			Problem: assetName + " content does not match expected",
+			Repair:  repairCmd,
+		})
+	}
+}
+
+func appendManagedBlockContentIssue(issues *[]HealthIssue, path, content, begin, end string, files embeddedFileReader, embeddedPath, repairCmd string) {
+	body, ok := managedBlockBody(content, begin, end)
+	if !ok {
+		return
+	}
+
+	canonical, err := files.ReadFile(embeddedPath)
+	if err != nil {
+		*issues = append(*issues, HealthIssue{
+			Asset:   path,
+			Problem: "unable to determine canonical managed block content: " + err.Error(),
+			Repair:  repairCmd,
+		})
+		return
+	}
+
+	if strings.TrimSpace(body) != strings.TrimSpace(string(canonical)) {
+		*issues = append(*issues, HealthIssue{
+			Asset:   path,
+			Problem: "managed block content does not match expected",
+			Repair:  repairCmd,
+		})
+	}
+}
+
+func managedBlockBody(content, begin, end string) (string, bool) {
+	beginIdx := strings.Index(content, begin)
+	if beginIdx < 0 {
+		return "", false
+	}
+	bodyStart := beginIdx + len(begin)
+	endRel := strings.Index(content[bodyStart:], end)
+	if endRel < 0 {
+		return "", false
+	}
+	return content[bodyStart : bodyStart+endRel], true
 }
 
 // fileExists returns true if a path exists on disk (file or directory).
