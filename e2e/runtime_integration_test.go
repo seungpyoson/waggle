@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -181,6 +183,7 @@ func TestRuntimeRealProcessesReceiveWatchedAgentMessage(t *testing.T) {
 	)
 
 	paths := config.NewPaths(projectID)
+	requireUnixSocketBind(t, filepath.Join(home, "preflight.sock"))
 	brokerProc := startProcess(t, env, bin, "start", "--foreground")
 	t.Cleanup(func() {
 		stopProcess(t, brokerProc)
@@ -553,9 +556,6 @@ func waitForProcessSocket(t *testing.T, proc *managedProcess, socketPath string)
 		case <-proc.done:
 			err := proc.waitErr()
 			output := proc.output.String()
-			if strings.Contains(output, "bind: operation not permitted") {
-				t.Skipf("sandbox denied child process Unix socket bind: %v\n%s", err, output)
-			}
 			t.Fatalf("process exited before socket was ready: %v\n%s", err, output)
 		default:
 		}
@@ -568,6 +568,24 @@ func waitForProcessSocket(t *testing.T, proc *managedProcess, socketPath string)
 		time.Sleep(25 * time.Millisecond)
 	}
 	t.Fatalf("timeout waiting for real broker socket; process output:\n%s", proc.output.String())
+}
+
+func requireUnixSocketBind(t *testing.T, socketPath string) {
+	t.Helper()
+
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		if errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.EACCES) {
+			t.Skipf("environment denies Unix socket bind at %s: %v", socketPath, err)
+		}
+		t.Fatalf("preflight Unix socket bind failed at %s: %v", socketPath, err)
+	}
+	if err := listener.Close(); err != nil {
+		t.Fatalf("close preflight Unix socket: %v", err)
+	}
+	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
+		t.Fatalf("remove preflight Unix socket: %v", err)
+	}
 }
 
 func waitForPresence(t *testing.T, proc *managedProcess, socketPath, runtimeStatePath, name string) {

@@ -218,6 +218,9 @@ func TestCheckAugment_BrokenStaleCanonicalContent(t *testing.T) {
 	if len(issues) == 0 {
 		t.Fatal("expected issues for stale Augment block content, got none")
 	}
+	if !hasHealthIssueContaining(issues, "managed block content does not match expected") {
+		t.Fatalf("expected stale managed block content issue, got %+v", issues)
+	}
 }
 
 func TestCheckAugment_Broken(t *testing.T) {

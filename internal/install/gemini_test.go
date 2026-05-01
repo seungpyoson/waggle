@@ -195,6 +195,9 @@ func TestCheckGemini_BrokenStaleCanonicalContent(t *testing.T) {
 	if len(issues) == 0 {
 		t.Fatal("expected at least one issue")
 	}
+	if !hasHealthIssueContaining(issues, "managed block content does not match expected") {
+		t.Fatalf("expected stale managed block content issue, got %+v", issues)
+	}
 }
 
 func TestCheckGemini_BrokenTruncated(t *testing.T) {

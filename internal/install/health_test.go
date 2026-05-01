@@ -3,6 +3,7 @@ package install
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -114,6 +115,15 @@ func TestCheckClaudeCode_HealthyWithStaleReference(t *testing.T) {
 	}
 }
 
+func hasHealthIssueContaining(issues []HealthIssue, problem string) bool {
+	for _, issue := range issues {
+		if strings.Contains(issue.Problem, problem) {
+			return true
+		}
+	}
+	return false
+}
+
 func TestCheckClaudeCode_Healthy(t *testing.T) {
 	tmpHome := t.TempDir()
 
@@ -150,6 +160,30 @@ func TestCheckClaudeCode_BrokenStaleCanonicalContent(t *testing.T) {
 	}
 	if len(issues) == 0 {
 		t.Fatal("expected health issues for stale hook content, got none")
+	}
+	if !hasHealthIssueContaining(issues, "waggle-connect.sh content does not match expected") {
+		t.Fatalf("expected stale hook content issue, got %+v", issues)
+	}
+}
+
+func TestCheckClaudeCode_BrokenInvalidSettingsJSON(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	if err := installClaudeCode(tmpHome); err != nil {
+		t.Fatalf("install failed: %v", err)
+	}
+
+	settingsPath := filepath.Join(tmpHome, ".claude", "settings.json")
+	if err := os.WriteFile(settingsPath, []byte(`{"hooks":`), 0644); err != nil {
+		t.Fatalf("write invalid settings.json: %v", err)
+	}
+
+	issues, state := CheckClaudeCode(tmpHome)
+	if state != StateBroken {
+		t.Fatalf("expected StateBroken for invalid settings.json, got %q", state)
+	}
+	if !hasHealthIssueContaining(issues, "cannot parse settings.json") {
+		t.Fatalf("expected invalid settings.json issue, got %+v", issues)
 	}
 }
 
@@ -223,6 +257,27 @@ func TestCheckClaudeCode_BrokenMissingHeartbeat(t *testing.T) {
 	}
 	if !foundHeartbeatIssue {
 		t.Errorf("did not find heartbeat issue in: %+v", issues)
+	}
+}
+
+func TestCheckClaudeCode_BrokenMissingPushHook(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	if err := installClaudeCode(tmpHome); err != nil {
+		t.Fatalf("install failed: %v", err)
+	}
+
+	pushPath := filepath.Join(tmpHome, ".claude", "hooks", "waggle-push.js")
+	if err := os.Remove(pushPath); err != nil {
+		t.Fatalf("failed to delete push hook: %v", err)
+	}
+
+	issues, state := CheckClaudeCode(tmpHome)
+	if state != StateBroken {
+		t.Fatalf("expected StateBroken for missing push hook, got %q", state)
+	}
+	if !hasHealthIssueContaining(issues, "waggle-push.js missing") {
+		t.Fatalf("expected missing push hook issue, got %+v", issues)
 	}
 }
 
@@ -410,6 +465,9 @@ func TestCheckCodex_BrokenStaleCanonicalContent(t *testing.T) {
 	}
 	if len(issues) == 0 {
 		t.Fatal("expected health issues for stale AGENTS block content, got none")
+	}
+	if !hasHealthIssueContaining(issues, "managed block content does not match expected") {
+		t.Fatalf("expected stale managed block content issue, got %+v", issues)
 	}
 }
 

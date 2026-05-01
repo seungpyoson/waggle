@@ -100,6 +100,9 @@ func handlePushReserve(s *Session, req protocol.Request) protocol.Response {
 		return protocol.ErrResponse(protocol.ErrInvalidRequest, `push.reserve requires a base agent name, not a "-push" listener name`)
 	}
 
+	// The local Unix socket permission is the auth boundary. Runtime listeners
+	// reserve broker-owned tokens before any base agent session exists, and
+	// ordinary base-agent CLI connects must not take ownership of those tokens.
 	pushToken, err := s.broker.GeneratePushToken(req.Name)
 	if err != nil {
 		return protocol.ErrResponse(protocol.ErrInternalError, err.Error())
