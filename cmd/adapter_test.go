@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -196,5 +197,67 @@ func TestAdapterBootstrapDoesNotLeakFlagStateAcrossExecutions(t *testing.T) {
 	}
 	if secondResp.AgentName != "codex-ttys009" {
 		t.Fatalf("agent_name after prior flagged execution = %q, want codex-ttys009", secondResp.AgentName)
+	}
+}
+
+func TestAdapterBootstrapMarkdownSilentWhenRuntimeStoreUnavailable(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("WAGGLE_PROJECT_ID", "proj-runtime-db-unavailable")
+	t.Setenv("WAGGLE_ADAPTER_SKIP_RUNTIME_START", "1")
+	blockRuntimeDirForTest(t, home)
+
+	stdout, stderr := executeRootCommandForTest(t, "adapter", "bootstrap", "codex", "--format", "markdown")
+	if stdout != "" {
+		t.Fatalf("adapter bootstrap stdout = %q, want empty for degraded markdown startup", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("adapter bootstrap stderr = %q, want empty for degraded markdown startup", stderr)
+	}
+}
+
+func TestAdapterBootstrapJSONReportsSkippedWhenRuntimeStoreUnavailable(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("WAGGLE_PROJECT_ID", "proj-runtime-db-unavailable")
+	t.Setenv("WAGGLE_ADAPTER_SKIP_RUNTIME_START", "1")
+	blockRuntimeDirForTest(t, home)
+
+	stdout, stderr := executeRootCommandForTest(t, "adapter", "bootstrap", "codex")
+	if stderr != "" {
+		t.Fatalf("adapter bootstrap stderr = %q, want empty", stderr)
+	}
+
+	var resp struct {
+		OK         bool   `json:"ok"`
+		Skipped    bool   `json:"skipped"`
+		SkipReason string `json:"skip_reason"`
+		Tool       string `json:"tool"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &resp); err != nil {
+		t.Fatalf("unmarshal skipped bootstrap response: %v", err)
+	}
+	if resp.OK {
+		t.Fatalf("bootstrap response OK = true, want false for skipped runtime store")
+	}
+	if !resp.Skipped {
+		t.Fatalf("bootstrap response skipped = false, want true")
+	}
+	if !strings.Contains(resp.SkipReason, "runtime store unavailable") {
+		t.Fatalf("skip_reason = %q, want runtime store unavailable", resp.SkipReason)
+	}
+	if resp.Tool != "codex" {
+		t.Fatalf("tool = %q, want codex", resp.Tool)
+	}
+}
+
+func blockRuntimeDirForTest(t *testing.T, home string) {
+	t.Helper()
+	waggleDir := filepath.Join(home, ".waggle")
+	if err := os.MkdirAll(waggleDir, 0o755); err != nil {
+		t.Fatalf("create .waggle: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(waggleDir, "runtime"), []byte("not a directory"), 0o644); err != nil {
+		t.Fatalf("create runtime path blocker: %v", err)
 	}
 }

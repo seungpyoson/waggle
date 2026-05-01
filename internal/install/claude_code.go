@@ -59,6 +59,9 @@ func UninstallClaudeCode() error {
 // This allows testing with t.TempDir() instead of real ~/.claude/
 func installClaudeCode(homeDir string) error {
 	claudeDir := filepath.Join(homeDir, ".claude")
+	if _, err := readSettingsJSON(filepath.Join(claudeDir, "settings.json")); err != nil {
+		return err
+	}
 
 	// 1. Copy hook files (from single source of truth: hookFiles)
 	hookDir := filepath.Join(claudeDir, "hooks")
@@ -111,6 +114,9 @@ func installClaudeCode(homeDir string) error {
 // uninstallClaudeCode is the internal implementation that takes a home directory.
 func uninstallClaudeCode(homeDir string) error {
 	claudeDir := filepath.Join(homeDir, ".claude")
+	if _, err := readSettingsJSON(filepath.Join(claudeDir, "settings.json")); err != nil {
+		return err
+	}
 
 	// Remove hook files (from single source of truth: hookFiles)
 	for _, hf := range hookFiles {
