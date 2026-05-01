@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -97,6 +98,7 @@ func TestBrokerListenerListenReceivesPushWithoutBaseConnection(t *testing.T) {
 	if !resp.OK {
 		t.Fatalf("sender connect failed: %s", resp.Error)
 	}
+	waitForRuntimePresence(t, sender, "alice")
 
 	sendResp, err := sender.Send(protocol.Request{
 		Cmd:     protocol.CmdSend,
@@ -179,4 +181,29 @@ func TestBrokerListenerCatchUpReadsInboxWithoutBaseConnection(t *testing.T) {
 	if got[0].Body != "catch-up delivery" {
 		t.Fatalf("delivery.Body = %q, want %q", got[0].Body, "catch-up delivery")
 	}
+}
+
+func waitForRuntimePresence(t *testing.T, c *client.Client, name string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err := c.Send(protocol.Request{Cmd: protocol.CmdPresence})
+		if err != nil {
+			t.Fatalf("presence: %v", err)
+		}
+		if !resp.OK {
+			t.Fatalf("presence failed: %s", resp.Error)
+		}
+		var agents []map[string]string
+		if err := json.Unmarshal(resp.Data, &agents); err != nil {
+			t.Fatalf("parse presence: %v", err)
+		}
+		for _, agent := range agents {
+			if agent["name"] == name {
+				return
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for runtime listener %q in presence", name)
 }

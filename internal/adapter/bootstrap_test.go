@@ -178,6 +178,38 @@ func TestAdapterBootstrap_SkipsGracefullyWithoutProjectContext(t *testing.T) {
 	}
 }
 
+func TestAdapterBootstrap_SkipsGracefullyWhenRuntimeStoreUnavailable(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("WAGGLE_PROJECT_ID", "proj-runtime-db-unavailable")
+	t.Setenv("WAGGLE_ADAPTER_SKIP_RUNTIME_START", "1")
+
+	waggleDir := filepath.Join(home, ".waggle")
+	if err := os.MkdirAll(waggleDir, 0o755); err != nil {
+		t.Fatalf("create .waggle: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(waggleDir, "runtime"), []byte("not a directory"), 0o644); err != nil {
+		t.Fatalf("create runtime path blocker: %v", err)
+	}
+
+	result, err := Bootstrap(BootstrapInput{
+		Tool:      "codex",
+		AgentName: "codex-test",
+	})
+	if err != nil {
+		t.Fatalf("Bootstrap should not return error when runtime store is unavailable, got: %v", err)
+	}
+	if !result.Skipped {
+		t.Fatalf("Bootstrap should set Skipped=true when runtime store is unavailable")
+	}
+	if result.SkipReason == "" || !strings.Contains(result.SkipReason, "runtime store unavailable") {
+		t.Fatalf("Bootstrap skip reason = %q, want runtime store unavailable", result.SkipReason)
+	}
+	if result.RuntimeError == "" {
+		t.Fatalf("Bootstrap should expose runtime error for diagnostics")
+	}
+}
+
 func TestWriteSessionMapping(t *testing.T) {
 	dir := t.TempDir()
 	nonce := "12345-1711843200000000000"

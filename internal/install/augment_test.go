@@ -198,6 +198,31 @@ func TestCheckAugment_Healthy(t *testing.T) {
 	}
 }
 
+func TestCheckAugment_BrokenStaleCanonicalContent(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	if err := installAugment(tmpHome); err != nil {
+		t.Fatalf("install failed: %v", err)
+	}
+
+	skillPath := filepath.Join(tmpHome, ".augment", "skills", "waggle.md")
+	staleBlock := canonicalManagedBlock(augmentBlockBegin, augmentBlockEnd, "old bootstrap instructions")
+	if err := os.WriteFile(skillPath, managedBlockBytes(staleBlock, true), 0644); err != nil {
+		t.Fatalf("write stale Augment skill: %v", err)
+	}
+
+	issues, state := CheckAugment(tmpHome)
+	if state != StateBroken {
+		t.Fatalf("expected StateBroken for stale Augment block content, got %q", state)
+	}
+	if len(issues) == 0 {
+		t.Fatal("expected issues for stale Augment block content, got none")
+	}
+	if !hasHealthIssueContaining(issues, "managed block content does not match expected") {
+		t.Fatalf("expected stale managed block content issue, got %+v", issues)
+	}
+}
+
 func TestCheckAugment_Broken(t *testing.T) {
 	tmpHome := t.TempDir()
 	augmentDir := filepath.Join(tmpHome, ".augment", "skills")

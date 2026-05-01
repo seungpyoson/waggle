@@ -7,7 +7,6 @@ import (
 	"log"
 	"time"
 
-	"github.com/seungpyoson/waggle/internal/broker"
 	"github.com/seungpyoson/waggle/internal/client"
 	"github.com/seungpyoson/waggle/internal/config"
 	"github.com/seungpyoson/waggle/internal/protocol"
@@ -217,12 +216,34 @@ func sendDisconnect(c *client.Client, context string) {
 }
 
 func pushTokenForAgent(socketPath, agent string) (string, error) {
-	b := broker.LookupBySocket(socketPath)
-	if b == nil {
-		return "", fmt.Errorf("no in-process broker available for %s", agent)
+	c, err := client.Connect(socketPath, config.Defaults.ConnectTimeout)
+	if err != nil {
+		return "", err
 	}
-	if token := b.GetPushToken(agent); token != "" {
-		return token, nil
+	defer c.Close()
+
+	if err := c.SetDeadline(config.Defaults.ConnectTimeout); err != nil {
+		return "", fmt.Errorf("set push reserve deadline: %w", err)
 	}
-	return b.GeneratePushToken(agent)
+	resp, err := c.Send(protocol.Request{
+		Cmd:  protocol.CmdPushReserve,
+		Name: agent,
+	})
+	if err != nil {
+		return "", err
+	}
+	if !resp.OK {
+		return "", fmt.Errorf("%s: %s", resp.Code, resp.Error)
+	}
+
+	var data struct {
+		PushToken string `json:"push_token"`
+	}
+	if err := json.Unmarshal(resp.Data, &data); err != nil {
+		return "", fmt.Errorf("parse push reserve response: %w", err)
+	}
+	if data.PushToken == "" {
+		return "", fmt.Errorf("push reserve response missing token")
+	}
+	return data.PushToken, nil
 }

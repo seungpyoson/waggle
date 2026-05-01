@@ -757,26 +757,75 @@ func TestInstall_CorruptedSettingsJSON(t *testing.T) {
 	tmpHome := t.TempDir()
 	claudeDir := filepath.Join(tmpHome, ".claude")
 	os.MkdirAll(claudeDir, 0755)
-	os.WriteFile(filepath.Join(claudeDir, "settings.json"), []byte("not json{{"), 0644)
+	settingsPath := filepath.Join(claudeDir, "settings.json")
+	os.WriteFile(settingsPath, []byte("not json{{"), 0644)
 
 	err := installClaudeCode(tmpHome)
-	if err != nil {
-		t.Fatalf("install failed with corrupted settings.json: %v", err)
+	if err == nil {
+		t.Fatal("expected install to fail with corrupted settings.json")
+	}
+	if !strings.Contains(err.Error(), "parse settings.json") {
+		t.Fatalf("expected parse error, got: %v", err)
 	}
 
-	// Verify settings.json is now valid with waggle hook
-	data, _ := os.ReadFile(filepath.Join(claudeDir, "settings.json"))
-	var settings map[string]interface{}
-	if err := json.Unmarshal(data, &settings); err != nil {
-		t.Fatalf("settings.json is not valid JSON after install: %v", err)
+	data, readErr := os.ReadFile(settingsPath)
+	if readErr != nil {
+		t.Fatalf("failed to read settings.json after failed install: %v", readErr)
 	}
-	hooks, ok := settings["hooks"].(map[string]interface{})
-	if !ok {
-		t.Fatal("no hooks section in settings.json")
+	if string(data) != "not json{{" {
+		t.Fatalf("corrupted settings.json should be preserved, got %q", string(data))
 	}
-	_, ok = hooks["SessionStart"].([]interface{})
-	if !ok {
-		t.Fatal("no SessionStart in hooks")
+
+	for _, path := range []string{
+		filepath.Join(tmpHome, ".claude", "hooks", "waggle-connect.sh"),
+		filepath.Join(tmpHome, ".claude", "hooks", "waggle-heartbeat.sh"),
+		filepath.Join(tmpHome, ".claude", "hooks", "waggle-push.js"),
+		filepath.Join(tmpHome, ".claude", "skills", "waggle"),
+		filepath.Join(tmpHome, ".waggle", "shell-hook.sh"),
+	} {
+		if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+			t.Fatalf("install should not leave partial artifact %s after invalid settings.json, stat err: %v", path, statErr)
+		}
+	}
+}
+
+func TestUninstall_CorruptedSettingsJSONPreservesArtifacts(t *testing.T) {
+	tmpHome := t.TempDir()
+	if err := installClaudeCode(tmpHome); err != nil {
+		t.Fatalf("install failed: %v", err)
+	}
+
+	claudeDir := filepath.Join(tmpHome, ".claude")
+	settingsPath := filepath.Join(claudeDir, "settings.json")
+	if err := os.WriteFile(settingsPath, []byte("not json{{"), 0644); err != nil {
+		t.Fatalf("write corrupted settings.json: %v", err)
+	}
+
+	err := uninstallClaudeCode(tmpHome)
+	if err == nil {
+		t.Fatal("expected uninstall to fail with corrupted settings.json")
+	}
+	if !strings.Contains(err.Error(), "parse settings.json") {
+		t.Fatalf("expected parse error, got: %v", err)
+	}
+
+	data, readErr := os.ReadFile(settingsPath)
+	if readErr != nil {
+		t.Fatalf("failed to read settings.json after failed uninstall: %v", readErr)
+	}
+	if string(data) != "not json{{" {
+		t.Fatalf("corrupted settings.json should be preserved, got %q", string(data))
+	}
+
+	for _, path := range []string{
+		filepath.Join(tmpHome, ".claude", "hooks", "waggle-connect.sh"),
+		filepath.Join(tmpHome, ".claude", "hooks", "waggle-heartbeat.sh"),
+		filepath.Join(tmpHome, ".claude", "hooks", "waggle-push.js"),
+		filepath.Join(tmpHome, ".claude", "skills", "waggle"),
+	} {
+		if _, statErr := os.Stat(path); statErr != nil {
+			t.Fatalf("uninstall should preserve artifact %s after invalid settings.json: %v", path, statErr)
+		}
 	}
 }
 

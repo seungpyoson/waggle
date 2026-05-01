@@ -3173,6 +3173,133 @@ func TestBroker_PushListenerRejectedWhenBaseNeverConnected(t *testing.T) {
 	}
 }
 
+func TestBroker_PushReserveAllowsListenerWithoutBaseSession(t *testing.T) {
+	sockPath, _, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	reserver := connectClient(t, sockPath)
+	defer reserver.Close()
+	resp, err := reserver.Send(protocol.Request{
+		Cmd:  protocol.CmdPushReserve,
+		Name: "alice",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.OK {
+		t.Fatalf("push reserve failed: %s: %s", resp.Code, resp.Error)
+	}
+	pushToken := pushTokenFromResponse(t, resp)
+
+	listener := connectClient(t, sockPath)
+	defer listener.Close()
+	resp, err = listener.Send(protocol.Request{
+		Cmd:          protocol.CmdConnect,
+		Name:         "alice-push",
+		PushListener: true,
+		PushToken:    pushToken,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.OK {
+		t.Fatalf("push listener connect failed with reserved token: %s: %s", resp.Code, resp.Error)
+	}
+}
+
+func TestBroker_PushReserveListenerSurvivesBaseAgentDisconnect(t *testing.T) {
+	sockPath, _, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	reserver := connectClient(t, sockPath)
+	resp, err := reserver.Send(protocol.Request{
+		Cmd:  protocol.CmdPushReserve,
+		Name: "alice",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.OK {
+		t.Fatalf("push reserve failed: %s: %s", resp.Code, resp.Error)
+	}
+	reservedToken := pushTokenFromResponse(t, resp)
+	reserver.Close()
+
+	listener := connectClient(t, sockPath)
+	resp, err = listener.Send(protocol.Request{
+		Cmd:          protocol.CmdConnect,
+		Name:         "alice-push",
+		PushListener: true,
+		PushToken:    reservedToken,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.OK {
+		t.Fatalf("push listener connect failed with reserved token: %s: %s", resp.Code, resp.Error)
+	}
+
+	base := connectClient(t, sockPath)
+	resp, err = base.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.OK {
+		t.Fatalf("base connect failed: %s: %s", resp.Code, resp.Error)
+	}
+	base.Close()
+
+	sender := connectClient(t, sockPath)
+	defer sender.Close()
+	resp, err = sender.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "sender"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.OK {
+		t.Fatalf("sender connect failed: %s: %s", resp.Code, resp.Error)
+	}
+	resp, err = sender.Send(protocol.Request{
+		Cmd:     protocol.CmdSend,
+		Name:    "alice",
+		Message: "hello after base disconnect",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.OK {
+		t.Fatalf("send failed: %s: %s", resp.Code, resp.Error)
+	}
+
+	msg, err := listener.Receive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !msg.OK {
+		t.Fatalf("push receive failed: %s", msg.Error)
+	}
+}
+
+func TestBroker_PushReserveRejectsPushListenerName(t *testing.T) {
+	sockPath, _, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	c := connectClient(t, sockPath)
+	defer c.Close()
+	resp, err := c.Send(protocol.Request{
+		Cmd:  protocol.CmdPushReserve,
+		Name: "alice-push",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.OK {
+		t.Fatal("expected push.reserve to reject -push listener name")
+	}
+	if resp.Code != protocol.ErrInvalidRequest {
+		t.Fatalf("response code = %q, want %q", resp.Code, protocol.ErrInvalidRequest)
+	}
+}
+
 func TestBroker_PushListenerRejectsWrongToken(t *testing.T) {
 	sockPath, b, cleanup := startTestBroker(t)
 	defer cleanup()

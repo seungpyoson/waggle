@@ -19,6 +19,7 @@ const wagglePushCommand = "WAGGLE_PPID=$PPID node $HOME/.claude/hooks/waggle-pus
 
 // The canonical Claude Code integration assets live in integrations/claude-code/.
 // This mirrored copy exists in-package so go:embed can bundle them for install.
+//
 //go:embed all:claude-code
 var claudeCodeFiles embed.FS
 
@@ -27,7 +28,7 @@ var claudeCodeFiles embed.FS
 // Used by both install and uninstall to prevent orphaned files.
 var hookFiles = []struct {
 	embedded, installed string
-	perm               os.FileMode
+	perm                os.FileMode
 }{
 	{"claude-code/hook.sh", "waggle-connect.sh", 0o755},
 	{"claude-code/heartbeat.sh", "waggle-heartbeat.sh", 0o755},
@@ -58,6 +59,9 @@ func UninstallClaudeCode() error {
 // This allows testing with t.TempDir() instead of real ~/.claude/
 func installClaudeCode(homeDir string) error {
 	claudeDir := filepath.Join(homeDir, ".claude")
+	if _, err := readSettingsJSON(filepath.Join(claudeDir, "settings.json")); err != nil {
+		return err
+	}
 
 	// 1. Copy hook files (from single source of truth: hookFiles)
 	hookDir := filepath.Join(claudeDir, "hooks")
@@ -110,6 +114,9 @@ func installClaudeCode(homeDir string) error {
 // uninstallClaudeCode is the internal implementation that takes a home directory.
 func uninstallClaudeCode(homeDir string) error {
 	claudeDir := filepath.Join(homeDir, ".claude")
+	if _, err := readSettingsJSON(filepath.Join(claudeDir, "settings.json")); err != nil {
+		return err
+	}
 
 	// Remove hook files (from single source of truth: hookFiles)
 	for _, hf := range hookFiles {
@@ -136,15 +143,24 @@ func uninstallClaudeCode(homeDir string) error {
 }
 
 // readSettingsJSON reads and parses settings.json.
-// Always returns a usable map — missing, empty, or corrupted files
-// produce an empty map. The file is input, not a precondition.
+// Missing or empty files are treated as empty settings. Invalid JSON returns
+// an error so callers do not silently discard unrelated user settings.
 func readSettingsJSON(path string) (map[string]interface{}, error) {
 	data, err := os.ReadFile(path)
-	if err != nil || len(data) == 0 {
+	if err != nil {
+		if os.IsNotExist(err) {
+			return make(map[string]interface{}), nil
+		}
+		return nil, fmt.Errorf("read settings.json: %w", err)
+	}
+	if len(data) == 0 {
 		return make(map[string]interface{}), nil
 	}
 	var settings map[string]interface{}
 	if err := json.Unmarshal(data, &settings); err != nil {
+		return nil, fmt.Errorf("parse settings.json: %w", err)
+	}
+	if settings == nil {
 		return make(map[string]interface{}), nil
 	}
 	return settings, nil
@@ -157,7 +173,10 @@ func registerSessionStartHook(claudeDir string) error {
 	root := filepath.Dir(claudeDir)
 
 	// Read existing settings
-	settings, _ := readSettingsJSON(settingsPath)
+	settings, err := readSettingsJSON(settingsPath)
+	if err != nil {
+		return err
+	}
 
 	// Get or create hooks section
 	hooks, _ := settings["hooks"].(map[string]interface{})
@@ -212,7 +231,10 @@ func deregisterSessionStartHook(claudeDir string) error {
 	settingsPath := filepath.Join(claudeDir, "settings.json")
 	root := filepath.Dir(claudeDir)
 
-	settings, _ := readSettingsJSON(settingsPath)
+	settings, err := readSettingsJSON(settingsPath)
+	if err != nil {
+		return err
+	}
 
 	hooks, _ := settings["hooks"].(map[string]interface{})
 	if hooks == nil {
@@ -261,7 +283,10 @@ func deregisterSessionStartHook(claudeDir string) error {
 func registerPreToolUseHook(claudeDir string) error {
 	settingsPath := filepath.Join(claudeDir, "settings.json")
 	root := filepath.Dir(claudeDir)
-	settings, _ := readSettingsJSON(settingsPath)
+	settings, err := readSettingsJSON(settingsPath)
+	if err != nil {
+		return err
+	}
 
 	hooks, _ := settings["hooks"].(map[string]interface{})
 	if hooks == nil {
@@ -302,7 +327,10 @@ func registerPreToolUseHook(claudeDir string) error {
 func deregisterPreToolUseHook(claudeDir string) error {
 	settingsPath := filepath.Join(claudeDir, "settings.json")
 	root := filepath.Dir(claudeDir)
-	settings, _ := readSettingsJSON(settingsPath)
+	settings, err := readSettingsJSON(settingsPath)
+	if err != nil {
+		return err
+	}
 
 	hooks, _ := settings["hooks"].(map[string]interface{})
 	if hooks == nil {

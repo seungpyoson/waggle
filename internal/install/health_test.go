@@ -3,6 +3,7 @@ package install
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -114,6 +115,15 @@ func TestCheckClaudeCode_HealthyWithStaleReference(t *testing.T) {
 	}
 }
 
+func hasHealthIssueContaining(issues []HealthIssue, problem string) bool {
+	for _, issue := range issues {
+		if strings.Contains(issue.Problem, problem) {
+			return true
+		}
+	}
+	return false
+}
+
 func TestCheckClaudeCode_Healthy(t *testing.T) {
 	tmpHome := t.TempDir()
 
@@ -129,6 +139,51 @@ func TestCheckClaudeCode_Healthy(t *testing.T) {
 	}
 	if len(issues) != 0 {
 		t.Errorf("expected 0 issues, got %d: %+v", len(issues), issues)
+	}
+}
+
+func TestCheckClaudeCode_BrokenStaleCanonicalContent(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	if err := installClaudeCode(tmpHome); err != nil {
+		t.Fatalf("install failed: %v", err)
+	}
+
+	hookPath := filepath.Join(tmpHome, ".claude", "hooks", "waggle-connect.sh")
+	if err := os.WriteFile(hookPath, []byte("#!/bin/sh\nwaggle runtime start\n"), 0755); err != nil {
+		t.Fatalf("write stale hook: %v", err)
+	}
+
+	issues, state := CheckClaudeCode(tmpHome)
+	if state != StateBroken {
+		t.Fatalf("expected StateBroken for stale hook content, got %q", state)
+	}
+	if len(issues) == 0 {
+		t.Fatal("expected health issues for stale hook content, got none")
+	}
+	if !hasHealthIssueContaining(issues, "waggle-connect.sh content does not match expected") {
+		t.Fatalf("expected stale hook content issue, got %+v", issues)
+	}
+}
+
+func TestCheckClaudeCode_BrokenInvalidSettingsJSON(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	if err := installClaudeCode(tmpHome); err != nil {
+		t.Fatalf("install failed: %v", err)
+	}
+
+	settingsPath := filepath.Join(tmpHome, ".claude", "settings.json")
+	if err := os.WriteFile(settingsPath, []byte(`{"hooks":`), 0644); err != nil {
+		t.Fatalf("write invalid settings.json: %v", err)
+	}
+
+	issues, state := CheckClaudeCode(tmpHome)
+	if state != StateBroken {
+		t.Fatalf("expected StateBroken for invalid settings.json, got %q", state)
+	}
+	if !hasHealthIssueContaining(issues, "cannot parse settings.json") {
+		t.Fatalf("expected invalid settings.json issue, got %+v", issues)
 	}
 }
 
@@ -202,6 +257,27 @@ func TestCheckClaudeCode_BrokenMissingHeartbeat(t *testing.T) {
 	}
 	if !foundHeartbeatIssue {
 		t.Errorf("did not find heartbeat issue in: %+v", issues)
+	}
+}
+
+func TestCheckClaudeCode_BrokenMissingPushHook(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	if err := installClaudeCode(tmpHome); err != nil {
+		t.Fatalf("install failed: %v", err)
+	}
+
+	pushPath := filepath.Join(tmpHome, ".claude", "hooks", "waggle-push.js")
+	if err := os.Remove(pushPath); err != nil {
+		t.Fatalf("failed to delete push hook: %v", err)
+	}
+
+	issues, state := CheckClaudeCode(tmpHome)
+	if state != StateBroken {
+		t.Fatalf("expected StateBroken for missing push hook, got %q", state)
+	}
+	if !hasHealthIssueContaining(issues, "waggle-push.js missing") {
+		t.Fatalf("expected missing push hook issue, got %+v", issues)
 	}
 }
 
@@ -370,6 +446,31 @@ func TestCheckCodex_Healthy(t *testing.T) {
 	}
 }
 
+func TestCheckCodex_BrokenStaleCanonicalContent(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	if err := installCodex(tmpHome); err != nil {
+		t.Fatalf("install failed: %v", err)
+	}
+
+	agentsPath := filepath.Join(tmpHome, ".codex", "AGENTS.md")
+	staleBlock := canonicalManagedBlock(codexBlockBegin, codexBlockEnd, "old bootstrap instructions")
+	if err := os.WriteFile(agentsPath, managedBlockBytes(staleBlock, true), 0644); err != nil {
+		t.Fatalf("write stale AGENTS.md: %v", err)
+	}
+
+	issues, state := CheckCodex(tmpHome)
+	if state != StateBroken {
+		t.Fatalf("expected StateBroken for stale AGENTS block content, got %q", state)
+	}
+	if len(issues) == 0 {
+		t.Fatal("expected health issues for stale AGENTS block content, got none")
+	}
+	if !hasHealthIssueContaining(issues, "managed block content does not match expected") {
+		t.Fatalf("expected stale managed block content issue, got %+v", issues)
+	}
+}
+
 func TestCheckCodex_Broken(t *testing.T) {
 	tmpHome := t.TempDir()
 
@@ -490,6 +591,7 @@ func TestCheckCodex_BrokenOrphanedInstall(t *testing.T) {
 		t.Errorf("did not find managed block issue in: %+v", issues)
 	}
 }
+
 // Topology-aware managed block validation tests for CheckCodex.
 // These verify that health matches the mutation contract: if validateMarkerTopology
 // would reject the file, health must report StateBroken (not StateHealthy).

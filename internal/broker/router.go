@@ -20,9 +20,10 @@ import (
 // Commands that work without a session handshake.
 // Everything else requires connect first.
 var noSessionRequired = map[string]bool{
-	protocol.CmdConnect: true,
-	protocol.CmdStatus:  true,
-	protocol.CmdStop:    true,
+	protocol.CmdConnect:     true,
+	protocol.CmdStatus:      true,
+	protocol.CmdStop:        true,
+	protocol.CmdPushReserve: true,
 }
 
 // route dispatches a request to the appropriate handler.
@@ -77,6 +78,8 @@ func route(s *Session, req protocol.Request) protocol.Response {
 		return handleAck(s, req)
 	case protocol.CmdPresence:
 		return handlePresence(s)
+	case protocol.CmdPushReserve:
+		return handlePushReserve(s, req)
 	case protocol.CmdSpawnRegister:
 		return handleSpawnRegister(s, req)
 	case protocol.CmdSpawnUpdatePID:
@@ -84,6 +87,31 @@ func route(s *Session, req protocol.Request) protocol.Response {
 	default:
 		return protocol.ErrResponse(protocol.ErrInvalidRequest, "unknown command")
 	}
+}
+
+func handlePushReserve(s *Session, req protocol.Request) protocol.Response {
+	if req.Name == "" {
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, "name required")
+	}
+	if len(req.Name) > config.Defaults.MaxFieldLength {
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, fmt.Sprintf("name too long (max %d chars)", config.Defaults.MaxFieldLength))
+	}
+	if strings.HasSuffix(req.Name, "-push") {
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, `push.reserve requires a base agent name, not a "-push" listener name`)
+	}
+
+	// The local Unix socket permission is the auth boundary. Runtime listeners
+	// reserve broker-owned tokens before any base agent session exists, and
+	// ordinary base-agent CLI connects must not take ownership of those tokens.
+	pushToken, err := s.broker.GeneratePushToken(req.Name)
+	if err != nil {
+		return protocol.ErrResponse(protocol.ErrInternalError, err.Error())
+	}
+	data, err := json.Marshal(connectResponseData{PushToken: pushToken})
+	if err != nil {
+		return protocol.ErrResponse(protocol.ErrInternalError, err.Error())
+	}
+	return protocol.OKResponse(data)
 }
 
 type connectResponseData struct {

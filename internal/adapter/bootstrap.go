@@ -57,6 +57,13 @@ func Bootstrap(input BootstrapInput) (BootstrapResult, error) {
 		source = tool + "-adapter"
 	}
 
+	result := BootstrapResult{
+		Tool:      tool,
+		ProjectID: projectID,
+		AgentName: agentName,
+		Source:    source,
+	}
+
 	runtimeRunning := rt.IsRunning(runtimePaths)
 	runtimeErr := ""
 	if !runtimeRunning {
@@ -66,10 +73,12 @@ func Bootstrap(input BootstrapInput) (BootstrapResult, error) {
 			runtimeRunning = rt.IsRunning(runtimePaths)
 		}
 	}
+	result.RuntimeRunning = runtimeRunning
+	result.RuntimeError = runtimeErr
 
 	store, err := rt.OpenStore(runtimePaths)
 	if err != nil {
-		return BootstrapResult{}, err
+		return skipRuntimeStore(result, err), nil
 	}
 	defer store.Close()
 
@@ -78,7 +87,7 @@ func Bootstrap(input BootstrapInput) (BootstrapResult, error) {
 		AgentName: agentName,
 		Source:    source,
 	}); err != nil {
-		return BootstrapResult{}, err
+		return skipRuntimeStore(result, err), nil
 	}
 
 	ppid := resolveAgentPPID()
@@ -91,7 +100,7 @@ func Bootstrap(input BootstrapInput) (BootstrapResult, error) {
 
 	records, err := store.Unread(projectID, agentName)
 	if err != nil {
-		return BootstrapResult{}, err
+		return skipRuntimeStore(result, err), nil
 	}
 
 	messageIDs := make([]int64, 0, len(records))
@@ -99,18 +108,20 @@ func Bootstrap(input BootstrapInput) (BootstrapResult, error) {
 		messageIDs = append(messageIDs, rec.MessageID)
 	}
 	if err := store.MarkSurfacedAndDismissBatch(projectID, agentName, messageIDs); err != nil {
-		return BootstrapResult{}, fmt.Errorf("mark dismissed: %w", err)
+		return skipRuntimeStore(result, fmt.Errorf("mark dismissed: %w", err)), nil
 	}
 
-	return BootstrapResult{
-		Tool:           tool,
-		ProjectID:      projectID,
-		AgentName:      agentName,
-		Source:         source,
-		RuntimeRunning: runtimeRunning,
-		RuntimeError:   runtimeErr,
-		Records:        records,
-	}, nil
+	result.Records = records
+	return result, nil
+}
+
+func skipRuntimeStore(result BootstrapResult, err error) BootstrapResult {
+	reason := fmt.Sprintf("runtime store unavailable: %v", err)
+	result.Skipped = true
+	result.SkipReason = reason
+	result.RuntimeError = reason
+	result.Records = nil
+	return result
 }
 
 func ResolveAgentName(tool, explicit, tty string, ppid, pid int) string {

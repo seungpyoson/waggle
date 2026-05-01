@@ -2,10 +2,10 @@ package protocol
 
 // Command constants — the `cmd` field values in Request
 const (
-	CmdConnect  = "connect"
+	CmdConnect    = "connect"
 	CmdDisconnect = "disconnect"
-	CmdPublish  = "publish"
-	CmdSubscribe = "subscribe"
+	CmdPublish    = "publish"
+	CmdSubscribe  = "subscribe"
 
 	CmdTaskCreate    = "task.create"
 	CmdTaskList      = "task.list"
@@ -28,24 +28,25 @@ const (
 	CmdAck      = "ack"
 	CmdPresence = "presence"
 
+	CmdPushReserve = "push.reserve"
+
 	CmdSpawnRegister  = "spawn.register"
 	CmdSpawnUpdatePID = "spawn.update-pid"
 )
 
 // Error code constants — the `code` field values in Response
 const (
-	ErrBrokerNotRunning         = "BROKER_NOT_RUNNING"
-	ErrAlreadyConnected         = "ALREADY_CONNECTED"
-	ErrNotConnected             = "NOT_CONNECTED"
-	ErrResourceLocked           = "RESOURCE_LOCKED"
-	ErrTaskNotFound             = "TASK_NOT_FOUND"
-	ErrInvalidToken             = "INVALID_TOKEN"
-	ErrNoEligibleTask           = "NO_ELIGIBLE_TASK"
-	ErrInvalidRequest           = "INVALID_REQUEST"
-	ErrDuplicateIdempotencyKey  = "DUPLICATE_IDEMPOTENCY_KEY"
-	ErrInternalError            = "INTERNAL_ERROR"
-	ErrMessageNotFound          = "MESSAGE_NOT_FOUND"
-	ErrForbidden                = "FORBIDDEN"
-	ErrTimeout                  = "TIMEOUT"
+	ErrBrokerNotRunning        = "BROKER_NOT_RUNNING"
+	ErrAlreadyConnected        = "ALREADY_CONNECTED"
+	ErrNotConnected            = "NOT_CONNECTED"
+	ErrResourceLocked          = "RESOURCE_LOCKED"
+	ErrTaskNotFound            = "TASK_NOT_FOUND"
+	ErrInvalidToken            = "INVALID_TOKEN"
+	ErrNoEligibleTask          = "NO_ELIGIBLE_TASK"
+	ErrInvalidRequest          = "INVALID_REQUEST"
+	ErrDuplicateIdempotencyKey = "DUPLICATE_IDEMPOTENCY_KEY"
+	ErrInternalError           = "INTERNAL_ERROR"
+	ErrMessageNotFound         = "MESSAGE_NOT_FOUND"
+	ErrForbidden               = "FORBIDDEN"
+	ErrTimeout                 = "TIMEOUT"
 )
-

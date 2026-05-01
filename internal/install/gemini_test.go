@@ -175,6 +175,31 @@ func TestCheckGemini_Healthy(t *testing.T) {
 	}
 }
 
+func TestCheckGemini_BrokenStaleCanonicalContent(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	if err := installGemini(tmpHome); err != nil {
+		t.Fatalf("install failed: %v", err)
+	}
+
+	path := filepath.Join(tmpHome, ".gemini", "GEMINI.md")
+	staleBlock := canonicalManagedBlock(geminiBlockBegin, geminiBlockEnd, "old bootstrap instructions")
+	if err := os.WriteFile(path, managedBlockBytes(staleBlock, true), 0644); err != nil {
+		t.Fatalf("write stale GEMINI.md: %v", err)
+	}
+
+	issues, state := CheckGemini(tmpHome)
+	if state != StateBroken {
+		t.Fatalf("expected StateBroken for stale GEMINI block content, got %v", state)
+	}
+	if len(issues) == 0 {
+		t.Fatal("expected at least one issue")
+	}
+	if !hasHealthIssueContaining(issues, "managed block content does not match expected") {
+		t.Fatalf("expected stale managed block content issue, got %+v", issues)
+	}
+}
+
 func TestCheckGemini_BrokenTruncated(t *testing.T) {
 	tmpHome := t.TempDir()
 
