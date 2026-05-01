@@ -187,6 +187,7 @@ func TestCommandConstants_Unique(t *testing.T) {
 		CmdTaskCreate, CmdTaskList, CmdTaskClaim, CmdTaskComplete, CmdTaskFail,
 		CmdTaskHeartbeat, CmdTaskCancel, CmdTaskGet, CmdTaskUpdate,
 		CmdLock, CmdUnlock, CmdLocks, CmdStatus, CmdStop,
+		CmdPushReserve,
 	}
 
 	seen := make(map[string]bool)

@@ -50,8 +50,6 @@ type Broker struct {
 	ackWaitersMu sync.Mutex
 }
 
-var brokersBySocket sync.Map
-
 // New creates a new broker instance
 func New(cfg Config) (*Broker, error) {
 	if err := config.ValidateDefaults(); err != nil {
@@ -144,21 +142,7 @@ func New(cfg Config) (*Broker, error) {
 		stopCh:     make(chan struct{}),
 		ackWaiters: make(map[int64]chan struct{}),
 	}
-	brokersBySocket.Store(cfg.SocketPath, b)
-
 	return b, nil
-}
-
-func LookupBySocket(socketPath string) *Broker {
-	if socketPath == "" {
-		return nil
-	}
-	if b, ok := brokersBySocket.Load(socketPath); ok {
-		if broker, ok := b.(*Broker); ok {
-			return broker
-		}
-	}
-	return nil
 }
 
 func (b *Broker) GetPushToken(agent string) string {
@@ -272,8 +256,6 @@ func (b *Broker) Serve() error {
 
 // Shutdown gracefully shuts down the broker
 func (b *Broker) Shutdown() error {
-	brokersBySocket.Delete(b.config.SocketPath)
-
 	// Kill spawned agents before stopping
 	if b.spawnMgr != nil {
 		b.spawnMgr.StopAll()
