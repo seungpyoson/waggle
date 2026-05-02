@@ -16,7 +16,7 @@ if (!/^\d+$/.test(ppid)) process.exit(0);
 try {
     let pointerFile = path.join(rtDir, 'agent-ppid-' + ppid);
     if (!fs.existsSync(pointerFile)) {
-        const tty = path.basename(process.env.TTY || '');
+        const tty = path.basename(process.env.TTY || '').toLowerCase();
         if (!/^[a-zA-Z0-9_-]+$/.test(tty)) process.exit(0);
         pointerFile = path.join(rtDir, 'agent-tty-' + tty);
         if (!fs.existsSync(pointerFile)) process.exit(0);

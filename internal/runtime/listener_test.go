@@ -396,6 +396,68 @@ func TestBrokerListenerCatchUpClearsReplayDeadlineBeforeAck(t *testing.T) {
 	}
 }
 
+func TestBrokerListenerCatchUpAcksPriorMessagesBeforeHandlerError(t *testing.T) {
+	socketPath, cleanup := startRuntimeTestBroker(t, "proj-catchup-handler-error")
+	defer cleanup()
+
+	sender := connectRuntimeClient(t, socketPath)
+	defer sender.Close()
+	resp, err := sender.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "sender"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.OK {
+		t.Fatalf("sender connect failed: %s", resp.Error)
+	}
+	for _, body := range []string{"first", "second"} {
+		sendResp, err := sender.Send(protocol.Request{
+			Cmd:     protocol.CmdSend,
+			Name:    "alice",
+			Message: body,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !sendResp.OK {
+			t.Fatalf("send %q failed: %s", body, sendResp.Error)
+		}
+	}
+
+	var firstAttempt []string
+	err = NewBrokerListenerFactory().CatchUp(Watch{
+		ProjectID: "proj-catchup-handler-error",
+		AgentName: "alice",
+		Source:    "hook",
+	}, func(d Delivery) error {
+		firstAttempt = append(firstAttempt, d.Body)
+		if d.Body == "second" {
+			return context.Canceled
+		}
+		return nil
+	})
+	if err == nil {
+		t.Fatal("CatchUp() error = nil, want handler error")
+	}
+	if strings.Join(firstAttempt, ",") != "first,second" {
+		t.Fatalf("first attempt deliveries = %v, want first, second", firstAttempt)
+	}
+
+	var secondAttempt []string
+	if err := NewBrokerListenerFactory().CatchUp(Watch{
+		ProjectID: "proj-catchup-handler-error",
+		AgentName: "alice",
+		Source:    "hook",
+	}, func(d Delivery) error {
+		secondAttempt = append(secondAttempt, d.Body)
+		return nil
+	}); err != nil {
+		t.Fatalf("second CatchUp() error = %v", err)
+	}
+	if strings.Join(secondAttempt, ",") != "second" {
+		t.Fatalf("second attempt deliveries = %v, want only second", secondAttempt)
+	}
+}
+
 func TestBrokerListenerCatchUpDoesNotReleaseReservedPushToken(t *testing.T) {
 	socketPath, cleanup := startRuntimeTestBroker(t, "proj-catchup-release")
 	defer cleanup()

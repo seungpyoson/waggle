@@ -285,14 +285,14 @@ func TestWhoamiFallsBackToTTYMapping(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("WAGGLE_AGENT_PPID", "")
-	t.Setenv("TTY", "/dev/ttys009")
+	t.Setenv("TTY", "/dev/ttyS009")
 
 	runtimeDir := config.NewPaths("").RuntimeDir
 	nonce := "12345-1711843200000003"
 	if err := ia.WriteSessionMapping(runtimeDir, 12345, nonce, "codex-ttys009", "proj-whoami"); err != nil {
 		t.Fatalf("write session mapping: %v", err)
 	}
-	if err := ia.WriteTTYMapping(runtimeDir, "ttys009", nonce); err != nil {
+	if err := ia.WriteTTYMapping(runtimeDir, "ttyS009", nonce); err != nil {
 		t.Fatalf("write tty mapping: %v", err)
 	}
 
@@ -305,12 +305,30 @@ func TestWhoamiFallsBackToTTYMapping(t *testing.T) {
 		OK        bool   `json:"ok"`
 		AgentName string `json:"agent_name"`
 		Source    string `json:"source"`
+		PPID      string `json:"ppid"`
+		TTY       string `json:"tty"`
 	}
 	if err := json.Unmarshal([]byte(stdout), &resp); err != nil {
 		t.Fatalf("unmarshal whoami response: %v", err)
 	}
 	if !resp.OK || resp.AgentName != "codex-ttys009" || resp.Source != "tty" {
 		t.Fatalf("whoami response = %+v", resp)
+	}
+	if resp.PPID != "" {
+		t.Fatalf("whoami ppid = %q, want empty for tty-sourced lookup", resp.PPID)
+	}
+	if resp.TTY != "ttys009" {
+		t.Fatalf("whoami tty = %q, want ttys009", resp.TTY)
+	}
+}
+
+func TestWhoamiRejectsArgs(t *testing.T) {
+	err := whoamiCmd.Args(whoamiCmd, []string{"extra"})
+	if err == nil {
+		t.Fatal("whoami Args accepted unexpected positional argument")
+	}
+	if !strings.Contains(err.Error(), "unknown command") {
+		t.Fatalf("whoami Args error = %v, want no-args error", err)
 	}
 }
 

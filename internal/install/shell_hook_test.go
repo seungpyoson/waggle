@@ -85,6 +85,9 @@ func TestInstallShellHook_ScriptRefreshesBothMappings(t *testing.T) {
 	if !strings.Contains(content, ".c-") {
 		t.Fatal("shell hook should handle consumed orphan files")
 	}
+	if !strings.Contains(content, `tr '[:upper:]' '[:lower:]'`) {
+		t.Fatal("shell hook should normalize TTY fallback token to lowercase")
+	}
 }
 
 func TestInstallShellHook_ValidatesSessionTokens(t *testing.T) {

@@ -18,6 +18,7 @@ func init() {
 var whoamiCmd = &cobra.Command{
 	Use:   "whoami",
 	Short: "Show this shell's Waggle runtime identity",
+	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		runtimePaths := config.NewPaths("")
 		if runtimePaths.RuntimeDir == "" {
@@ -52,14 +53,20 @@ var whoamiCmd = &cobra.Command{
 			return nil
 		}
 
-		printJSON(map[string]any{
+		out := map[string]any{
 			"ok":          true,
 			"found":       true,
 			"agent_name":  lines[0],
 			"project_key": lines[1],
-			"ppid":        ppid,
 			"source":      source,
-		})
+		}
+		if source == "ppid" {
+			out["ppid"] = ppid
+		}
+		if source == "tty" {
+			out["tty"] = safeTTYToken(os.Getenv("TTY"))
+		}
+		printJSON(out)
 		return nil
 	},
 }
@@ -95,7 +102,7 @@ func safeTTYToken(tty string) string {
 	if !isSafeRuntimeToken(base) {
 		return ""
 	}
-	return base
+	return strings.ToLower(base)
 }
 
 func isSafeRuntimeToken(s string) bool {

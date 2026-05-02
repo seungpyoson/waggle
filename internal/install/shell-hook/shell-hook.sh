@@ -13,6 +13,7 @@ __waggle_check() {
     elif [ -n "${TTY-}" ]; then
         local _tty="${TTY##*/}"
         case "$_tty" in ""|*[!A-Za-z0-9_-]*) return 0 ;; esac
+        _tty="$(printf '%s' "$_tty" | tr '[:upper:]' '[:lower:]')"
         local _tm="$_wd/agent-tty-$_tty"
         [ -f "$_tm" ] || return 0
         read -r _nonce < "$_tm" 2>/dev/null || return 0
