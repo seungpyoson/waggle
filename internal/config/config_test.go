@@ -417,6 +417,12 @@ func TestDefaults_StartupPollInterval(t *testing.T) {
 	}
 }
 
+func TestDefaults_ShutdownPollInterval(t *testing.T) {
+	if Defaults.ShutdownPollInterval != 100*time.Millisecond {
+		t.Fatalf("ShutdownPollInterval = %v, want 100ms", Defaults.ShutdownPollInterval)
+	}
+}
+
 func TestDefaults_StartupTimeout(t *testing.T) {
 	if Defaults.StartupTimeout != 2*time.Second {
 		t.Fatalf("StartupTimeout = %v, want 2s", Defaults.StartupTimeout)

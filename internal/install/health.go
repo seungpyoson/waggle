@@ -501,6 +501,28 @@ func CheckAugment(homeDir string) ([]HealthIssue, AdapterState) {
 	return nil, StateHealthy
 }
 
+func CheckTool(homeDir, tool string) ([]HealthIssue, AdapterState, bool) {
+	switch tool {
+	case "claude-code":
+		issues, state := CheckClaudeCode(homeDir)
+		return issues, state, true
+	case "codex":
+		issues, state := CheckCodex(homeDir)
+		return issues, state, true
+	case "gemini":
+		issues, state := CheckGemini(homeDir)
+		return issues, state, true
+	case "auggie":
+		issues, state := CheckAuggie(homeDir)
+		return issues, state, true
+	case "augment":
+		issues, state := CheckAugment(homeDir)
+		return issues, state, true
+	default:
+		return nil, "", false
+	}
+}
+
 type embeddedFileReader interface {
 	ReadFile(name string) ([]byte, error)
 }
