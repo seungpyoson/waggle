@@ -10,16 +10,6 @@ import (
 	"time"
 )
 
-func shortSocketPath(t *testing.T, pattern string) string {
-	t.Helper()
-	dir, err := os.MkdirTemp("/tmp", pattern) // Use /tmp to keep Unix socket paths below the macOS 104-byte limit.
-	if err != nil {
-		t.Fatalf("MkdirTemp: %v", err)
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
-	return filepath.Join(dir, "broker.sock")
-}
-
 // TestLifecycle_StartFailsIfPIDIsLive verifies that starting a broker fails
 // if a PID file exists and the process is still running.
 func TestLifecycle_StartFailsIfPIDIsLive(t *testing.T) {
@@ -84,7 +74,7 @@ func TestLifecycle_StartCleansStalePIDAndSocket(t *testing.T) {
 func TestLifecycle_StopRemovesPIDAndSocket(t *testing.T) {
 	tmpDir := t.TempDir()
 	pidFile := filepath.Join(tmpDir, "broker.pid")
-	sockPath := shortSocketPath(t, "waggle-lifecycle-test-*")
+	sockPath := shortBrokerSocketPath(t, "waggle-lifecycle-test-*")
 	dbPath := filepath.Join(tmpDir, "state.db")
 
 	// Create broker
@@ -133,7 +123,7 @@ func TestLifecycle_StopRemovesPIDAndSocket(t *testing.T) {
 // with 0700 permissions (owner-only access).
 func TestLifecycle_SocketPermissions0700(t *testing.T) {
 	tmpDir := t.TempDir()
-	sockPath := shortSocketPath(t, "waggle-lifecycle-perm-test-*")
+	sockPath := shortBrokerSocketPath(t, "waggle-lifecycle-perm-test-*")
 	dbPath := filepath.Join(tmpDir, "state.db")
 
 	// Create broker (which creates socket with 0700 permissions)
@@ -269,7 +259,7 @@ func TestWaitForReady_RejectsNegativeInterval(t *testing.T) {
 // the idle timeout when there are no active sessions.
 func TestLifecycle_IdleTimeout(t *testing.T) {
 	tmpDir := t.TempDir()
-	sockPath := shortSocketPath(t, "waggle-idle-test-*")
+	sockPath := shortBrokerSocketPath(t, "waggle-idle-test-*")
 	dbPath := filepath.Join(tmpDir, "state.db")
 
 	// Create broker with short idle timeout
@@ -316,7 +306,7 @@ func TestLifecycle_IdleTimeout(t *testing.T) {
 }
 
 func TestIsResponding_ZombieSocket(t *testing.T) {
-	sockPath := shortSocketPath(t, "waggle-zombie-test-*")
+	sockPath := shortBrokerSocketPath(t, "waggle-zombie-test-*")
 	ln, err := net.Listen("unix", sockPath)
 	if err != nil {
 		t.Fatal(err)
@@ -337,7 +327,7 @@ func TestIsResponding_ZombieSocket(t *testing.T) {
 
 func TestIsResponding_HealthyBroker(t *testing.T) {
 	tmpDir := t.TempDir()
-	sockPath := shortSocketPath(t, "waggle-responding-test-*")
+	sockPath := shortBrokerSocketPath(t, "waggle-responding-test-*")
 	dbPath := filepath.Join(tmpDir, "state.db")
 
 	b, err := New(Config{SocketPath: sockPath, DBPath: dbPath})

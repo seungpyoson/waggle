@@ -173,7 +173,7 @@ func unmarshalResponse(t *testing.T, resp any, v any) {
 		t.Fatalf("unsupported response type %T", resp)
 	}
 	if data == nil {
-		t.Fatal("expected non-nil response")
+		t.Fatal("expected non-nil response data")
 	}
 	unmarshalJSON(t, data, v)
 }
@@ -967,17 +967,22 @@ func TestBroker_SendPushDelivery(t *testing.T) {
 
 	// Alice sends to Bob (who is online)
 	// This happens in a goroutine to allow Bob to receive the push concurrently
-	sendDone := make(chan bool)
+	sendDone := make(chan error, 1)
 	go func() {
-		resp := sendRequest(t, c1, protocol.Request{
+		resp, err := c1.Send(protocol.Request{
 			Cmd:     protocol.CmdSend,
 			Name:    "bob",
 			Message: "hello",
 		})
-		if !resp.OK {
-			t.Errorf("send failed: %s", resp.Error)
+		if err != nil {
+			sendDone <- fmt.Errorf("send: %w", err)
+			return
 		}
-		sendDone <- true
+		if !resp.OK {
+			sendDone <- fmt.Errorf("send failed: %s", resp.Error)
+			return
+		}
+		sendDone <- nil
 	}()
 
 	// Bob should receive the pushed message
@@ -1004,23 +1009,38 @@ func TestBroker_SendPushDelivery(t *testing.T) {
 	}
 
 	// Wait for send to complete
-	<-sendDone
+	if err := <-sendDone; err != nil {
+		t.Fatal(err)
+	}
 
 	// Exercise writeMu with concurrent operations:
 	// Bob sends an inbox command while Alice sends another message
 	// This creates concurrent writes to Bob's connection (push + response)
+	concurrentSendDone := make(chan error, 1)
 	go func() {
-		sendRequest(t, c1, protocol.Request{
+		resp, err := c1.Send(protocol.Request{
 			Cmd:     protocol.CmdSend,
 			Name:    "bob",
 			Message: "second message",
 		})
+		if err != nil {
+			concurrentSendDone <- fmt.Errorf("concurrent send: %w", err)
+			return
+		}
+		if !resp.OK {
+			concurrentSendDone <- fmt.Errorf("concurrent send failed: %s", resp.Error)
+			return
+		}
+		concurrentSendDone <- nil
 	}()
 
 	// Bob checks inbox concurrently
 	resp := sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdInbox})
 	if !resp.OK {
 		t.Fatalf("inbox failed: %s", resp.Error)
+	}
+	if err := <-concurrentSendDone; err != nil {
+		t.Fatal(err)
 	}
 
 	// Read the second push
@@ -1869,8 +1889,9 @@ func TestBroker_AwaitAck(t *testing.T) {
 	// Alice sends with await-ack (blocks)
 	sendDone := make(chan bool)
 	var sendResp *protocol.Response
+	var sendErr error
 	go func() {
-		sendResp = sendRequest(t, c1, protocol.Request{
+		sendResp, sendErr = c1.Send(protocol.Request{
 			Cmd:      protocol.CmdSend,
 			Name:     "bob",
 			Message:  "await test",
@@ -1896,6 +1917,9 @@ func TestBroker_AwaitAck(t *testing.T) {
 	// Alice's send should unblock
 	select {
 	case <-sendDone:
+		if sendErr != nil {
+			t.Fatalf("send: %v", sendErr)
+		}
 		if !sendResp.OK {
 			t.Errorf("send should succeed after ack: %s", sendResp.Error)
 		}
@@ -2255,9 +2279,8 @@ func TestBroker_SpawnUpdatePID(t *testing.T) {
 
 // TestBroker_SpawnStatusAfterStop — spawned list is empty after shutdown
 func TestBroker_SpawnStatusAfterStop(t *testing.T) {
-	sockPath, b, cleanup := startTestBroker(t)
+	_, b, cleanup := startTestBroker(t)
 	_ = cleanup // This test calls b.Shutdown directly to assert post-stop state.
-	defer os.Remove(sockPath)
 
 	// Add agent directly
 	b.spawnMgr.Add("worker-1", "claude", 99999)
@@ -2515,16 +2538,22 @@ func TestBroker_AwaitAckRaceEarlyAck(t *testing.T) {
 	sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
 
 	// Alice sends with await-ack
-	sendDone := make(chan *protocol.Response)
+	sendDone := make(chan struct {
+		resp *protocol.Response
+		err  error
+	}, 1)
 	go func() {
-		resp := sendRequest(t, c1, protocol.Request{
+		resp, err := c1.Send(protocol.Request{
 			Cmd:      protocol.CmdSend,
 			Name:     "bob",
 			Message:  "race test",
 			AwaitAck: true,
 			Timeout:  5,
 		})
-		sendDone <- resp
+		sendDone <- struct {
+			resp *protocol.Response
+			err  error
+		}{resp: resp, err: err}
 	}()
 
 	// Bob receives push and acks immediately
@@ -2543,9 +2572,12 @@ func TestBroker_AwaitAckRaceEarlyAck(t *testing.T) {
 
 	// Alice's send should unblock (not timeout)
 	select {
-	case resp := <-sendDone:
-		if !resp.OK {
-			t.Errorf("send should succeed after ack: %s (code=%s)", resp.Error, resp.Code)
+	case result := <-sendDone:
+		if result.err != nil {
+			t.Fatalf("send: %v", result.err)
+		}
+		if !result.resp.OK {
+			t.Errorf("send should succeed after ack: %s (code=%s)", result.resp.Error, result.resp.Code)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("send timed out despite ack (race condition not fixed)")
