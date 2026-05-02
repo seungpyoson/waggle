@@ -321,6 +321,39 @@ func TestInstallNoArgsInstallsDetectedIntegrations(t *testing.T) {
 	}
 }
 
+func TestInstallNoArgsReportsPartialResultsOnError(t *testing.T) {
+	originalInstallDetected := installDetected
+	t.Cleanup(func() {
+		installDetected = originalInstallDetected
+	})
+
+	installDetected = func() ([]install.InstallResult, error) {
+		return []install.InstallResult{{
+			Platform: install.PlatformCodex,
+			Message:  "Codex integration installed. Restart Codex to activate.",
+		}}, errors.New("install gemini: permission denied")
+	}
+
+	stdout, stderr, err := executeRootCommandForTestWithError(t, "install")
+	if err == nil {
+		t.Fatal("install returned nil error, want partial install error")
+	}
+	if stderr != "" {
+		t.Fatalf("install stderr = %q, want empty", stderr)
+	}
+	for _, want := range []string{
+		`"ok": false`,
+		`"code": "INSTALL_ERROR"`,
+		`"error": "install gemini: permission denied"`,
+		`"installed_adapters":`,
+		`"codex"`,
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("install stdout = %q, want %q", stdout, want)
+		}
+	}
+}
+
 func TestStartAutoInstallsDetectedIntegrationsBeforeDaemonStart(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -442,6 +475,17 @@ func resetFlagToDefault(flag *pflag.Flag) {
 func executeRootCommandForTest(t *testing.T, args ...string) (string, string) {
 	t.Helper()
 
+	stdout, stderr, err := executeRootCommandForTestWithError(t, args...)
+	if err != nil {
+		t.Fatalf("execute %v: %v", args, err)
+	}
+
+	return stdout, stderr
+}
+
+func executeRootCommandForTestWithError(t *testing.T, args ...string) (string, string, error) {
+	t.Helper()
+
 	originalState := captureCommandTestState()
 	defer func() {
 		originalState.restore()
@@ -459,11 +503,8 @@ func executeRootCommandForTest(t *testing.T, args ...string) (string, string) {
 	rootCmd.SetErr(&stderr)
 	rootCmd.SetArgs(args)
 
-	if err := rootCmd.Execute(); err != nil {
-		t.Fatalf("execute %v: %v", args, err)
-	}
-
-	return stdout.String(), stderr.String()
+	err := rootCmd.Execute()
+	return stdout.String(), stderr.String(), err
 }
 
 func openRuntimeStoreForTest(t *testing.T) *rt.Store {
