@@ -153,6 +153,12 @@ func (m *Manager) StopAll() error {
 	return nil
 }
 
+func (m *Manager) ForgetAll() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.agents = make(map[string]*Agent)
+}
+
 // isPIDAlive checks if a PID is still running
 func isPIDAlive(pid int) bool {
 	if pid <= 0 {
@@ -163,4 +169,3 @@ func isPIDAlive(pid int) bool {
 	err := syscall.Kill(pid, syscall.Signal(0))
 	return err == nil
 }
-

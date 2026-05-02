@@ -200,6 +200,32 @@ func TestManager_StopAllWithDeadPID(t *testing.T) {
 	}
 }
 
+func TestManager_ForgetAllDoesNotSignalProcesses(t *testing.T) {
+	m := NewManager()
+
+	cmd := exec.Command("sleep", "60")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		cmd.Process.Kill()
+		cmd.Wait()
+	})
+
+	if err := m.Add("worker-1", "claude", cmd.Process.Pid); err != nil {
+		t.Fatalf("Add() error = %v, want nil", err)
+	}
+
+	m.ForgetAll()
+
+	if agents := m.List(); len(agents) != 0 {
+		t.Fatalf("List() len = %d, want 0 after ForgetAll", len(agents))
+	}
+	if err := cmd.Process.Signal(syscall.Signal(0)); err != nil {
+		t.Fatalf("process should still be alive after ForgetAll: %v", err)
+	}
+}
+
 // TestManager_ListEmpty — empty manager returns empty slice (not nil)
 func TestManager_ListEmpty(t *testing.T) {
 	m := NewManager()
@@ -253,4 +279,3 @@ func TestManager_UpdatePID_NotFound(t *testing.T) {
 		t.Fatal("expected error for nonexistent agent")
 	}
 }
-
