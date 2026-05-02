@@ -94,8 +94,26 @@ func (f *BrokerListenerFactory) CatchUp(w Watch, handler DeliveryHandler) error 
 		}); err != nil {
 			return err
 		}
+		if err := ackReplayedMessage(c, w.AgentName, msg.ID); err != nil {
+			return err
+		}
 	}
 
+	return nil
+}
+
+func ackReplayedMessage(c *client.Client, agentName string, messageID int64) error {
+	resp, err := c.Send(protocol.Request{
+		Cmd:       protocol.CmdAck,
+		Name:      agentName,
+		MessageID: messageID,
+	})
+	if err != nil {
+		return fmt.Errorf("ack replayed message %d: %w", messageID, err)
+	}
+	if !resp.OK {
+		return fmt.Errorf("ack replayed message %d: %s: %s", messageID, resp.Code, resp.Error)
+	}
 	return nil
 }
 

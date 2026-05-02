@@ -35,10 +35,12 @@ which reads a named inbox without connecting as that name.
 This PR implements the safe broker-side foundation:
 
 - `CmdReplay` reads a named inbox without session registration.
+- runtime CatchUp ACKs each successfully handled replayed broker message, so
+  broker inbox replay does not grow without bound for runtime-managed agents.
 - runtime CatchUp uses `CmdReplay`, so it no longer competes with an active
   `<agent>-push` listener.
 - adapter bootstrap writes both PPID and TTY mappings, so pushed signal files
   are discoverable when later command shells have a different PPID.
 
-Claim/lease/ACK for local bootstrap records is intentionally not fused into this
-PR. It needs a runtime store migration and a new adapter ACK contract.
+Claim/lease/ACK for local runtime bootstrap records is intentionally not fused
+into this PR. It needs a runtime store migration and a new adapter ACK contract.

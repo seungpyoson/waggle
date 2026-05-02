@@ -944,6 +944,48 @@ func TestBroker_ReplayReadsNamedInboxWithoutSessionRegistration(t *testing.T) {
 	}
 }
 
+func TestBroker_AckCanTargetNamedInboxWithoutSessionRegistration(t *testing.T) {
+	sockPath, _, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	sender := connectClient(t, sockPath)
+	defer sender.Close()
+	resp, _ := sender.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	if !resp.OK {
+		t.Fatalf("sender connect failed: %s", resp.Error)
+	}
+
+	resp, _ = sender.Send(protocol.Request{Cmd: protocol.CmdSend, Name: "bob", Message: "ack by name"})
+	if !resp.OK {
+		t.Fatalf("send failed: %s", resp.Error)
+	}
+	var msg struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.Unmarshal(resp.Data, &msg); err != nil {
+		t.Fatalf("unmarshal send: %v", err)
+	}
+
+	ack := connectClient(t, sockPath)
+	defer ack.Close()
+	resp, _ = ack.Send(protocol.Request{Cmd: protocol.CmdAck, Name: "bob", MessageID: msg.ID})
+	if !resp.OK {
+		t.Fatalf("ack failed: %s: %s", resp.Code, resp.Error)
+	}
+
+	resp, _ = ack.Send(protocol.Request{Cmd: protocol.CmdReplay, Name: "bob"})
+	if !resp.OK {
+		t.Fatalf("replay failed: %s: %s", resp.Code, resp.Error)
+	}
+	var messages []map[string]interface{}
+	if err := json.Unmarshal(resp.Data, &messages); err != nil {
+		t.Fatalf("unmarshal replay: %v", err)
+	}
+	if len(messages) != 0 {
+		t.Fatalf("replay after ack returned %d messages, want 0", len(messages))
+	}
+}
+
 // TestBroker_SendPushDelivery — client2 connected, receives push immediately on send
 func TestBroker_SendPushDelivery(t *testing.T) {
 	sockPath, _, cleanup := startTestBroker(t)

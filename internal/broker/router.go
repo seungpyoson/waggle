@@ -24,6 +24,7 @@ var noSessionRequired = map[string]bool{
 	protocol.CmdStatus:      true,
 	protocol.CmdStop:        true,
 	protocol.CmdReplay:      true,
+	protocol.CmdAck:         true,
 	protocol.CmdPushReserve: true,
 	protocol.CmdPushRelease: true,
 }
@@ -792,7 +793,13 @@ func handleAck(s *Session, req protocol.Request) protocol.Response {
 		return protocol.ErrResponse(protocol.ErrInvalidRequest, "message_id required")
 	}
 
-	caller := strings.TrimSuffix(s.name, "-push")
+	caller := req.Name
+	if caller == "" {
+		caller = strings.TrimSuffix(s.name, "-push")
+	}
+	if caller == "" {
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, "name required")
+	}
 	err := s.broker.msgStore.Ack(req.MessageID, caller)
 	if err != nil {
 		if errors.Is(err, messages.ErrMessageNotFound) {

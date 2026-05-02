@@ -329,6 +329,21 @@ func TestBrokerListenerCatchUpReadsInboxWithoutBaseConnection(t *testing.T) {
 	if got[0].Body != "catch-up delivery" {
 		t.Fatalf("delivery.Body = %q, want %q", got[0].Body, "catch-up delivery")
 	}
+
+	got = nil
+	if err := NewBrokerListenerFactory().CatchUp(Watch{
+		ProjectID: "proj-catchup",
+		AgentName: "alice",
+		Source:    "hook",
+	}, func(d Delivery) error {
+		got = append(got, d)
+		return nil
+	}); err != nil {
+		t.Fatalf("second CatchUp() error = %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("second CatchUp() deliveries = %d, want 0 after ack", len(got))
+	}
 }
 
 func TestBrokerListenerCatchUpDoesNotReleaseReservedPushToken(t *testing.T) {
