@@ -101,11 +101,12 @@ func CheckClaudeCode(homeDir string) ([]HealthIssue, AdapterState) {
 	anyFileExists := hookExists || heartbeatExists || pushExists || skillDirExists
 
 	if settingsErr != nil {
-		return []HealthIssue{{
+		issues = append(issues, HealthIssue{
 			Asset:   settingsPath,
 			Problem: "cannot parse settings.json: " + settingsErr.Error(),
 			Repair:  "fix or remove invalid settings.json, then run " + repairCmd,
-		}}, StateBroken
+		})
+		return issues, StateBroken
 	}
 
 	// Step 3: Derive state from fingerprint × files matrix

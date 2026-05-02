@@ -1,7 +1,6 @@
 package install
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -123,5 +122,5 @@ func detectPlatform(homeDir string, lookPath LookPathFunc, name string, dirs []s
 
 func pathExists(path string) bool {
 	_, err := os.Stat(path)
-	return err == nil || !errors.Is(err, os.ErrNotExist)
+	return err == nil
 }

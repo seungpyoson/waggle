@@ -219,6 +219,46 @@ func TestCheckClaudeCode_BrokenInvalidSettingsJSON(t *testing.T) {
 	}
 }
 
+func TestCheckClaudeCode_BrokenInvalidSettingsJSONPreservesPathIssues(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	if err := installClaudeCode(tmpHome); err != nil {
+		t.Fatalf("install failed: %v", err)
+	}
+
+	settingsPath := filepath.Join(tmpHome, ".claude", "settings.json")
+	if err := os.WriteFile(settingsPath, []byte(`{"hooks":`), 0644); err != nil {
+		t.Fatalf("write invalid settings.json: %v", err)
+	}
+
+	hookPath := filepath.Join(tmpHome, ".claude", "hooks", "waggle-connect.sh")
+	canonical, err := claudeCodeFiles.ReadFile("claude-code/hook.sh")
+	if err != nil {
+		t.Fatalf("read canonical hook: %v", err)
+	}
+	targetPath := filepath.Join(tmpHome, "hook-target.sh")
+	if err := os.WriteFile(targetPath, canonical, 0o755); err != nil {
+		t.Fatalf("write hook target: %v", err)
+	}
+	if err := os.Remove(hookPath); err != nil {
+		t.Fatalf("remove installed hook: %v", err)
+	}
+	if err := os.Symlink(targetPath, hookPath); err != nil {
+		t.Fatalf("symlink hook: %v", err)
+	}
+
+	issues, state := CheckClaudeCode(tmpHome)
+	if state != StateBroken {
+		t.Fatalf("expected StateBroken for invalid settings.json and symlinked hook, got %q", state)
+	}
+	if !hasHealthIssueContaining(issues, "cannot parse settings.json") {
+		t.Fatalf("expected invalid settings.json issue, got %+v", issues)
+	}
+	if !hasHealthIssueContaining(issues, "symlink") {
+		t.Fatalf("expected symlink issue, got %+v", issues)
+	}
+}
+
 func TestCheckClaudeCode_BrokenMissingHook(t *testing.T) {
 	tmpHome := t.TempDir()
 

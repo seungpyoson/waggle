@@ -36,6 +36,27 @@ func TestDetectPlatformsUsesHomeAndPathEvidence(t *testing.T) {
 	}
 }
 
+func TestPathExistsReturnsFalseOnPermissionError(t *testing.T) {
+	parent := filepath.Join(t.TempDir(), "parent")
+	if err := os.Mkdir(parent, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	child := filepath.Join(parent, "child")
+	if err := os.Mkdir(child, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(parent, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(parent, 0o755)
+	})
+
+	if pathExists(child) {
+		t.Fatal("pathExists should return false when stat fails with permission denied")
+	}
+}
+
 func TestInstallDetectedInHomeInstallsOnlyDetectedPlatforms(t *testing.T) {
 	home := t.TempDir()
 	if err := os.Mkdir(filepath.Join(home, ".codex"), 0o755); err != nil {

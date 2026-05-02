@@ -40,7 +40,9 @@ var installCmd = &cobra.Command{
 		}
 
 		platform := args[0]
-		installPlatform(platform)
+		if !installPlatform(platform) {
+			return nil
+		}
 		return nil
 	},
 }
