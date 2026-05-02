@@ -22,6 +22,17 @@ var (
 	uninstallDryRun bool
 
 	uninstallStopRuntime = stopRuntimeForUninstall
+	uninstallTargets     = []struct {
+		name string
+		fn   func() error
+	}{
+		{"claude-code", install.UninstallClaudeCode},
+		{"codex", install.UninstallCodex},
+		{"gemini", install.UninstallGemini},
+		{"auggie", install.UninstallAuggie},
+		{"augment", install.UninstallAugment},
+		{"shell-hook", install.UninstallShellHook},
+	}
 )
 
 func init() {
@@ -40,7 +51,7 @@ var uninstallCmd = &cobra.Command{
 		}
 		if !uninstallAll && !uninstallPurge {
 			printErr("INVALID_REQUEST", "pass --all and/or --purge")
-			return nil
+			return fmt.Errorf("pass --all and/or --purge")
 		}
 		home, err := os.UserHomeDir()
 		if err != nil {
@@ -66,23 +77,17 @@ func runUninstall(home string, all, purge, dryRun bool) ([]map[string]any, error
 	}
 
 	if all {
-		for _, item := range []struct {
-			name string
-			fn   func() error
-		}{
-			{"claude-code", install.UninstallClaudeCode},
-			{"codex", install.UninstallCodex},
-			{"gemini", install.UninstallGemini},
-			{"auggie", install.UninstallAuggie},
-			{"augment", install.UninstallAugment},
-			{"shell-hook", install.UninstallShellHook},
-		} {
+		var uninstallErrs []error
+		for _, item := range uninstallTargets {
 			record(item.name, plannedAction(dryRun, "remove integration"))
 			if !dryRun {
 				if err := item.fn(); err != nil {
-					return actions, fmt.Errorf("uninstall %s: %w", item.name, err)
+					uninstallErrs = append(uninstallErrs, fmt.Errorf("uninstall %s: %w", item.name, err))
 				}
 			}
+		}
+		if err := errors.Join(uninstallErrs...); err != nil {
+			return actions, err
 		}
 	}
 
@@ -94,7 +99,7 @@ func runUninstall(home string, all, purge, dryRun bool) ([]map[string]any, error
 			}
 		}
 
-		waggleDir := filepath.Join(home, ".waggle")
+		waggleDir := filepath.Join(home, config.Defaults.DirName)
 		record(waggleDir, plannedAction(dryRun, "remove state"))
 		if !dryRun {
 			if err := removeOwnedTree(waggleDir, home); err != nil {

@@ -123,6 +123,7 @@ func Bootstrap(input BootstrapInput) (BootstrapResult, error) {
 func uninstalledToolSkipReason(tool string) string {
 	home, err := os.UserHomeDir()
 	if err != nil {
+		log.Printf("warning: cannot determine adapter install state: %v", err)
 		return ""
 	}
 	_, state, known := install.CheckTool(home, tool)

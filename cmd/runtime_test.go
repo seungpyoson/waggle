@@ -353,6 +353,55 @@ func TestUninstallAllPurgeDryRunDoesNotMutate(t *testing.T) {
 	}
 }
 
+func TestRunUninstallAllAttemptsEveryIntegrationBeforeReturningErrors(t *testing.T) {
+	originalTargets := uninstallTargets
+	t.Cleanup(func() {
+		uninstallTargets = originalTargets
+	})
+
+	var called []string
+	uninstallTargets = []struct {
+		name string
+		fn   func() error
+	}{
+		{
+			name: "first",
+			fn: func() error {
+				called = append(called, "first")
+				return fmt.Errorf("first failed")
+			},
+		},
+		{
+			name: "second",
+			fn: func() error {
+				called = append(called, "second")
+				return nil
+			},
+		},
+		{
+			name: "third",
+			fn: func() error {
+				called = append(called, "third")
+				return fmt.Errorf("third failed")
+			},
+		},
+	}
+
+	actions, err := runUninstall(t.TempDir(), true, false, false)
+	if err == nil {
+		t.Fatal("runUninstall error = nil, want joined uninstall errors")
+	}
+	if !strings.Contains(err.Error(), "uninstall first") || !strings.Contains(err.Error(), "uninstall third") {
+		t.Fatalf("runUninstall error = %v, want both uninstall failures", err)
+	}
+	if strings.Join(called, ",") != "first,second,third" {
+		t.Fatalf("called targets = %v, want all targets attempted", called)
+	}
+	if len(actions) != 3 {
+		t.Fatalf("actions len = %d, want 3", len(actions))
+	}
+}
+
 func TestUninstallPurgeStopsRuntimeBeforeRemovingState(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
