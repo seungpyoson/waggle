@@ -31,14 +31,12 @@ var listenCmd = &cobra.Command{
 		// When --output is set, this command typically runs backgrounded (e.g., from
 		// hooks). Redirect stderr to a .err file so errors don't corrupt the host
 		// terminal (TUI). This must happen BEFORE any printErr/fmt.Fprintf calls.
-		// Redirect both os.Stderr (Go-level) and fd 2 (OS-level) to catch all output.
+		// Redirect fd 2 so os.Stderr, log.Printf, and any C-level writes go to file.
 		if listenOutput != "" {
 			errFile, err := os.OpenFile(listenOutput+".err", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 			if err == nil {
-				os.Stderr = errFile
-				// Also redirect OS fd 2 so log.Printf and any C-level writes go to file
 				_ = unix.Dup2(int(errFile.Fd()), 2)
-				defer errFile.Close()
+				_ = errFile.Close()
 			}
 			// If errFile fails to open, keep original stderr — better than crashing
 		}
