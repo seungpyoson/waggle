@@ -257,6 +257,43 @@ func TestCheckClaudeCode_DanglingSymlinkedHookWithoutFingerprintIsBroken(t *test
 	}
 }
 
+func TestCheckClaudeCode_DanglingSymlinkedManagedFilesReportOnlySymlink(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		file string
+	}{
+		{name: "hook", file: filepath.Join(".claude", "hooks", "waggle-connect.sh")},
+		{name: "heartbeat", file: filepath.Join(".claude", "hooks", "waggle-heartbeat.sh")},
+		{name: "push", file: filepath.Join(".claude", "hooks", "waggle-push.js")},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpHome := t.TempDir()
+			if err := installClaudeCode(tmpHome); err != nil {
+				t.Fatalf("install failed: %v", err)
+			}
+
+			path := filepath.Join(tmpHome, tt.file)
+			if err := os.Remove(path); err != nil {
+				t.Fatalf("remove installed file: %v", err)
+			}
+			if err := os.Symlink(filepath.Join(tmpHome, "missing-"+tt.name), path); err != nil {
+				t.Fatalf("symlink file: %v", err)
+			}
+
+			issues, state := CheckClaudeCode(tmpHome)
+			if state != StateBroken {
+				t.Fatalf("expected StateBroken for dangling %s symlink, got %q", tt.name, state)
+			}
+			if !hasHealthIssueForAssetContaining(issues, path, "symlink") {
+				t.Fatalf("expected symlink issue for %s, got %+v", path, issues)
+			}
+			if hasHealthIssueForAssetContaining(issues, path, "missing") {
+				t.Fatalf("did not expect redundant missing issue for dangling symlink, got %+v", issues)
+			}
+		})
+	}
+}
+
 func TestCheckClaudeCode_BrokenInvalidSettingsJSON(t *testing.T) {
 	tmpHome := t.TempDir()
 

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -19,11 +20,9 @@ func init() {
 }
 
 var installCmd = &cobra.Command{
-	Use:           "install [platform]",
-	Short:         "Install waggle integration for a platform",
-	Args:          cobra.MaximumNArgs(1),
-	SilenceErrors: true,
-	SilenceUsage:  true,
+	Use:   "install [platform]",
+	Short: "Install waggle integration for a platform",
+	Args:  installArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if len(args) == 0 {
 			if installUninstall {
@@ -32,21 +31,24 @@ var installCmd = &cobra.Command{
 			}
 			results, err := installDetected()
 			if err != nil {
-				printJSON(map[string]any{
+				printInstallError(cmd, "INSTALL_ERROR", err.Error(), map[string]any{
 					"ok":                 false,
-					"code":               "INSTALL_ERROR",
-					"error":              err.Error(),
 					"installed_adapters": installResultPlatforms(results),
 				})
+				cmd.SilenceErrors = true
+				cmd.SilenceUsage = true
 				return err
 			}
 			if len(results) == 0 {
 				printJSON(map[string]any{"ok": true, "message": "no supported adapters detected"})
 				return nil
 			}
-			for _, result := range results {
-				printJSON(map[string]any{"ok": true, "message": result.Message, "platform": result.Platform})
-			}
+			printJSON(map[string]any{
+				"ok":                 true,
+				"message":            "detected adapters installed",
+				"installed_adapters": installResultPlatforms(results),
+				"results":            results,
+			})
 			return nil
 		}
 
@@ -56,6 +58,17 @@ var installCmd = &cobra.Command{
 		}
 		return nil
 	},
+}
+
+func installArgs(cmd *cobra.Command, args []string) error {
+	if len(args) <= 1 {
+		return nil
+	}
+	err := fmt.Errorf("accepts at most 1 arg(s), received %d", len(args))
+	printInstallError(cmd, "INVALID_REQUEST", err.Error(), nil)
+	cmd.SilenceErrors = true
+	cmd.SilenceUsage = true
+	return err
 }
 
 func installPlatform(platform string) bool {
@@ -143,4 +156,17 @@ func installResultPlatforms(results []install.InstallResult) []string {
 		platforms = append(platforms, result.Platform)
 	}
 	return platforms
+}
+
+func printInstallError(cmd *cobra.Command, code, message string, fields map[string]any) {
+	resp := map[string]any{
+		"ok":    false,
+		"code":  code,
+		"error": message,
+	}
+	for key, value := range fields {
+		resp[key] = value
+	}
+	data, _ := json.MarshalIndent(resp, "", "  ")
+	fmt.Fprintln(cmd.ErrOrStderr(), string(data))
 }

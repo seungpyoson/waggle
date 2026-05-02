@@ -308,6 +308,17 @@ func TestInstallNoArgsInstallsDetectedIntegrations(t *testing.T) {
 	if !strings.Contains(stdout, "Codex integration installed") {
 		t.Fatalf("install stdout = %q, want Codex install message", stdout)
 	}
+	var response struct {
+		OK                bool                    `json:"ok"`
+		InstalledAdapters []string                `json:"installed_adapters"`
+		Results           []install.InstallResult `json:"results"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &response); err != nil {
+		t.Fatalf("install stdout is not a single JSON object: %v\n%s", err, stdout)
+	}
+	if !response.OK || len(response.InstalledAdapters) != 1 || response.InstalledAdapters[0] != install.PlatformCodex {
+		t.Fatalf("install response = %+v, want ok with only Codex installed", response)
+	}
 	for _, unwanted := range []string{"Claude Code integration installed", "Gemini integration installed", "Auggie integration installed", "Augment integration installed"} {
 		if strings.Contains(stdout, unwanted) {
 			t.Fatalf("install stdout = %q, did not expect %q", stdout, unwanted)
@@ -338,8 +349,8 @@ func TestInstallNoArgsReportsPartialResultsOnError(t *testing.T) {
 	if err == nil {
 		t.Fatal("install returned nil error, want partial install error")
 	}
-	if stderr != "" {
-		t.Fatalf("install stderr = %q, want empty", stderr)
+	if stdout != "" {
+		t.Fatalf("install stdout = %q, want empty", stdout)
 	}
 	for _, want := range []string{
 		`"ok": false`,
@@ -348,9 +359,22 @@ func TestInstallNoArgsReportsPartialResultsOnError(t *testing.T) {
 		`"installed_adapters":`,
 		`"codex"`,
 	} {
-		if !strings.Contains(stdout, want) {
-			t.Fatalf("install stdout = %q, want %q", stdout, want)
+		if !strings.Contains(stderr, want) {
+			t.Fatalf("install stderr = %q, want %q", stderr, want)
 		}
+	}
+}
+
+func TestInstallTooManyArgsReportsCobraError(t *testing.T) {
+	stdout, stderr, err := executeRootCommandForTestWithError(t, "install", "codex", "gemini")
+	if err == nil {
+		t.Fatal("install returned nil error, want too-many-args error")
+	}
+	if stdout != "" {
+		t.Fatalf("install stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, "accepts at most 1 arg") {
+		t.Fatalf("install stderr = %q, want Cobra argument error", stderr)
 	}
 }
 
@@ -489,6 +513,8 @@ func executeRootCommandForTestWithError(t *testing.T, args ...string) (string, s
 	originalState := captureCommandTestState()
 	defer func() {
 		originalState.restore()
+		installCmd.SilenceErrors = false
+		installCmd.SilenceUsage = false
 		rootCmd.SetOut(os.Stdout)
 		rootCmd.SetErr(os.Stderr)
 		rootCmd.SetArgs(nil)

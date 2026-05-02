@@ -79,6 +79,7 @@ func CheckClaudeCode(homeDir string) ([]HealthIssue, AdapterState) {
 	heartbeatPath := filepath.Join(claudeDir, "hooks", "waggle-heartbeat.sh")
 	pushPath := filepath.Join(claudeDir, "hooks", "waggle-push.js")
 	skillDir := filepath.Join(claudeDir, "skills", "waggle")
+	unsafePaths := make(map[string]bool)
 
 	for _, item := range []struct {
 		path string
@@ -91,6 +92,7 @@ func CheckClaudeCode(homeDir string) ([]HealthIssue, AdapterState) {
 	} {
 		if issue := unsafePathIssue(item.path, homeDir, item.name, repairCmd); issue != nil {
 			issues = append(issues, *issue)
+			unsafePaths[item.path] = true
 		}
 	}
 
@@ -145,7 +147,7 @@ func CheckClaudeCode(homeDir string) ([]HealthIssue, AdapterState) {
 		})
 	}
 
-	if !hookExists {
+	if !hookExists && !unsafePaths[hookPath] {
 		issues = append(issues, HealthIssue{
 			Asset:   hookPath,
 			Problem: "waggle-connect.sh missing",
@@ -153,7 +155,7 @@ func CheckClaudeCode(homeDir string) ([]HealthIssue, AdapterState) {
 		})
 	}
 
-	if !heartbeatExists {
+	if !heartbeatExists && !unsafePaths[heartbeatPath] {
 		issues = append(issues, HealthIssue{
 			Asset:   heartbeatPath,
 			Problem: "waggle-heartbeat.sh missing",
@@ -161,7 +163,7 @@ func CheckClaudeCode(homeDir string) ([]HealthIssue, AdapterState) {
 		})
 	}
 
-	if !pushExists {
+	if !pushExists && !unsafePaths[pushPath] {
 		issues = append(issues, HealthIssue{
 			Asset:   pushPath,
 			Problem: "waggle-push.js missing",
@@ -169,7 +171,7 @@ func CheckClaudeCode(homeDir string) ([]HealthIssue, AdapterState) {
 		})
 	}
 
-	if !skillDirExists {
+	if !skillDirExists && !unsafePaths[skillDir] {
 		issues = append(issues, HealthIssue{
 			Asset:   skillDir,
 			Problem: "skills directory missing",
