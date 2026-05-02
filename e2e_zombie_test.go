@@ -26,7 +26,11 @@ func shortTempDir(t *testing.T, pattern string) string {
 	if err != nil {
 		t.Fatalf("mkdirtemp %s: %v", pattern, err)
 	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Cleanup(func() {
+		if err := os.RemoveAll(dir); err != nil {
+			t.Logf("cleanup temp dir %s: %v", dir, err)
+		}
+	})
 	return dir
 }
 
