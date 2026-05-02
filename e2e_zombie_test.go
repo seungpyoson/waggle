@@ -20,6 +20,16 @@ func computeHash(projectID string) string {
 	return fmt.Sprintf("%012x", h.Sum64()&0xffffffffffff)
 }
 
+func shortTempDir(t *testing.T, pattern string) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", pattern) // Use /tmp to keep derived Unix socket paths below the macOS 104-byte limit.
+	if err != nil {
+		t.Fatalf("mkdirtemp %s: %v", pattern, err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	return dir
+}
+
 // setupZombie creates a zombie broker: a process (the test itself) that
 // listens on the correct socket path but never accepts connections.
 // It writes the current PID to the PID file.
@@ -57,8 +67,8 @@ func setupZombie(t *testing.T, tmpHome, projectID string) (net.Listener, func())
 
 	cleanup := func() {
 		ln.Close()
-		os.Remove(sockPath)
-		os.Remove(pidPath)
+		_ = os.Remove(sockPath) // best-effort: listener close normally removes the socket.
+		_ = os.Remove(pidPath)  // best-effort: temp HOME cleanup removes leftovers.
 	}
 	return ln, cleanup
 }
@@ -66,12 +76,7 @@ func setupZombie(t *testing.T, tmpHome, projectID string) (net.Listener, func())
 // buildBinary compiles the waggle binary into a temp dir and returns its path.
 func buildBinary(t *testing.T) string {
 	t.Helper()
-	// Place binary in /tmp to avoid long path issues
-	tmpBin, err := os.MkdirTemp("/tmp", "waggle-bin-*")
-	if err != nil {
-		t.Fatalf("mkdirtemp for bin: %v", err)
-	}
-	t.Cleanup(func() { os.RemoveAll(tmpBin) })
+	tmpBin := shortTempDir(t, "waggle-bin-*")
 
 	binPath := filepath.Join(tmpBin, "waggle")
 	build := exec.Command("go", "build", "-o", binPath, ".")
@@ -91,11 +96,7 @@ func TestE2E_ZombieAutoRecovery(t *testing.T) {
 
 	tmpBin := buildBinary(t)
 
-	tmpHome, err := os.MkdirTemp("/tmp", "waggle-zombie-*")
-	if err != nil {
-		t.Fatalf("mkdirtemp home: %v", err)
-	}
-	defer os.RemoveAll(tmpHome)
+	tmpHome := shortTempDir(t, "waggle-zombie-*")
 
 	const projectID = "zombie-recovery-test"
 
@@ -153,11 +154,7 @@ func TestE2E_ZombieFailFast_NoAutoStart(t *testing.T) {
 
 	tmpBin := buildBinary(t)
 
-	tmpHome, err := os.MkdirTemp("/tmp", "waggle-zombie-noauto-*")
-	if err != nil {
-		t.Fatalf("mkdirtemp home: %v", err)
-	}
-	defer os.RemoveAll(tmpHome)
+	tmpHome := shortTempDir(t, "waggle-zombie-noauto-*")
 
 	const projectID = "zombie-noauto-test"
 
@@ -218,11 +215,7 @@ func TestE2E_HealthyBrokerUnaffected(t *testing.T) {
 
 	tmpBin := buildBinary(t)
 
-	tmpHome, err := os.MkdirTemp("/tmp", "waggle-healthy-*")
-	if err != nil {
-		t.Fatalf("mkdirtemp home: %v", err)
-	}
-	defer os.RemoveAll(tmpHome)
+	tmpHome := shortTempDir(t, "waggle-healthy-*")
 
 	const projectID = "healthy-broker-test"
 
@@ -288,17 +281,8 @@ func TestE2E_HelpFromNonGitDir(t *testing.T) {
 
 	tmpBin := buildBinary(t)
 
-	nonGitDir, err := os.MkdirTemp("/tmp", "waggle-nongit-*")
-	if err != nil {
-		t.Fatalf("mkdirtemp nongit: %v", err)
-	}
-	defer os.RemoveAll(nonGitDir)
-
-	fakeHome, err := os.MkdirTemp("/tmp", "waggle-fakehome-*")
-	if err != nil {
-		t.Fatalf("mkdirtemp fakehome: %v", err)
-	}
-	defer os.RemoveAll(fakeHome)
+	nonGitDir := shortTempDir(t, "waggle-nongit-*")
+	fakeHome := shortTempDir(t, "waggle-fakehome-*")
 
 	subcommands := [][]string{
 		{"listen", "--help"},
