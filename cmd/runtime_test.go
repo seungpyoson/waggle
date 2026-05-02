@@ -351,6 +351,43 @@ func TestUninstallAllPurgeDryRunDoesNotMutate(t *testing.T) {
 	}
 }
 
+func TestUninstallPurgeStopsRuntimeBeforeRemovingState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	if err := os.MkdirAll(filepath.Join(home, ".waggle", "runtime"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".waggle", "runtime", "runtime.db"), []byte("state"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	originalStopRuntime := uninstallStopRuntime
+	t.Cleanup(func() {
+		uninstallStopRuntime = originalStopRuntime
+	})
+
+	stoppedBeforeRemove := false
+	uninstallStopRuntime = func() error {
+		if _, err := os.Stat(filepath.Join(home, ".waggle")); err != nil {
+			t.Fatalf("runtime stop ran after state removal: %v", err)
+		}
+		stoppedBeforeRemove = true
+		return nil
+	}
+
+	stdout, stderr := executeRootCommandForTest(t, "uninstall", "--purge")
+	if stderr != "" {
+		t.Fatalf("uninstall stderr = %q, want empty", stderr)
+	}
+	if !stoppedBeforeRemove {
+		t.Fatal("runtime stop was not called before purge")
+	}
+	if !strings.Contains(stdout, "runtime-daemon") || !strings.Contains(stdout, "stop if running") {
+		t.Fatalf("uninstall stdout = %q, want runtime stop action", stdout)
+	}
+}
+
 type commandTestState struct {
 	paths config.Paths
 }

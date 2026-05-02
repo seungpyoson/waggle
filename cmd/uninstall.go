@@ -5,8 +5,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 
+	"github.com/seungpyoson/waggle/internal/broker"
+	"github.com/seungpyoson/waggle/internal/config"
 	"github.com/seungpyoson/waggle/internal/install"
+	rt "github.com/seungpyoson/waggle/internal/runtime"
 	"github.com/spf13/cobra"
 )
 
@@ -14,6 +19,8 @@ var (
 	uninstallAll    bool
 	uninstallPurge  bool
 	uninstallDryRun bool
+
+	uninstallStopRuntime = stopRuntimeForUninstall
 )
 
 func init() {
@@ -79,6 +86,13 @@ func runUninstall(home string, all, purge, dryRun bool) ([]map[string]any, error
 	}
 
 	if purge {
+		record("runtime-daemon", plannedAction(dryRun, "stop if running"))
+		if !dryRun {
+			if err := uninstallStopRuntime(); err != nil {
+				return actions, err
+			}
+		}
+
 		waggleDir := filepath.Join(home, ".waggle")
 		record(waggleDir, plannedAction(dryRun, "remove state"))
 		if !dryRun {
@@ -113,4 +127,35 @@ func removeOwnedTree(path, root string) error {
 		return fmt.Errorf("lstat %s: %w", path, err)
 	}
 	return os.RemoveAll(path)
+}
+
+func stopRuntimeForUninstall() error {
+	runtimePaths, err := resolveRuntimePaths()
+	if err != nil {
+		return err
+	}
+	if !rt.IsRunning(runtimePaths) {
+		return nil
+	}
+
+	pid, err := broker.ReadPID(runtimePaths.RuntimePID)
+	if err != nil {
+		return fmt.Errorf("read runtime pid: %w", err)
+	}
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return fmt.Errorf("find runtime process: %w", err)
+	}
+	if err := process.Signal(syscall.SIGTERM); err != nil {
+		return fmt.Errorf("signal runtime process: %w", err)
+	}
+
+	deadline := time.Now().Add(config.Defaults.ShutdownTimeout)
+	for rt.IsRunning(runtimePaths) {
+		if time.Now().After(deadline) {
+			return fmt.Errorf("runtime still running after SIGTERM")
+		}
+		time.Sleep(config.Defaults.StartupPollInterval)
+	}
+	return nil
 }
