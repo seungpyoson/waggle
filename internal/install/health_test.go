@@ -124,6 +124,15 @@ func hasHealthIssueContaining(issues []HealthIssue, problem string) bool {
 	return false
 }
 
+func hasHealthIssueForAssetContaining(issues []HealthIssue, asset, problem string) bool {
+	for _, issue := range issues {
+		if issue.Asset == asset && strings.Contains(issue.Problem, problem) {
+			return true
+		}
+	}
+	return false
+}
+
 func TestCheckClaudeCode_Healthy(t *testing.T) {
 	tmpHome := t.TempDir()
 
@@ -195,6 +204,33 @@ func TestCheckClaudeCode_BrokenSymlinkedHook(t *testing.T) {
 	}
 	if !hasHealthIssueContaining(issues, "symlink") {
 		t.Fatalf("expected symlink issue, got %+v", issues)
+	}
+}
+
+func TestCheckClaudeCode_DanglingSymlinkedSkillReportsOnlySymlink(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	if err := installClaudeCode(tmpHome); err != nil {
+		t.Fatalf("install failed: %v", err)
+	}
+
+	skillPath := filepath.Join(tmpHome, ".claude", "skills", "waggle", "send.md")
+	if err := os.Remove(skillPath); err != nil {
+		t.Fatalf("remove installed skill: %v", err)
+	}
+	if err := os.Symlink(filepath.Join(tmpHome, "missing-target.md"), skillPath); err != nil {
+		t.Fatalf("symlink skill: %v", err)
+	}
+
+	issues, state := CheckClaudeCode(tmpHome)
+	if state != StateBroken {
+		t.Fatalf("expected StateBroken for dangling skill symlink, got %q", state)
+	}
+	if !hasHealthIssueForAssetContaining(issues, skillPath, "symlink") {
+		t.Fatalf("expected symlink issue for %s, got %+v", skillPath, issues)
+	}
+	if hasHealthIssueForAssetContaining(issues, skillPath, "missing") {
+		t.Fatalf("did not expect redundant missing issue for dangling symlink, got %+v", issues)
 	}
 }
 
@@ -563,6 +599,33 @@ func TestCheckCodex_BrokenSymlinkedAgentsFile(t *testing.T) {
 	}
 	if !hasHealthIssueContaining(issues, "symlink") {
 		t.Fatalf("expected symlink issue, got %+v", issues)
+	}
+}
+
+func TestCheckCodex_DanglingSymlinkedSkillReportsOnlySymlink(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	if err := installCodex(tmpHome); err != nil {
+		t.Fatalf("install failed: %v", err)
+	}
+
+	skillPath := filepath.Join(tmpHome, ".codex", "skills", "waggle-runtime", "SKILL.md")
+	if err := os.Remove(skillPath); err != nil {
+		t.Fatalf("remove installed skill: %v", err)
+	}
+	if err := os.Symlink(filepath.Join(tmpHome, "missing-target.md"), skillPath); err != nil {
+		t.Fatalf("symlink skill: %v", err)
+	}
+
+	issues, state := CheckCodex(tmpHome)
+	if state != StateBroken {
+		t.Fatalf("expected StateBroken for dangling skill symlink, got %q", state)
+	}
+	if !hasHealthIssueForAssetContaining(issues, skillPath, "symlink") {
+		t.Fatalf("expected symlink issue for %s, got %+v", skillPath, issues)
+	}
+	if hasHealthIssueForAssetContaining(issues, skillPath, "missing") {
+		t.Fatalf("did not expect redundant missing issue for dangling symlink, got %+v", issues)
 	}
 }
 

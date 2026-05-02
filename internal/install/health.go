@@ -176,6 +176,7 @@ func CheckClaudeCode(homeDir string) ([]HealthIssue, AdapterState) {
 			skillPath := filepath.Join(skillDir, skill)
 			if issue := unsafePathIssue(skillPath, homeDir, "skill file "+skill, repairCmd); issue != nil {
 				issues = append(issues, *issue)
+				break // Report the unsafe path itself; avoid misleading "missing" noise.
 			}
 			if !fileExists(skillPath) {
 				issues = append(issues, HealthIssue{
@@ -243,8 +244,10 @@ func CheckCodex(homeDir string) ([]HealthIssue, AdapterState) {
 	// Step 2: Check if waggle files are present on disk
 	skillPath := filepath.Join(codexDir, "skills", "waggle-runtime", "SKILL.md")
 	skillExists := fileExists(skillPath)
+	skillUnsafe := false
 	if issue := unsafePathIssue(skillPath, homeDir, "SKILL.md", repairCmd); issue != nil {
 		issues = append(issues, *issue)
+		skillUnsafe = true
 	}
 
 	// Step 3: Validate marker topology before deriving state.
@@ -286,13 +289,13 @@ func CheckCodex(homeDir string) ([]HealthIssue, AdapterState) {
 		})
 	}
 
-	if !skillExists {
+	if !skillExists && !skillUnsafe {
 		issues = append(issues, HealthIssue{
 			Asset:   skillPath,
 			Problem: "SKILL.md missing",
 			Repair:  repairCmd,
 		})
-	} else {
+	} else if skillExists && !skillUnsafe {
 		appendEmbeddedFileIssue(&issues, skillPath, codexFiles, "codex/skills/waggle-runtime/SKILL.md", "SKILL.md", repairCmd)
 	}
 
