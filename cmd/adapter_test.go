@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/seungpyoson/waggle/internal/config"
+	"github.com/seungpyoson/waggle/internal/install"
 	rt "github.com/seungpyoson/waggle/internal/runtime"
 )
 
@@ -18,6 +19,7 @@ func TestAdapterBootstrapRegistersWatchAndDerivesTTYAgentName(t *testing.T) {
 	t.Setenv("TTY", "/dev/ttys009")
 	t.Setenv("WAGGLE_PROJECT_ID", "proj-bootstrap")
 	t.Setenv("WAGGLE_ADAPTER_SKIP_RUNTIME_START", "1")
+	installCodexForAdapterCommandTest(t)
 
 	stdout, stderr := executeRootCommandForTest(t, "adapter", "bootstrap", "codex")
 	if stderr != "" {
@@ -77,6 +79,7 @@ func TestAdapterBootstrapReturnsUnreadRecordsAndMarksThemSurfaced(t *testing.T) 
 	t.Setenv("HOME", home)
 	t.Setenv("WAGGLE_PROJECT_ID", "proj-bootstrap")
 	t.Setenv("WAGGLE_ADAPTER_SKIP_RUNTIME_START", "1")
+	installCodexForAdapterCommandTest(t)
 
 	store := openRuntimeStoreForTest(t)
 	now := time.Now().UTC().Round(time.Second)
@@ -123,6 +126,7 @@ func TestAdapterBootstrapMarkdownUsesExplicitOverrides(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("WAGGLE_PROJECT_ID", "proj-default")
 	t.Setenv("WAGGLE_ADAPTER_SKIP_RUNTIME_START", "1")
+	installCodexForAdapterCommandTest(t)
 
 	stdout, stderr := executeRootCommandForTest(
 		t,
@@ -158,6 +162,7 @@ func TestAdapterBootstrapDoesNotLeakFlagStateAcrossExecutions(t *testing.T) {
 	t.Setenv("WAGGLE_PROJECT_ID", "proj-bootstrap")
 	t.Setenv("TTY", "/dev/ttys009")
 	t.Setenv("WAGGLE_ADAPTER_SKIP_RUNTIME_START", "1")
+	installCodexForAdapterCommandTest(t)
 
 	stdout, stderr := executeRootCommandForTest(
 		t,
@@ -205,6 +210,7 @@ func TestAdapterBootstrapMarkdownSilentWhenRuntimeStoreUnavailable(t *testing.T)
 	t.Setenv("HOME", home)
 	t.Setenv("WAGGLE_PROJECT_ID", "proj-runtime-db-unavailable")
 	t.Setenv("WAGGLE_ADAPTER_SKIP_RUNTIME_START", "1")
+	installCodexForAdapterCommandTest(t)
 	blockRuntimeDirForTest(t, home)
 
 	stdout, stderr := executeRootCommandForTest(t, "adapter", "bootstrap", "codex", "--format", "markdown")
@@ -221,6 +227,7 @@ func TestAdapterBootstrapJSONReportsSkippedWhenRuntimeStoreUnavailable(t *testin
 	t.Setenv("HOME", home)
 	t.Setenv("WAGGLE_PROJECT_ID", "proj-runtime-db-unavailable")
 	t.Setenv("WAGGLE_ADAPTER_SKIP_RUNTIME_START", "1")
+	installCodexForAdapterCommandTest(t)
 	blockRuntimeDirForTest(t, home)
 
 	stdout, stderr := executeRootCommandForTest(t, "adapter", "bootstrap", "codex")
@@ -248,6 +255,43 @@ func TestAdapterBootstrapJSONReportsSkippedWhenRuntimeStoreUnavailable(t *testin
 	}
 	if resp.Tool != "codex" {
 		t.Fatalf("tool = %q, want codex", resp.Tool)
+	}
+}
+
+func TestAdapterBootstrapSkipsUninstalledIntegrationWithoutCreatingState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("WAGGLE_PROJECT_ID", "proj-bootstrap")
+	t.Setenv("WAGGLE_ADAPTER_SKIP_RUNTIME_START", "1")
+
+	stdout, stderr := executeRootCommandForTest(t, "adapter", "bootstrap", "codex")
+	if stderr != "" {
+		t.Fatalf("adapter bootstrap stderr = %q, want empty", stderr)
+	}
+
+	var resp struct {
+		OK         bool   `json:"ok"`
+		Skipped    bool   `json:"skipped"`
+		SkipReason string `json:"skip_reason"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &resp); err != nil {
+		t.Fatalf("unmarshal skipped bootstrap response: %v", err)
+	}
+	if resp.OK || !resp.Skipped {
+		t.Fatalf("bootstrap response = %+v, want skipped", resp)
+	}
+	if !strings.Contains(resp.SkipReason, "integration is not installed") {
+		t.Fatalf("skip_reason = %q, want not installed", resp.SkipReason)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".waggle")); !os.IsNotExist(err) {
+		t.Fatalf(".waggle should not be recreated for stale bootstrap, stat err = %v", err)
+	}
+}
+
+func installCodexForAdapterCommandTest(t *testing.T) {
+	t.Helper()
+	if err := install.InstallCodex(); err != nil {
+		t.Fatalf("install Codex integration: %v", err)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -287,6 +288,66 @@ func TestExecuteRootCommandForTestDoesNotLeakInstallUninstallFlag(t *testing.T) 
 	}
 	if !strings.Contains(stdout, `"Codex integration installed. Restart Codex to activate."`) {
 		t.Fatalf("install stdout = %q, want install message", stdout)
+	}
+}
+
+func TestUninstallAllPurgeRemovesIntegrationsAndState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	if stdout, stderr := executeRootCommandForTest(t, "install", "codex"); stderr != "" || !strings.Contains(stdout, `"ok": true`) {
+		t.Fatalf("install codex stdout=%q stderr=%q", stdout, stderr)
+	}
+	if stdout, stderr := executeRootCommandForTest(t, "install", "gemini"); stderr != "" || !strings.Contains(stdout, `"ok": true`) {
+		t.Fatalf("install gemini stdout=%q stderr=%q", stdout, stderr)
+	}
+	if err := os.MkdirAll(filepath.Join(home, ".waggle", "runtime"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".waggle", "runtime", "runtime.db"), []byte("state"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout, stderr := executeRootCommandForTest(t, "uninstall", "--all", "--purge")
+	if stderr != "" {
+		t.Fatalf("uninstall stderr = %q, want empty", stderr)
+	}
+	for _, want := range []string{"claude-code", "codex", "gemini", "auggie", "augment", "shell-hook", ".waggle"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("uninstall stdout = %q, want action for %q", stdout, want)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(home, ".codex", "skills", "waggle-runtime")); !os.IsNotExist(err) {
+		t.Fatalf("Codex skill should be removed, stat err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".waggle")); !os.IsNotExist(err) {
+		t.Fatalf(".waggle should be removed, stat err = %v", err)
+	}
+}
+
+func TestUninstallAllPurgeDryRunDoesNotMutate(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	if stdout, stderr := executeRootCommandForTest(t, "install", "codex"); stderr != "" || !strings.Contains(stdout, `"ok": true`) {
+		t.Fatalf("install codex stdout=%q stderr=%q", stdout, stderr)
+	}
+	if err := os.MkdirAll(filepath.Join(home, ".waggle", "runtime"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout, stderr := executeRootCommandForTest(t, "uninstall", "--all", "--purge", "--dry-run")
+	if stderr != "" {
+		t.Fatalf("uninstall dry-run stderr = %q, want empty", stderr)
+	}
+	if !strings.Contains(stdout, `"dry_run": true`) || !strings.Contains(stdout, "would remove state") {
+		t.Fatalf("uninstall dry-run stdout = %q, want dry-run planned actions", stdout)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".codex", "skills", "waggle-runtime", "SKILL.md")); err != nil {
+		t.Fatalf("Codex skill should remain after dry-run: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".waggle")); err != nil {
+		t.Fatalf(".waggle should remain after dry-run: %v", err)
 	}
 }
 

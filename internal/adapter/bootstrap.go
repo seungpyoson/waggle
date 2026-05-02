@@ -13,6 +13,7 @@ import (
 
 	"github.com/seungpyoson/waggle/internal/broker"
 	"github.com/seungpyoson/waggle/internal/config"
+	"github.com/seungpyoson/waggle/internal/install"
 	rt "github.com/seungpyoson/waggle/internal/runtime"
 )
 
@@ -39,6 +40,10 @@ func Bootstrap(input BootstrapInput) (BootstrapResult, error) {
 	tool := sanitizeToken(input.Tool)
 	if tool == "" {
 		return BootstrapResult{}, fmt.Errorf("tool required")
+	}
+
+	if skipReason := uninstalledToolSkipReason(tool); skipReason != "" {
+		return BootstrapResult{Tool: tool, Skipped: true, SkipReason: skipReason}, nil
 	}
 
 	runtimePaths, err := resolveRuntimePaths()
@@ -113,6 +118,18 @@ func Bootstrap(input BootstrapInput) (BootstrapResult, error) {
 
 	result.Records = records
 	return result, nil
+}
+
+func uninstalledToolSkipReason(tool string) string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Sprintf("cannot determine adapter install state: %v", err)
+	}
+	_, state, known := install.CheckTool(home, tool)
+	if known && state == install.StateNotInstalled {
+		return fmt.Sprintf("%s integration is not installed", tool)
+	}
+	return ""
 }
 
 func skipRuntimeStore(result BootstrapResult, err error) BootstrapResult {
