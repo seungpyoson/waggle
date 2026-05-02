@@ -72,23 +72,28 @@ var startCmd = &cobra.Command{
 			return nil
 		}
 
-		installed, err := startAutoInstallDetected()
-		if err != nil {
-			return fmt.Errorf("auto-installing detected integrations: %w", err)
-		}
+		installed, autoInstallErr := startAutoInstallDetected()
 		installedPlatforms := make([]string, 0, len(installed))
 		for _, result := range installed {
 			installedPlatforms = append(installedPlatforms, result.Platform)
+		}
+		autoInstallError := ""
+		if autoInstallErr != nil {
+			autoInstallError = autoInstallErr.Error()
 		}
 
 		// Check if already running
 		if startBrokerIsRunning(paths.PID) {
 			pid, _ := startBrokerReadPID(paths.PID)
-			printJSON(map[string]any{
+			result := map[string]any{
 				"ok":                      true,
 				"message":                 fmt.Sprintf("broker already running (PID %d)", pid),
 				"auto_installed_adapters": installedPlatforms,
-			})
+			}
+			if autoInstallError != "" {
+				result["auto_install_error"] = autoInstallError
+			}
+			printJSON(result)
 			return nil
 		}
 
@@ -113,11 +118,15 @@ var startCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("broker started but cannot read PID: %w", err)
 		}
-		printJSON(map[string]any{
+		result := map[string]any{
 			"ok":                      true,
 			"message":                 fmt.Sprintf("broker started (PID %d)", pid),
 			"auto_installed_adapters": installedPlatforms,
-		})
+		}
+		if autoInstallError != "" {
+			result["auto_install_error"] = autoInstallError
+		}
+		printJSON(result)
 		return nil
 	},
 }

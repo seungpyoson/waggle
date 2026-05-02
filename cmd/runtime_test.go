@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/seungpyoson/waggle/internal/config"
+	"github.com/seungpyoson/waggle/internal/install"
 	rt "github.com/seungpyoson/waggle/internal/runtime"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -360,6 +362,52 @@ func TestStartAutoInstallsDetectedIntegrationsBeforeDaemonStart(t *testing.T) {
 	}
 	if !strings.Contains(stdout, `"auto_installed_adapters":`) || !strings.Contains(stdout, `"codex"`) {
 		t.Fatalf("start stdout = %q, want auto-installed Codex adapter", stdout)
+	}
+}
+
+func TestStartReportsAutoInstallFailureButStillStartsDaemon(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("WAGGLE_PROJECT_ID", "auto-install-start-fail-open")
+
+	originalAutoInstall := startAutoInstallDetected
+	originalIsRunning := startBrokerIsRunning
+	originalReadPID := startBrokerReadPID
+	originalCleanupStale := startBrokerCleanupStale
+	originalStartDaemon := startBrokerStartDaemon
+	originalWaitForReady := startBrokerWaitForReady
+	t.Cleanup(func() {
+		startAutoInstallDetected = originalAutoInstall
+		startBrokerIsRunning = originalIsRunning
+		startBrokerReadPID = originalReadPID
+		startBrokerCleanupStale = originalCleanupStale
+		startBrokerStartDaemon = originalStartDaemon
+		startBrokerWaitForReady = originalWaitForReady
+	})
+
+	daemonStarted := false
+	startAutoInstallDetected = func() ([]install.InstallResult, error) {
+		return nil, errors.New("auto-install unavailable")
+	}
+	startBrokerIsRunning = func(string) bool { return false }
+	startBrokerReadPID = func(string) (int, error) { return 4242, nil }
+	startBrokerCleanupStale = func(string, string) error { return nil }
+	startBrokerWaitForReady = func(string, time.Duration, time.Duration) error { return nil }
+	startBrokerStartDaemon = func(string, string, string, string, []string) error {
+		daemonStarted = true
+		return nil
+	}
+
+	stdout, stderr := executeRootCommandForTest(t, "start")
+	if stderr != "" {
+		t.Fatalf("start stderr = %q, want empty", stderr)
+	}
+	if !daemonStarted {
+		t.Fatal("daemon was not started after auto-install failure")
+	}
+	if !strings.Contains(stdout, `"auto_install_error": "auto-install unavailable"`) {
+		t.Fatalf("start stdout = %q, want auto_install_error", stdout)
 	}
 }
 
