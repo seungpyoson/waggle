@@ -48,7 +48,6 @@ func startTestBroker(t *testing.T) (string, *Broker, func()) {
 	time.Sleep(100 * time.Millisecond)
 	return sockPath, b, func() {
 		b.Shutdown()
-		os.Remove(sockPath)
 	}
 }
 
@@ -73,7 +72,6 @@ func startTestBrokerWithTTL(t *testing.T, ttlCheckPeriod time.Duration) (string,
 	time.Sleep(100 * time.Millisecond)
 	return sockPath, b, func() {
 		b.Shutdown()
-		os.Remove(sockPath)
 	}
 }
 
@@ -1220,7 +1218,6 @@ func TestBroker_MessagesSurviveRestart(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	defer func() {
 		b2.Shutdown()
-		os.Remove(sockPath)
 	}()
 
 	// Check inbox
@@ -2692,7 +2689,6 @@ func TestBroker_TaskTTLCheckerRuns(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	defer func() {
 		b.Shutdown()
-		os.Remove(sockPath)
 	}()
 
 	c := connectClient(t, sockPath)
@@ -2806,7 +2802,6 @@ func TestBroker_TaskStaleEvent(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	defer func() {
 		b.Shutdown()
-		os.Remove(sockPath)
 	}()
 
 	// Subscriber client
