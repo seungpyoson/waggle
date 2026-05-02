@@ -7,6 +7,8 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/spf13/cobra"
 )
 
@@ -35,7 +37,7 @@ var listenCmd = &cobra.Command{
 			if err == nil {
 				os.Stderr = errFile
 				// Also redirect OS fd 2 so log.Printf and any C-level writes go to file
-				syscall.Dup2(int(errFile.Fd()), 2)
+				_ = unix.Dup2(int(errFile.Fd()), 2)
 				defer errFile.Close()
 			}
 			// If errFile fails to open, keep original stderr — better than crashing
@@ -105,4 +107,3 @@ var listenCmd = &cobra.Command{
 		}
 	},
 }
-
