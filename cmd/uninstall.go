@@ -43,9 +43,10 @@ func init() {
 }
 
 var uninstallCmd = &cobra.Command{
-	Use:          "uninstall",
-	Short:        "Remove waggle integrations and optionally purge local state",
-	SilenceUsage: true,
+	Use:           "uninstall",
+	Short:         "Remove waggle integrations and optionally purge local state",
+	SilenceUsage:  true,
+	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if len(args) != 0 {
 			return fmt.Errorf("uninstall accepts flags only")

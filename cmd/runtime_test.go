@@ -474,9 +474,12 @@ func TestUninstallAllPurgeReportsActionsAfterIntegrationErrors(t *testing.T) {
 		return nil
 	}
 
-	stdout, _, err := executeRootCommandForTestWithError(t, "uninstall", "--all", "--purge")
+	stdout, stderr, err := executeRootCommandForTestWithError(t, "uninstall", "--all", "--purge")
 	if err == nil {
 		t.Fatal("uninstall error = nil, want integration failure")
+	}
+	if stderr != "" {
+		t.Fatalf("uninstall stderr = %q, want empty", stderr)
 	}
 
 	var resp struct {
