@@ -344,7 +344,7 @@ func TestIsResponding_HealthyBroker(t *testing.T) {
 }
 
 func TestIsResponding_MissingSocket(t *testing.T) {
-	if IsResponding(filepath.Join(t.TempDir(), "nonexistent-waggle.sock"), 500*time.Millisecond) {
+	if IsResponding(shortBrokerSocketPath(t, "nonexistent-waggle-*"), 500*time.Millisecond) {
 		t.Error("expected false for missing socket")
 	}
 }

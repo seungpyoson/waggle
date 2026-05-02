@@ -131,13 +131,13 @@ func sendRequest(t *testing.T, c *client.Client, req protocol.Request) *protocol
 	return resp
 }
 
-func receiveResponse(t *testing.T, c *client.Client) protocol.Response {
+func receiveResponse(t *testing.T, c *client.Client) *protocol.Response {
 	t.Helper()
 	resp, err := c.Receive()
 	if err != nil {
 		t.Fatalf("Receive: %v", err)
 	}
-	return resp
+	return &resp
 }
 
 func marshalJSON(t *testing.T, v any) []byte {
