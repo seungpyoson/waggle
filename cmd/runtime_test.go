@@ -445,6 +445,60 @@ func TestRunUninstallAllPurgeRemovesStateAfterIntegrationErrors(t *testing.T) {
 	}
 }
 
+func TestUninstallAllPurgeReportsActionsAfterIntegrationErrors(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, ".waggle", "runtime"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	originalTargets := uninstallTargets
+	originalStopRuntime := uninstallStopRuntime
+	t.Cleanup(func() {
+		uninstallTargets = originalTargets
+		uninstallStopRuntime = originalStopRuntime
+	})
+
+	uninstallTargets = []struct {
+		name string
+		fn   func() error
+	}{
+		{
+			name: "failing",
+			fn: func() error {
+				return fmt.Errorf("integration failed")
+			},
+		},
+	}
+	uninstallStopRuntime = func() error {
+		return nil
+	}
+
+	stdout, _, err := executeRootCommandForTestWithError(t, "uninstall", "--all", "--purge")
+	if err == nil {
+		t.Fatal("uninstall error = nil, want integration failure")
+	}
+
+	var resp struct {
+		OK      bool             `json:"ok"`
+		Code    string           `json:"code"`
+		Error   string           `json:"error"`
+		Actions []map[string]any `json:"actions"`
+	}
+	if unmarshalErr := json.Unmarshal([]byte(stdout), &resp); unmarshalErr != nil {
+		t.Fatalf("unmarshal uninstall response: %v\nstdout=%s", unmarshalErr, stdout)
+	}
+	if resp.OK || resp.Code != "UNINSTALL_ERROR" || !strings.Contains(resp.Error, "uninstall failing") {
+		t.Fatalf("uninstall response = %+v, want structured uninstall error", resp)
+	}
+	if len(resp.Actions) != 3 {
+		t.Fatalf("actions len = %d, want integration, runtime stop, and state removal", len(resp.Actions))
+	}
+	if _, statErr := os.Stat(filepath.Join(home, ".waggle")); !os.IsNotExist(statErr) {
+		t.Fatalf(".waggle stat error = %v, want removed", statErr)
+	}
+}
+
 func TestUninstallPurgeStopsRuntimeBeforeRemovingState(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -524,7 +578,16 @@ func resetFlagToDefault(flag *pflag.Flag) {
 
 func executeRootCommandForTest(t *testing.T, args ...string) (string, string) {
 	t.Helper()
+	stdout, stderr, err := executeRootCommandForTestWithError(t, args...)
+	if err != nil {
+		t.Fatalf("execute %v: %v", args, err)
+	}
 
+	return stdout, stderr
+}
+
+func executeRootCommandForTestWithError(t *testing.T, args ...string) (string, string, error) {
+	t.Helper()
 	originalState := captureCommandTestState()
 	defer func() {
 		originalState.restore()
@@ -542,11 +605,8 @@ func executeRootCommandForTest(t *testing.T, args ...string) (string, string) {
 	rootCmd.SetErr(&stderr)
 	rootCmd.SetArgs(args)
 
-	if err := rootCmd.Execute(); err != nil {
-		t.Fatalf("execute %v: %v", args, err)
-	}
-
-	return stdout.String(), stderr.String()
+	err := rootCmd.Execute()
+	return stdout.String(), stderr.String(), err
 }
 
 func openRuntimeStoreForTest(t *testing.T) *rt.Store {

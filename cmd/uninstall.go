@@ -43,8 +43,9 @@ func init() {
 }
 
 var uninstallCmd = &cobra.Command{
-	Use:   "uninstall",
-	Short: "Remove waggle integrations and optionally purge local state",
+	Use:          "uninstall",
+	Short:        "Remove waggle integrations and optionally purge local state",
+	SilenceUsage: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if len(args) != 0 {
 			return fmt.Errorf("uninstall accepts flags only")
@@ -58,14 +59,18 @@ var uninstallCmd = &cobra.Command{
 			return fmt.Errorf("getting home dir: %w", err)
 		}
 		actions, err := runUninstall(home, uninstallAll, uninstallPurge, uninstallDryRun)
-		if err != nil {
-			return err
-		}
-		printJSON(map[string]any{
-			"ok":      true,
+		result := map[string]any{
+			"ok":      err == nil,
 			"dry_run": uninstallDryRun,
 			"actions": actions,
-		})
+		}
+		if err != nil {
+			result["code"] = "UNINSTALL_ERROR"
+			result["error"] = err.Error()
+			printJSON(result)
+			return err
+		}
+		printJSON(result)
 		return nil
 	},
 }
