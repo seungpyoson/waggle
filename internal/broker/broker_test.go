@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -16,13 +17,26 @@ import (
 	"github.com/seungpyoson/waggle/internal/protocol"
 )
 
+func shortBrokerSocketPath(t *testing.T, pattern string) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", pattern) // Use /tmp to keep Unix socket paths below the macOS 104-byte limit.
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(dir); err != nil {
+			t.Logf("cleanup temp socket dir: %v", err)
+		}
+	})
+	return filepath.Join(dir, "broker.sock")
+}
+
 func startTestBroker(t *testing.T) (string, *Broker, func()) {
 	t.Helper()
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
 
-	// Use /tmp for socket to avoid path length issues
-	sockPath := fmt.Sprintf("/tmp/waggle-test-%d.sock", time.Now().UnixNano())
+	sockPath := shortBrokerSocketPath(t, "waggle-test-*")
 	dbPath := fmt.Sprintf("%s/db", tmpDir)
 
 	b, err := New(Config{SocketPath: sockPath, DBPath: dbPath})
@@ -43,7 +57,7 @@ func startTestBrokerWithTTL(t *testing.T, ttlCheckPeriod time.Duration) (string,
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
 
-	sockPath := fmt.Sprintf("/tmp/waggle-test-%d.sock", time.Now().UnixNano())
+	sockPath := shortBrokerSocketPath(t, "waggle-test-*")
 	dbPath := fmt.Sprintf("%s/db", tmpDir)
 
 	b, err := New(Config{
@@ -1152,7 +1166,7 @@ func TestBroker_MessagesSurviveRestart(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
 
-	sockPath := fmt.Sprintf("/tmp/waggle-test-%d.sock", time.Now().UnixNano())
+	sockPath := shortBrokerSocketPath(t, "waggle-test-*")
 	dbPath := fmt.Sprintf("%s/db", tmpDir)
 
 	// Start first broker
@@ -1976,8 +1990,7 @@ func TestBroker_AwaitAckBrokerShutdown(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
 
-	// Use /tmp for socket to avoid path length issues
-	sockPath := fmt.Sprintf("/tmp/waggle-test-%d.sock", time.Now().UnixNano())
+	sockPath := shortBrokerSocketPath(t, "waggle-test-*")
 	dbPath := fmt.Sprintf("%s/db", tmpDir)
 
 	b, err := New(Config{SocketPath: sockPath, DBPath: dbPath})
@@ -2630,7 +2643,7 @@ func TestBroker_TaskTTLCheckerRuns(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
 
-	sockPath := fmt.Sprintf("/tmp/waggle-test-%d.sock", time.Now().UnixNano())
+	sockPath := shortBrokerSocketPath(t, "waggle-test-*")
 	dbPath := fmt.Sprintf("%s/db", tmpDir)
 
 	// Create broker with short task TTL check period
@@ -2743,7 +2756,7 @@ func TestBroker_TaskStaleEvent(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
 
-	sockPath := fmt.Sprintf("/tmp/waggle-test-%d.sock", time.Now().UnixNano())
+	sockPath := shortBrokerSocketPath(t, "waggle-test-*")
 	dbPath := fmt.Sprintf("%s/db", tmpDir)
 
 	// Create broker with short task TTL check period and stale threshold
