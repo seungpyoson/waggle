@@ -111,14 +111,18 @@ func CheckClaudeCode(homeDir string) ([]HealthIssue, AdapterState) {
 
 	// Step 3: Derive state from fingerprint × files matrix
 	if !hookRegistered && !anyFileExists {
+		if len(issues) > 0 {
+			return issues, StateBroken
+		}
 		if staleRef != "" {
 			// No canonical fingerprint, no files, but a stale waggle reference
 			// exists in settings.json — surface it with repair guidance
-			return []HealthIssue{{
+			issues = append(issues, HealthIssue{
 				Asset:   settingsPath,
 				Problem: "stale waggle hook reference in settings.json: " + staleRef,
 				Repair:  repairCmd,
-			}}, StateBroken
+			})
+			return issues, StateBroken
 		}
 		return nil, StateNotInstalled
 	}

@@ -234,6 +234,29 @@ func TestCheckClaudeCode_DanglingSymlinkedSkillReportsOnlySymlink(t *testing.T) 
 	}
 }
 
+func TestCheckClaudeCode_DanglingSymlinkedHookWithoutFingerprintIsBroken(t *testing.T) {
+	tmpHome := t.TempDir()
+	hooksDir := filepath.Join(tmpHome, ".claude", "hooks")
+	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	hookPath := filepath.Join(hooksDir, "waggle-connect.sh")
+	if err := os.Symlink(filepath.Join(tmpHome, "missing-hook.sh"), hookPath); err != nil {
+		t.Fatalf("symlink hook: %v", err)
+	}
+
+	issues, state := CheckClaudeCode(tmpHome)
+	if state != StateBroken {
+		t.Fatalf("expected StateBroken for dangling hook symlink, got %q", state)
+	}
+	if !hasHealthIssueForAssetContaining(issues, hookPath, "symlink") {
+		t.Fatalf("expected symlink issue for %s, got %+v", hookPath, issues)
+	}
+	if hasHealthIssueForAssetContaining(issues, hookPath, "missing") {
+		t.Fatalf("did not expect redundant missing issue for dangling symlink, got %+v", issues)
+	}
+}
+
 func TestCheckClaudeCode_BrokenInvalidSettingsJSON(t *testing.T) {
 	tmpHome := t.TempDir()
 
