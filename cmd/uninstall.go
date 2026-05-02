@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -147,6 +148,9 @@ func stopRuntimeForUninstall() error {
 		return fmt.Errorf("find runtime process: %w", err)
 	}
 	if err := process.Signal(syscall.SIGTERM); err != nil {
+		if isAlreadyExitedProcessError(err) {
+			return nil
+		}
 		return fmt.Errorf("signal runtime process: %w", err)
 	}
 
@@ -158,4 +162,8 @@ func stopRuntimeForUninstall() error {
 		time.Sleep(config.Defaults.StartupPollInterval)
 	}
 	return nil
+}
+
+func isAlreadyExitedProcessError(err error) bool {
+	return errors.Is(err, os.ErrProcessDone) || errors.Is(err, syscall.ESRCH)
 }

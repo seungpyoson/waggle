@@ -3,9 +3,11 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -385,6 +387,18 @@ func TestUninstallPurgeStopsRuntimeBeforeRemovingState(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "runtime-daemon") || !strings.Contains(stdout, "stop if running") {
 		t.Fatalf("uninstall stdout = %q, want runtime stop action", stdout)
+	}
+}
+
+func TestIsAlreadyExitedProcessError(t *testing.T) {
+	if !isAlreadyExitedProcessError(os.ErrProcessDone) {
+		t.Fatal("os.ErrProcessDone should be treated as already exited")
+	}
+	if !isAlreadyExitedProcessError(fmt.Errorf("wrapped: %w", syscall.ESRCH)) {
+		t.Fatal("wrapped ESRCH should be treated as already exited")
+	}
+	if isAlreadyExitedProcessError(syscall.EPERM) {
+		t.Fatal("EPERM should not be treated as already exited")
 	}
 }
 
