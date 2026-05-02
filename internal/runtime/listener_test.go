@@ -243,7 +243,7 @@ func TestBrokerListenerFailedHandshakeDoesNotReleaseActiveListenerToken(t *testi
 	assertPushTokenStillAccepted(t, socketPath, active, "alice-push", token, "failed Listen handshake")
 }
 
-func TestBrokerListenerCatchUpFailedHandshakeDoesNotReleaseActiveListenerToken(t *testing.T) {
+func TestBrokerListenerCatchUpReadsWhileActiveListenerConnected(t *testing.T) {
 	socketPath, cleanup := startRuntimeTestBroker(t, "proj-catchup-duplicate")
 	defer cleanup()
 
@@ -272,17 +272,14 @@ func TestBrokerListenerCatchUpFailedHandshakeDoesNotReleaseActiveListenerToken(t
 		AgentName: "alice",
 		Source:    "hook",
 	}, func(d Delivery) error {
-		t.Fatal("duplicate catch-up unexpectedly received delivery")
+		t.Fatal("empty catch-up unexpectedly received delivery")
 		return nil
 	})
-	if err == nil {
-		t.Fatal("expected duplicate catch-up handshake to fail")
-	}
-	if !strings.Contains(err.Error(), string(protocol.ErrAlreadyConnected)) {
-		t.Fatalf("CatchUp() error = %v, want %s", err, protocol.ErrAlreadyConnected)
+	if err != nil {
+		t.Fatalf("CatchUp() error = %v", err)
 	}
 
-	assertPushTokenStillAccepted(t, socketPath, active, "alice-push", token, "failed CatchUp handshake")
+	assertPushTokenStillAccepted(t, socketPath, active, "alice-push", token, "CatchUp replay")
 }
 
 func TestBrokerListenerCatchUpReadsInboxWithoutBaseConnection(t *testing.T) {
@@ -334,7 +331,7 @@ func TestBrokerListenerCatchUpReadsInboxWithoutBaseConnection(t *testing.T) {
 	}
 }
 
-func TestBrokerListenerCatchUpReleasesPushToken(t *testing.T) {
+func TestBrokerListenerCatchUpDoesNotReleaseReservedPushToken(t *testing.T) {
 	socketPath, cleanup := startRuntimeTestBroker(t, "proj-catchup-release")
 	defer cleanup()
 
@@ -380,7 +377,8 @@ func TestBrokerListenerCatchUpReleasesPushToken(t *testing.T) {
 		t.Fatalf("CatchUp() deliveries = %d, want 1", len(got))
 	}
 
-	waitForPushTokenRejected(t, socketPath, "alice-push", token)
+	active := connectRuntimeClient(t, socketPath)
+	assertPushTokenStillAccepted(t, socketPath, active, "alice-push", token, "CatchUp replay")
 }
 
 func TestReleasePushTokenForAgentSuppressesAlreadyRevokedTokenWarning(t *testing.T) {

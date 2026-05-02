@@ -25,6 +25,7 @@ const (
 
 	CmdSend     = "send"
 	CmdInbox    = "inbox"
+	CmdReplay   = "replay"
 	CmdAck      = "ack"
 	CmdPresence = "presence"
 

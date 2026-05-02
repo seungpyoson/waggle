@@ -281,6 +281,39 @@ func TestWhoamiReturnsMappedAgentIdentity(t *testing.T) {
 	}
 }
 
+func TestWhoamiFallsBackToTTYMapping(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("WAGGLE_AGENT_PPID", "")
+	t.Setenv("TTY", "/dev/ttys009")
+
+	runtimeDir := config.NewPaths("").RuntimeDir
+	nonce := "12345-1711843200000003"
+	if err := ia.WriteSessionMapping(runtimeDir, 12345, nonce, "codex-ttys009", "proj-whoami"); err != nil {
+		t.Fatalf("write session mapping: %v", err)
+	}
+	if err := ia.WriteTTYMapping(runtimeDir, "ttys009", nonce); err != nil {
+		t.Fatalf("write tty mapping: %v", err)
+	}
+
+	stdout, stderr := executeRootCommandForTest(t, "whoami")
+	if stderr != "" {
+		t.Fatalf("whoami stderr = %q, want empty", stderr)
+	}
+
+	var resp struct {
+		OK        bool   `json:"ok"`
+		AgentName string `json:"agent_name"`
+		Source    string `json:"source"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &resp); err != nil {
+		t.Fatalf("unmarshal whoami response: %v", err)
+	}
+	if !resp.OK || resp.AgentName != "codex-ttys009" || resp.Source != "tty" {
+		t.Fatalf("whoami response = %+v", resp)
+	}
+}
+
 func blockRuntimeDirForTest(t *testing.T, home string) {
 	t.Helper()
 	waggleDir := filepath.Join(home, ".waggle")

@@ -51,7 +51,8 @@ func Bootstrap(input BootstrapInput) (BootstrapResult, error) {
 		return BootstrapResult{Tool: tool, Skipped: true, SkipReason: err.Error()}, nil
 	}
 
-	agentName := ResolveAgentName(tool, input.AgentName, resolveTTY(), os.Getppid(), os.Getpid())
+	tty := resolveTTY()
+	agentName := ResolveAgentName(tool, input.AgentName, tty, os.Getppid(), os.Getpid())
 	source := input.Source
 	if source == "" {
 		source = tool + "-adapter"
@@ -97,6 +98,11 @@ func Bootstrap(input BootstrapInput) (BootstrapResult, error) {
 	if err := WriteSessionMapping(runtimePaths.RuntimeDir, ppid, nonce, agentName, projectID); err != nil {
 		log.Printf("warning: write session mapping failed: %v; push delivery degraded", err)
 	}
+	if ttyName := sanitizeTTY(tty); ttyName != "" {
+		if err := WriteTTYMapping(runtimePaths.RuntimeDir, ttyName, nonce); err != nil {
+			log.Printf("warning: write TTY session mapping failed: %v; push delivery degraded", err)
+		}
+	}
 
 	records, err := store.Unread(projectID, agentName)
 	if err != nil {
@@ -113,6 +119,18 @@ func Bootstrap(input BootstrapInput) (BootstrapResult, error) {
 
 	result.Records = records
 	return result, nil
+}
+
+func WriteTTYMapping(runtimeDir, ttyName, nonce string) error {
+	if err := os.MkdirAll(runtimeDir, 0o700); err != nil {
+		return err
+	}
+	ttyName = sanitizeToken(ttyName)
+	if ttyName == "" {
+		return fmt.Errorf("tty name required")
+	}
+	ttyPath := filepath.Join(runtimeDir, "agent-tty-"+ttyName)
+	return writeRuntimeFileAtomic(ttyPath, []byte(nonce+"\n"), 0o600)
 }
 
 func skipRuntimeStore(result BootstrapResult, err error) BootstrapResult {

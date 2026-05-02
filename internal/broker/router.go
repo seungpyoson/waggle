@@ -23,6 +23,7 @@ var noSessionRequired = map[string]bool{
 	protocol.CmdConnect:     true,
 	protocol.CmdStatus:      true,
 	protocol.CmdStop:        true,
+	protocol.CmdReplay:      true,
 	protocol.CmdPushReserve: true,
 	protocol.CmdPushRelease: true,
 }
@@ -75,6 +76,8 @@ func route(s *Session, req protocol.Request) protocol.Response {
 		return handleSend(s, req)
 	case protocol.CmdInbox:
 		return handleInbox(s, req)
+	case protocol.CmdReplay:
+		return handleReplay(s, req)
 	case protocol.CmdAck:
 		return handleAck(s, req)
 	case protocol.CmdPresence:
@@ -767,6 +770,17 @@ func handleSend(s *Session, req protocol.Request) protocol.Response {
 func handleInbox(s *Session, req protocol.Request) protocol.Response {
 	caller := strings.TrimSuffix(s.name, "-push")
 	messages, err := s.broker.msgStore.Inbox(caller)
+	if err != nil {
+		return protocol.ErrResponse(protocol.ErrInternalError, err.Error())
+	}
+	return protocol.OKResponse(mustMarshal(messages))
+}
+
+func handleReplay(s *Session, req protocol.Request) protocol.Response {
+	if req.Name == "" {
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, "name required")
+	}
+	messages, err := s.broker.msgStore.Inbox(req.Name)
 	if err != nil {
 		return protocol.ErrResponse(protocol.ErrInternalError, err.Error())
 	}

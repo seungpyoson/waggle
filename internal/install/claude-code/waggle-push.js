@@ -12,10 +12,15 @@ const rtDir = path.join(home, '.waggle', 'runtime');
 // Use WAGGLE_PPID (agent PID) not process.ppid (intermediate shell PID)
 const ppid = process.env.WAGGLE_PPID || String(process.ppid);
 if (!/^\d+$/.test(ppid)) process.exit(0);
-const pointerFile = path.join(rtDir, 'agent-ppid-' + ppid);
 
 try {
-    if (!fs.existsSync(pointerFile)) process.exit(0);
+    let pointerFile = path.join(rtDir, 'agent-ppid-' + ppid);
+    if (!fs.existsSync(pointerFile)) {
+        const tty = path.basename(process.env.TTY || '');
+        if (!/^[a-zA-Z0-9_-]+$/.test(tty)) process.exit(0);
+        pointerFile = path.join(rtDir, 'agent-tty-' + tty);
+        if (!fs.existsSync(pointerFile)) process.exit(0);
+    }
 
     const nonce = fs.readFileSync(pointerFile, 'utf8').trim();
     if (!nonce) process.exit(0);

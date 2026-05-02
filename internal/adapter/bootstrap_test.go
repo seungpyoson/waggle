@@ -240,6 +240,51 @@ func TestWriteSessionMapping(t *testing.T) {
 	}
 }
 
+func TestWriteTTYMapping(t *testing.T) {
+	dir := t.TempDir()
+	nonce := "12345-1711843200000000003"
+	if err := WriteTTYMapping(dir, "ttys009", nonce); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "agent-tty-ttys009"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != nonce+"\n" {
+		t.Fatalf("tty mapping = %q, want %q", string(data), nonce+"\\n")
+	}
+}
+
+func TestBootstrapWritesTTYMappingFallback(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("TTY", "/dev/ttys009")
+	t.Setenv("WAGGLE_PROJECT_ID", "proj-tty")
+	t.Setenv("WAGGLE_ADAPTER_SKIP_RUNTIME_START", "1")
+
+	result, err := Bootstrap(BootstrapInput{Tool: "codex"})
+	if err != nil {
+		t.Fatalf("Bootstrap: %v", err)
+	}
+	if result.AgentName != "codex-ttys009" {
+		t.Fatalf("AgentName = %q, want codex-ttys009", result.AgentName)
+	}
+
+	runtimeDir := config.NewPaths("").RuntimeDir
+	data, err := os.ReadFile(filepath.Join(runtimeDir, "agent-tty-ttys009"))
+	if err != nil {
+		t.Fatalf("read tty mapping: %v", err)
+	}
+	nonce := strings.TrimSpace(string(data))
+	sessionData, err := os.ReadFile(filepath.Join(runtimeDir, "agent-session-"+nonce))
+	if err != nil {
+		t.Fatalf("read session mapping: %v", err)
+	}
+	if !strings.Contains(string(sessionData), "codex-ttys009\n") {
+		t.Fatalf("session mapping = %q, want agent name", sessionData)
+	}
+}
+
 func TestWriteSessionMapping_NoncesAreDifferent(t *testing.T) {
 	dir := t.TempDir()
 	ppid := 12345

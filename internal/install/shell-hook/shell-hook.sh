@@ -7,9 +7,19 @@ __waggle_check() {
     local _apid="${WAGGLE_AGENT_PPID:-$PPID}"
     case "$_apid" in *[!0-9]*) return 0 ;; esac
     local _pm="$_wd/agent-ppid-$_apid"
-    [ -f "$_pm" ] || return 0
     local _nonce
-    read -r _nonce < "$_pm" 2>/dev/null || return 0
+    if [ -f "$_pm" ]; then
+        read -r _nonce < "$_pm" 2>/dev/null || return 0
+    elif [ -n "${TTY-}" ]; then
+        local _tty="${TTY##*/}"
+        case "$_tty" in ""|*[!A-Za-z0-9_-]*) return 0 ;; esac
+        local _tm="$_wd/agent-tty-$_tty"
+        [ -f "$_tm" ] || return 0
+        read -r _nonce < "$_tm" 2>/dev/null || return 0
+        _pm="$_tm"
+    else
+        return 0
+    fi
     [ -n "$_nonce" ] || return 0
     local _sm="$_wd/agent-session-$_nonce"
     [ -f "$_sm" ] || return 0
