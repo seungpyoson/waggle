@@ -346,6 +346,56 @@ func TestBrokerListenerCatchUpReadsInboxWithoutBaseConnection(t *testing.T) {
 	}
 }
 
+func TestBrokerListenerCatchUpClearsReplayDeadlineBeforeAck(t *testing.T) {
+	originalTimeout := config.Defaults.ConnectTimeout
+	shortTimeout := 25 * time.Millisecond
+	config.Defaults.ConnectTimeout = shortTimeout
+	t.Cleanup(func() {
+		config.Defaults.ConnectTimeout = originalTimeout
+	})
+
+	socketPath, cleanup := startRuntimeTestBroker(t, "proj-catchup-deadline")
+	defer cleanup()
+
+	sender := connectRuntimeClient(t, socketPath)
+	defer sender.Close()
+	resp, err := sender.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "sender"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.OK {
+		t.Fatalf("sender connect failed: %s", resp.Error)
+	}
+
+	sendResp, err := sender.Send(protocol.Request{
+		Cmd:     protocol.CmdSend,
+		Name:    "alice",
+		Message: "slow catch-up delivery",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sendResp.OK {
+		t.Fatalf("send failed: %s", sendResp.Error)
+	}
+
+	var got []Delivery
+	if err := NewBrokerListenerFactory().CatchUp(Watch{
+		ProjectID: "proj-catchup-deadline",
+		AgentName: "alice",
+		Source:    "hook",
+	}, func(d Delivery) error {
+		time.Sleep(2 * shortTimeout)
+		got = append(got, d)
+		return nil
+	}); err != nil {
+		t.Fatalf("CatchUp() error = %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("CatchUp() deliveries = %d, want 1", len(got))
+	}
+}
+
 func TestBrokerListenerCatchUpDoesNotReleaseReservedPushToken(t *testing.T) {
 	socketPath, cleanup := startRuntimeTestBroker(t, "proj-catchup-release")
 	defer cleanup()

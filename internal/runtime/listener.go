@@ -69,6 +69,9 @@ func (f *BrokerListenerFactory) CatchUp(w Watch, handler DeliveryHandler) error 
 	if !resp.OK {
 		return fmt.Errorf("replay: %s: %s", resp.Code, resp.Error)
 	}
+	if err := c.ClearDeadline(); err != nil {
+		return fmt.Errorf("clear replay deadline: %w", err)
+	}
 
 	var msgs []struct {
 		ID        int64  `json:"id"`
