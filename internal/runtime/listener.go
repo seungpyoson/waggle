@@ -95,6 +95,7 @@ func (f *BrokerListenerFactory) CatchUp(w Watch, handler DeliveryHandler) error 
 			SentAt:     sentAt,
 			ReceivedAt: time.Now().UTC(),
 		}); err != nil {
+			// Leave the message unacked so the next catch-up attempt can replay it.
 			return err
 		}
 		if err := ackReplayedMessage(c, w.AgentName, msg.ID); err != nil {

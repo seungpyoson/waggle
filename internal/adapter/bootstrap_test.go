@@ -60,6 +60,13 @@ func TestResolveAgentNameSanitizesTTY(t *testing.T) {
 	}
 }
 
+func TestSanitizeTTYPreservesUnderscore(t *testing.T) {
+	got := sanitizeTTY("/dev/tty_U0")
+	if got != "tty_u0" {
+		t.Fatalf("sanitizeTTY() = %q, want tty_u0", got)
+	}
+}
+
 func TestShouldSkipRuntimeStartForTestHonorsEnvUnderTestBinary(t *testing.T) {
 	t.Setenv("WAGGLE_ADAPTER_SKIP_RUNTIME_START", "1")
 
@@ -247,6 +254,21 @@ func TestWriteTTYMapping(t *testing.T) {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(filepath.Join(dir, "agent-tty-ttys009"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != nonce+"\n" {
+		t.Fatalf("tty mapping = %q, want %q", string(data), nonce+"\\n")
+	}
+}
+
+func TestWriteTTYMappingPreservesUnderscore(t *testing.T) {
+	dir := t.TempDir()
+	nonce := "12345-1711843200000000003"
+	if err := WriteTTYMapping(dir, "tty_U0", nonce); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "agent-tty-tty_u0"))
 	if err != nil {
 		t.Fatal(err)
 	}

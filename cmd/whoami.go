@@ -47,8 +47,14 @@ var whoamiCmd = &cobra.Command{
 			printJSON(map[string]any{"ok": false, "found": false, "reason": "session mapping is stale"})
 			return nil
 		}
-		lines := strings.Split(strings.TrimRight(string(sessionData), "\n"), "\n")
-		if len(lines) < 2 || !isSafeRuntimeToken(lines[0]) || !isSafeRuntimeToken(lines[1]) {
+		lines := strings.Split(strings.TrimSpace(string(sessionData)), "\n")
+		if len(lines) < 2 {
+			printJSON(map[string]any{"ok": false, "found": false, "reason": "session mapping is malformed"})
+			return nil
+		}
+		agentName := strings.TrimSpace(lines[0])
+		projectKey := strings.TrimSpace(lines[1])
+		if !isSafeRuntimeToken(agentName) || !isSafeRuntimeToken(projectKey) {
 			printJSON(map[string]any{"ok": false, "found": false, "reason": "session mapping is malformed"})
 			return nil
 		}
@@ -56,8 +62,8 @@ var whoamiCmd = &cobra.Command{
 		out := map[string]any{
 			"ok":          true,
 			"found":       true,
-			"agent_name":  lines[0],
-			"project_key": lines[1],
+			"agent_name":  agentName,
+			"project_key": projectKey,
 			"source":      source,
 		}
 		if source == "ppid" {

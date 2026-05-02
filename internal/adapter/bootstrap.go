@@ -125,7 +125,7 @@ func WriteTTYMapping(runtimeDir, ttyName, nonce string) error {
 	if err := os.MkdirAll(runtimeDir, 0o700); err != nil {
 		return err
 	}
-	ttyName = sanitizeToken(ttyName)
+	ttyName = sanitizeRuntimeToken(ttyName)
 	if ttyName == "" {
 		return fmt.Errorf("tty name required")
 	}
@@ -240,7 +240,21 @@ func sanitizeTTY(tty string) string {
 	if base == "." || base == string(filepath.Separator) || base == "" {
 		return ""
 	}
-	return sanitizeToken(base)
+	return sanitizeRuntimeToken(base)
+}
+
+func sanitizeRuntimeToken(v string) string {
+	v = strings.ToLower(strings.TrimSpace(v))
+	if v == "" {
+		return ""
+	}
+	for _, r := range v {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '_' || r == '-' {
+			continue
+		}
+		return ""
+	}
+	return v
 }
 
 // WriteSessionMapping writes the PPID pointer and unique session mapping for hook discovery.
