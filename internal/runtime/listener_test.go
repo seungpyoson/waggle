@@ -1,10 +1,13 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -237,34 +240,49 @@ func TestBrokerListenerFailedHandshakeDoesNotReleaseActiveListenerToken(t *testi
 		t.Fatal("expected duplicate listener handshake to fail")
 	}
 
-	sender := connectRuntimeClient(t, socketPath)
-	defer sender.Close()
-	resp, err = sender.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "sender"})
+	assertPushTokenStillAccepted(t, socketPath, active, "alice-push", token, "failed Listen handshake")
+}
+
+func TestBrokerListenerCatchUpFailedHandshakeDoesNotReleaseActiveListenerToken(t *testing.T) {
+	socketPath, cleanup := startRuntimeTestBroker(t, "proj-catchup-duplicate")
+	defer cleanup()
+
+	token, err := pushTokenForAgent(socketPath, "alice")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !resp.OK {
-		t.Fatalf("sender connect failed: %s: %s", resp.Code, resp.Error)
-	}
-	resp, err = sender.Send(protocol.Request{
-		Cmd:     protocol.CmdSend,
-		Name:    "alice",
-		Message: "still active",
+
+	active := connectRuntimeClient(t, socketPath)
+	defer active.Close()
+	resp, err := active.Send(protocol.Request{
+		Cmd:          protocol.CmdConnect,
+		Name:         "alice-push",
+		PushListener: true,
+		PushToken:    token,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !resp.OK {
-		t.Fatalf("send failed: %s: %s", resp.Code, resp.Error)
+		t.Fatalf("active listener connect failed: %s: %s", resp.Code, resp.Error)
 	}
 
-	msg, err := active.Receive()
-	if err != nil {
-		t.Fatal(err)
+	err = NewBrokerListenerFactory().CatchUp(Watch{
+		ProjectID: "proj-catchup-duplicate",
+		AgentName: "alice",
+		Source:    "hook",
+	}, func(d Delivery) error {
+		t.Fatal("duplicate catch-up unexpectedly received delivery")
+		return nil
+	})
+	if err == nil {
+		t.Fatal("expected duplicate catch-up handshake to fail")
 	}
-	if !msg.OK {
-		t.Fatalf("active listener receive failed: %s", msg.Error)
+	if !strings.Contains(err.Error(), string(protocol.ErrAlreadyConnected)) {
+		t.Fatalf("CatchUp() error = %v, want %s", err, protocol.ErrAlreadyConnected)
 	}
+
+	assertPushTokenStillAccepted(t, socketPath, active, "alice-push", token, "failed CatchUp handshake")
 }
 
 func TestBrokerListenerCatchUpReadsInboxWithoutBaseConnection(t *testing.T) {
@@ -365,6 +383,41 @@ func TestBrokerListenerCatchUpReleasesPushToken(t *testing.T) {
 	waitForPushTokenRejected(t, socketPath, "alice-push", token)
 }
 
+func TestReleasePushTokenForAgentSuppressesAlreadyRevokedTokenWarning(t *testing.T) {
+	socketPath, cleanup := startRuntimeTestBroker(t, "proj-release-warning")
+	defer cleanup()
+
+	token, err := pushTokenForAgent(socketPath, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	releaser := connectRuntimeClient(t, socketPath)
+	resp, err := releaser.Send(protocol.Request{
+		Cmd:       protocol.CmdPushRelease,
+		Name:      "alice",
+		PushToken: token,
+	})
+	releaser.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.OK {
+		t.Fatalf("push release failed: %s: %s", resp.Code, resp.Error)
+	}
+
+	var logs bytes.Buffer
+	previousOutput := log.Writer()
+	log.SetOutput(&logs)
+	defer log.SetOutput(previousOutput)
+
+	releasePushTokenForAgent(socketPath, "alice", token)
+
+	if strings.Contains(logs.String(), "warning: release push token") {
+		t.Fatalf("unexpected warning for already-revoked token: %s", logs.String())
+	}
+}
+
 func waitForRuntimePresence(t *testing.T, c *client.Client, name string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -414,4 +467,35 @@ func waitForPushTokenRejected(t *testing.T, socketPath, listenerName, token stri
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for released push token to be rejected for %q", listenerName)
+}
+
+func assertPushTokenStillAccepted(t *testing.T, socketPath string, active *client.Client, listenerName, token, context string) {
+	t.Helper()
+
+	active.Close()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		reconnect := connectRuntimeClient(t, socketPath)
+		resp, err := reconnect.Send(protocol.Request{
+			Cmd:          protocol.CmdConnect,
+			Name:         listenerName,
+			PushListener: true,
+			PushToken:    token,
+		})
+		reconnect.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.OK {
+			return
+		}
+		if resp.Code == protocol.ErrForbidden {
+			t.Fatalf("token was incorrectly released after %s: %s", context, resp.Error)
+		}
+		if resp.Code != protocol.ErrAlreadyConnected {
+			t.Fatalf("reconnect response code = %q, want OK or %q", resp.Code, protocol.ErrAlreadyConnected)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting to reconnect with token preserved after %s", context)
 }

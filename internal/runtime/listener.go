@@ -212,14 +212,6 @@ func pushedMessageToDelivery(msg client.PushedMessage) (Delivery, error) {
 	}, nil
 }
 
-func disconnectClient(c *client.Client) {
-	if c == nil {
-		return
-	}
-	sendDisconnect(c, "listener")
-	c.Close()
-}
-
 func sendDisconnect(c *client.Client, context string) {
 	if c == nil {
 		return
@@ -291,6 +283,10 @@ func releasePushTokenForAgent(socketPath, agent, pushToken string) {
 		return
 	}
 	if !resp.OK {
+		// Best-effort release can race with base disconnect or external release.
+		if resp.Code == protocol.ErrForbidden {
+			return
+		}
 		log.Printf("warning: release push token for %s: %s: %s", agent, resp.Code, resp.Error)
 	}
 }

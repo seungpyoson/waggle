@@ -3395,6 +3395,84 @@ func TestBroker_PushReleaseRejectsUnknownReservation(t *testing.T) {
 	}
 }
 
+func TestBroker_PushReleaseRejectsEmptyToken(t *testing.T) {
+	sockPath, _, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	releaser := connectClient(t, sockPath)
+	defer releaser.Close()
+	resp, err := releaser.Send(protocol.Request{
+		Cmd:  protocol.CmdPushRelease,
+		Name: "alice",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.OK {
+		t.Fatal("expected push release with empty token to fail")
+	}
+	if resp.Code != protocol.ErrInvalidRequest {
+		t.Fatalf("response code = %q, want %q", resp.Code, protocol.ErrInvalidRequest)
+	}
+}
+
+func TestBroker_PushReleaseRejectsDoubleReleaseWithoutMutatingNewReservation(t *testing.T) {
+	sockPath, b, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	releaser := connectClient(t, sockPath)
+	defer releaser.Close()
+	resp, err := releaser.Send(protocol.Request{
+		Cmd:  protocol.CmdPushReserve,
+		Name: "alice",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.OK {
+		t.Fatalf("push reserve failed: %s: %s", resp.Code, resp.Error)
+	}
+	oldToken := pushTokenFromResponse(t, resp)
+
+	resp, err = releaser.Send(protocol.Request{
+		Cmd:       protocol.CmdPushRelease,
+		Name:      "alice",
+		PushToken: oldToken,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.OK {
+		t.Fatalf("push release failed: %s: %s", resp.Code, resp.Error)
+	}
+
+	newToken, err := b.GeneratePushToken("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if newToken == oldToken {
+		t.Fatal("new reservation reused released token")
+	}
+
+	resp, err = releaser.Send(protocol.Request{
+		Cmd:       protocol.CmdPushRelease,
+		Name:      "alice",
+		PushToken: oldToken,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.OK {
+		t.Fatal("expected double release with stale token to fail")
+	}
+	if resp.Code != protocol.ErrForbidden {
+		t.Fatalf("response code = %q, want %q", resp.Code, protocol.ErrForbidden)
+	}
+	if got := b.GetPushToken("alice"); got != newToken {
+		t.Fatalf("GetPushToken() after stale double release = %q, want %q", got, newToken)
+	}
+}
+
 func TestBroker_PushReleaseRevokesTokenWithoutDisconnectingActiveListener(t *testing.T) {
 	sockPath, b, cleanup := startTestBroker(t)
 	defer cleanup()
