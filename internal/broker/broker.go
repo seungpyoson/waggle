@@ -256,9 +256,10 @@ func (b *Broker) Serve() error {
 
 // Shutdown gracefully shuts down the broker
 func (b *Broker) Shutdown() error {
-	// Kill spawned agents before stopping
+	// Broker shutdown forgets spawn registrations but must not kill coding-agent
+	// sessions by default. Those processes are owned by the host/user.
 	if b.spawnMgr != nil {
-		b.spawnMgr.StopAll()
+		b.spawnMgr.ForgetAll()
 	}
 
 	close(b.stopCh)

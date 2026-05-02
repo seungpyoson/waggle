@@ -47,9 +47,9 @@ var (
 			if broker.IsRunning(paths.PID) {
 				if !broker.IsResponding(paths.Socket, config.Defaults.HealthCheckTimeout) {
 					if pid, err := broker.ReadPID(paths.PID); err == nil {
-						fmt.Fprintf(os.Stderr, "waggle: unresponsive broker (PID %d) detected, starting fresh instance\n", pid)
+						_, _ = fmt.Fprintf(os.Stderr, "waggle: unresponsive broker (PID %d) detected, starting fresh instance\n", pid) // best-effort: warning emission must not block recovery.
 					} else {
-						fmt.Fprintf(os.Stderr, "waggle: unresponsive broker detected, starting fresh instance\n")
+						_, _ = fmt.Fprintf(os.Stderr, "waggle: unresponsive broker detected, starting fresh instance\n") // best-effort: warning emission must not block recovery.
 					}
 					if err := os.Remove(paths.Socket); err != nil && !os.IsNotExist(err) {
 						return fmt.Errorf("removing stale socket: %w", err)
@@ -107,7 +107,7 @@ func printErr(code, message string) {
 func isBrokerIndependentCommand(cmd *cobra.Command) bool {
 	for current := cmd; current != nil; current = current.Parent() {
 		switch current.Name() {
-		case "start", "install", "help", "version", "runtime", "adapter", "status", "whoami":
+		case "start", "install", "uninstall", "help", "version", "runtime", "adapter", "status", "whoami":
 			return true
 		}
 	}
@@ -161,10 +161,10 @@ func isTimeoutError(err error) bool {
 
 func cleanupStaleFiles() {
 	if err := os.Remove(paths.Socket); err != nil && !os.IsNotExist(err) {
-		fmt.Fprintf(os.Stderr, "waggle: warning: failed to remove stale socket: %v\n", err)
+		_, _ = fmt.Fprintf(os.Stderr, "waggle: warning: failed to remove stale socket: %v\n", err) // best-effort: timeout recovery can continue.
 	}
 	if err := os.Remove(paths.PID); err != nil && !os.IsNotExist(err) {
-		fmt.Fprintf(os.Stderr, "waggle: warning: failed to remove stale PID file: %v\n", err)
+		_, _ = fmt.Fprintf(os.Stderr, "waggle: warning: failed to remove stale PID file: %v\n", err) // best-effort: timeout recovery can continue.
 	}
 }
 

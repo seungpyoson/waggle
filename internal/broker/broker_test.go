@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -16,13 +17,26 @@ import (
 	"github.com/seungpyoson/waggle/internal/protocol"
 )
 
+func shortBrokerSocketPath(t *testing.T, pattern string) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", pattern) // Use /tmp to keep Unix socket paths below the macOS 104-byte limit.
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(dir); err != nil {
+			t.Logf("cleanup temp socket dir: %v", err)
+		}
+	})
+	return filepath.Join(dir, "broker.sock")
+}
+
 func startTestBroker(t *testing.T) (string, *Broker, func()) {
 	t.Helper()
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
 
-	// Use /tmp for socket to avoid path length issues
-	sockPath := fmt.Sprintf("/tmp/waggle-test-%d.sock", time.Now().UnixNano())
+	sockPath := shortBrokerSocketPath(t, "waggle-test-*")
 	dbPath := fmt.Sprintf("%s/db", tmpDir)
 
 	b, err := New(Config{SocketPath: sockPath, DBPath: dbPath})
@@ -34,7 +48,6 @@ func startTestBroker(t *testing.T) (string, *Broker, func()) {
 	time.Sleep(100 * time.Millisecond)
 	return sockPath, b, func() {
 		b.Shutdown()
-		os.Remove(sockPath)
 	}
 }
 
@@ -43,7 +56,7 @@ func startTestBrokerWithTTL(t *testing.T, ttlCheckPeriod time.Duration) (string,
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
 
-	sockPath := fmt.Sprintf("/tmp/waggle-test-%d.sock", time.Now().UnixNano())
+	sockPath := shortBrokerSocketPath(t, "waggle-test-*")
 	dbPath := fmt.Sprintf("%s/db", tmpDir)
 
 	b, err := New(Config{
@@ -59,7 +72,6 @@ func startTestBrokerWithTTL(t *testing.T, ttlCheckPeriod time.Duration) (string,
 	time.Sleep(100 * time.Millisecond)
 	return sockPath, b, func() {
 		b.Shutdown()
-		os.Remove(sockPath)
 	}
 }
 
@@ -78,9 +90,7 @@ func pushTokenFromResponse(t *testing.T, resp *protocol.Response) string {
 	var payload struct {
 		PushToken string `json:"push_token"`
 	}
-	if err := json.Unmarshal(resp.Data, &payload); err != nil {
-		t.Fatalf("parse connect response: %v", err)
-	}
+	unmarshalResponse(t, resp, &payload)
 	if payload.PushToken == "" {
 		t.Fatal("expected connect response to include push token")
 	}
@@ -111,6 +121,61 @@ func readStream(t *testing.T, c *client.Client) <-chan protocol.Event {
 	return ch
 }
 
+// sendRequest sends a broker request and fatals on transport errors.
+func sendRequest(t *testing.T, c *client.Client, req protocol.Request) *protocol.Response {
+	t.Helper()
+	resp, err := c.Send(req)
+	if err != nil {
+		t.Fatalf("Send(%s): %v", req.Cmd, err)
+	}
+	return resp
+}
+
+func receiveResponse(t *testing.T, c *client.Client) *protocol.Response {
+	t.Helper()
+	resp, err := c.Receive()
+	if err != nil {
+		t.Fatalf("Receive: %v", err)
+	}
+	return &resp
+}
+
+func marshalJSON(t *testing.T, v any) []byte {
+	t.Helper()
+	data, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	return data
+}
+
+func unmarshalJSON(t *testing.T, data json.RawMessage, v any) {
+	t.Helper()
+	if err := json.Unmarshal(data, v); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+}
+
+func unmarshalResponse(t *testing.T, resp any, v any) {
+	t.Helper()
+	var data json.RawMessage
+	switch r := resp.(type) {
+	case *protocol.Response:
+		if r == nil {
+			t.Fatal("expected non-nil response")
+		}
+		data = r.Data
+	case protocol.Response:
+		data = r.Data
+	default:
+		t.Fatalf("unsupported response type %T", resp)
+	}
+	if data == nil {
+		t.Fatal("expected non-nil response data")
+	}
+	unmarshalJSON(t, data, v)
+}
+
 // TestBroker_SessionsCommand — D1: connect "alice" and "bob", send CmdPresence, response contains both
 func TestBroker_SessionsCommand(t *testing.T) {
 	sockPath, _, cleanup := startTestBroker(t)
@@ -118,24 +183,24 @@ func TestBroker_SessionsCommand(t *testing.T) {
 
 	c1 := connectClient(t, sockPath)
 	defer c1.Close()
-	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
 
 	c2 := connectClient(t, sockPath)
 	defer c2.Close()
-	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+	sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
 
 	// Use a third client for discovery
 	c3 := connectClient(t, sockPath)
 	defer c3.Close()
-	c3.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "_discovery-test"})
+	sendRequest(t, c3, protocol.Request{Cmd: protocol.CmdConnect, Name: "_discovery-test"})
 
-	resp, _ := c3.Send(protocol.Request{Cmd: protocol.CmdPresence})
+	resp := sendRequest(t, c3, protocol.Request{Cmd: protocol.CmdPresence})
 	if !resp.OK {
 		t.Fatalf("presence: %s", resp.Error)
 	}
 
 	var agents []map[string]string
-	json.Unmarshal(resp.Data, &agents)
+	unmarshalResponse(t, resp, &agents)
 
 	names := make(map[string]bool)
 	for _, a := range agents {
@@ -155,21 +220,21 @@ func TestBroker_SessionsAfterDisconnect(t *testing.T) {
 	defer cleanup()
 
 	c1 := connectClient(t, sockPath)
-	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
 
 	c2 := connectClient(t, sockPath)
 	defer c2.Close()
-	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+	sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
 
 	// Disconnect alice
-	c1.Send(protocol.Request{Cmd: protocol.CmdDisconnect})
+	sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdDisconnect})
 	c1.Close()
 	time.Sleep(100 * time.Millisecond)
 
 	// Check from bob
-	resp, _ := c2.Send(protocol.Request{Cmd: protocol.CmdPresence})
+	resp := sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdPresence})
 	var agents []map[string]string
-	json.Unmarshal(resp.Data, &agents)
+	unmarshalResponse(t, resp, &agents)
 
 	for _, a := range agents {
 		if a["name"] == "alice" {
@@ -186,15 +251,15 @@ func TestBroker_SessionsSorted(t *testing.T) {
 	// Connect bob first, then alice
 	c1 := connectClient(t, sockPath)
 	defer c1.Close()
-	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+	sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
 
 	c2 := connectClient(t, sockPath)
 	defer c2.Close()
-	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
 
-	resp, _ := c1.Send(protocol.Request{Cmd: protocol.CmdPresence})
+	resp := sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdPresence})
 	var agents []map[string]string
-	json.Unmarshal(resp.Data, &agents)
+	unmarshalResponse(t, resp, &agents)
 
 	if len(agents) < 2 {
 		t.Fatalf("expected at least 2 agents, got %d", len(agents))
@@ -224,11 +289,11 @@ func TestBroker_SessionsEmpty(t *testing.T) {
 
 	c := connectClient(t, sockPath)
 	defer c.Close()
-	c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "_discovery-empty"})
+	sendRequest(t, c, protocol.Request{Cmd: protocol.CmdConnect, Name: "_discovery-empty"})
 
-	resp, _ := c.Send(protocol.Request{Cmd: protocol.CmdPresence})
+	resp := sendRequest(t, c, protocol.Request{Cmd: protocol.CmdPresence})
 	var agents []map[string]string
-	json.Unmarshal(resp.Data, &agents)
+	unmarshalResponse(t, resp, &agents)
 
 	// Should contain at least the discovery session itself
 	// but filter: only non-underscore names should be empty
@@ -253,21 +318,21 @@ func TestBroker_SessionsExcludesEphemeral(t *testing.T) {
 	// Connect a real agent
 	c1 := connectClient(t, sockPath)
 	defer c1.Close()
-	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
 
 	// Connect an ephemeral discovery session
 	c2 := connectClient(t, sockPath)
 	defer c2.Close()
-	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "_discovery-12345"})
+	sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdConnect, Name: "_discovery-12345"})
 
 	// Query presence from the discovery session
-	resp, _ := c2.Send(protocol.Request{Cmd: protocol.CmdPresence})
+	resp := sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdPresence})
 	if !resp.OK {
 		t.Fatalf("presence: %s", resp.Error)
 	}
 
 	var agents []map[string]string
-	json.Unmarshal(resp.Data, &agents)
+	unmarshalResponse(t, resp, &agents)
 
 	// Broker SHOULD include both (it lists all sessions)
 	hasAlice := false
@@ -294,20 +359,17 @@ func TestBroker_FullRoundTrip_CreateClaimComplete(t *testing.T) {
 	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
-	c, err := client.Connect(sockPath, 5*time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
+	c := connectClient(t, sockPath)
 	defer c.Close()
 
 	// Connect
-	resp, _ := c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "worker-1"})
+	resp := sendRequest(t, c, protocol.Request{Cmd: protocol.CmdConnect, Name: "worker-1"})
 	if !resp.OK {
 		t.Fatalf("connect failed: %s", resp.Error)
 	}
 
 	// Create task
-	resp, _ = c.Send(protocol.Request{
+	resp = sendRequest(t, c, protocol.Request{
 		Cmd:     protocol.CmdTaskCreate,
 		Payload: json.RawMessage(`{"desc":"test task"}`),
 		Type:    "test",
@@ -317,7 +379,7 @@ func TestBroker_FullRoundTrip_CreateClaimComplete(t *testing.T) {
 	}
 
 	// Claim task
-	resp, _ = c.Send(protocol.Request{Cmd: protocol.CmdTaskClaim})
+	resp = sendRequest(t, c, protocol.Request{Cmd: protocol.CmdTaskClaim})
 	if !resp.OK {
 		t.Fatalf("claim: %s", resp.Error)
 	}
@@ -325,12 +387,12 @@ func TestBroker_FullRoundTrip_CreateClaimComplete(t *testing.T) {
 		ID         int64  `json:"ID"`
 		ClaimToken string `json:"ClaimToken"`
 	}
-	json.Unmarshal(resp.Data, &claimData)
+	unmarshalResponse(t, resp, &claimData)
 	t.Logf("Claimed task ID=%d, token=%s", claimData.ID, claimData.ClaimToken)
 
 	// Complete task
 	taskIDStr := fmt.Sprintf("%d", claimData.ID)
-	resp, _ = c.Send(protocol.Request{
+	resp = sendRequest(t, c, protocol.Request{
 		Cmd:        protocol.CmdTaskComplete,
 		TaskID:     taskIDStr,
 		ClaimToken: claimData.ClaimToken,
@@ -341,14 +403,14 @@ func TestBroker_FullRoundTrip_CreateClaimComplete(t *testing.T) {
 	}
 
 	// Verify state
-	resp, _ = c.Send(protocol.Request{
+	resp = sendRequest(t, c, protocol.Request{
 		Cmd:    protocol.CmdTaskGet,
 		TaskID: taskIDStr,
 	})
 	var task struct {
 		State string `json:"State"`
 	}
-	json.Unmarshal(resp.Data, &task)
+	unmarshalResponse(t, resp, &task)
 	if task.State != "completed" {
 		t.Errorf("state = %q, want completed", task.State)
 	}
@@ -360,10 +422,10 @@ func TestBroker_DisconnectCleansUpLocks(t *testing.T) {
 	defer cleanup()
 
 	c := connectClient(t, sockPath)
-	c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "w-1"})
+	sendRequest(t, c, protocol.Request{Cmd: protocol.CmdConnect, Name: "w-1"})
 
 	// Acquire lock
-	resp, _ := c.Send(protocol.Request{Cmd: protocol.CmdLock, Resource: "file:main.go"})
+	resp := sendRequest(t, c, protocol.Request{Cmd: protocol.CmdLock, Resource: "file:main.go"})
 	if !resp.OK {
 		t.Fatalf("lock: %s", resp.Error)
 	}
@@ -375,8 +437,8 @@ func TestBroker_DisconnectCleansUpLocks(t *testing.T) {
 	// Verify lock released
 	c2 := connectClient(t, sockPath)
 	defer c2.Close()
-	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "w-2"})
-	resp, _ = c2.Send(protocol.Request{Cmd: protocol.CmdLock, Resource: "file:main.go"})
+	sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdConnect, Name: "w-2"})
+	resp = sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdLock, Resource: "file:main.go"})
 	if !resp.OK {
 		t.Errorf("lock should be available after disconnect: %s", resp.Error)
 	}
@@ -388,15 +450,15 @@ func TestBroker_DisconnectRequeuesClaimedTasks(t *testing.T) {
 	defer cleanup()
 
 	c := connectClient(t, sockPath)
-	c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "w-1"})
+	sendRequest(t, c, protocol.Request{Cmd: protocol.CmdConnect, Name: "w-1"})
 
 	// Create and claim task
-	c.Send(protocol.Request{
+	sendRequest(t, c, protocol.Request{
 		Cmd:     protocol.CmdTaskCreate,
 		Payload: json.RawMessage(`{"desc":"test"}`),
 		Type:    "test",
 	})
-	resp, _ := c.Send(protocol.Request{Cmd: protocol.CmdTaskClaim})
+	resp := sendRequest(t, c, protocol.Request{Cmd: protocol.CmdTaskClaim})
 	if !resp.OK {
 		t.Fatalf("claim: %s", resp.Error)
 	}
@@ -408,8 +470,8 @@ func TestBroker_DisconnectRequeuesClaimedTasks(t *testing.T) {
 	// Verify task re-queued
 	c2 := connectClient(t, sockPath)
 	defer c2.Close()
-	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "w-2"})
-	resp, _ = c2.Send(protocol.Request{Cmd: protocol.CmdTaskClaim})
+	sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdConnect, Name: "w-2"})
+	resp = sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdTaskClaim})
 	if !resp.OK {
 		t.Errorf("task should be re-queued after disconnect: %s", resp.Error)
 	}
@@ -421,29 +483,29 @@ func TestBroker_CleanDisconnectDoesNotRequeue(t *testing.T) {
 	defer cleanup()
 
 	c := connectClient(t, sockPath)
-	c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "w-1"})
+	sendRequest(t, c, protocol.Request{Cmd: protocol.CmdConnect, Name: "w-1"})
 
 	// Create and claim task
-	c.Send(protocol.Request{
+	sendRequest(t, c, protocol.Request{
 		Cmd:     protocol.CmdTaskCreate,
 		Payload: json.RawMessage(`{"desc":"test"}`),
 		Type:    "test",
 	})
-	resp, _ := c.Send(protocol.Request{Cmd: protocol.CmdTaskClaim})
+	resp := sendRequest(t, c, protocol.Request{Cmd: protocol.CmdTaskClaim})
 	if !resp.OK {
 		t.Fatalf("claim: %s", resp.Error)
 	}
 
 	// Clean disconnect (send disconnect command)
-	c.Send(protocol.Request{Cmd: protocol.CmdDisconnect})
+	sendRequest(t, c, protocol.Request{Cmd: protocol.CmdDisconnect})
 	c.Close()
 	time.Sleep(50 * time.Millisecond)
 
 	// Verify task NOT re-queued (should still be claimed)
 	c2 := connectClient(t, sockPath)
 	defer c2.Close()
-	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "w-2"})
-	resp, _ = c2.Send(protocol.Request{Cmd: protocol.CmdTaskClaim})
+	sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdConnect, Name: "w-2"})
+	resp = sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdTaskClaim})
 	if resp.OK {
 		t.Error("task should NOT be re-queued after clean disconnect")
 	}
@@ -455,25 +517,22 @@ func TestBroker_EventsSubscribeFormat(t *testing.T) {
 	defer cleanup()
 
 	c := connectClient(t, sockPath)
-	c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "subscriber"})
+	sendRequest(t, c, protocol.Request{Cmd: protocol.CmdConnect, Name: "subscriber"})
 
 	// Subscribe to task.events
-	resp, _ := c.Send(protocol.Request{Cmd: protocol.CmdSubscribe, Topic: "task.events"})
+	resp := sendRequest(t, c, protocol.Request{Cmd: protocol.CmdSubscribe, Topic: "task.events"})
 	if !resp.OK {
 		t.Fatalf("subscribe: %s", resp.Error)
 	}
 
 	// Start reading events
-	eventCh, err := c.ReadStream()
-	if err != nil {
-		t.Fatalf("read stream: %v", err)
-	}
+	eventCh := readStream(t, c)
 
 	// Create a task to trigger an event
 	c2 := connectClient(t, sockPath)
 	defer c2.Close()
-	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "creator"})
-	c2.Send(protocol.Request{
+	sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdConnect, Name: "creator"})
+	sendRequest(t, c2, protocol.Request{
 		Cmd:     protocol.CmdTaskCreate,
 		Payload: json.RawMessage(`{"test":true}`),
 		Type:    "test",
@@ -502,28 +561,28 @@ func TestBroker_StatusIncludesTaskCounts(t *testing.T) {
 	defer cleanup()
 
 	c := connectClient(t, sockPath)
-	c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "w-1"})
+	sendRequest(t, c, protocol.Request{Cmd: protocol.CmdConnect, Name: "w-1"})
 
 	// Create tasks in different states
-	c.Send(protocol.Request{
+	sendRequest(t, c, protocol.Request{
 		Cmd:     protocol.CmdTaskCreate,
 		Payload: json.RawMessage(`{"a":1}`),
 	})
-	c.Send(protocol.Request{
+	sendRequest(t, c, protocol.Request{
 		Cmd:     protocol.CmdTaskCreate,
 		Payload: json.RawMessage(`{"b":2}`),
 	})
 	// Claim one task
-	c.Send(protocol.Request{Cmd: protocol.CmdTaskClaim})
+	sendRequest(t, c, protocol.Request{Cmd: protocol.CmdTaskClaim})
 
 	// Get status
-	resp, _ := c.Send(protocol.Request{Cmd: protocol.CmdStatus})
+	resp := sendRequest(t, c, protocol.Request{Cmd: protocol.CmdStatus})
 	if !resp.OK {
 		t.Fatalf("status: %s", resp.Error)
 	}
 
 	var status map[string]interface{}
-	json.Unmarshal(resp.Data, &status)
+	unmarshalResponse(t, resp, &status)
 
 	// Check for task counts
 	tasks, ok := status["tasks"].(map[string]interface{})
@@ -548,10 +607,10 @@ func TestBroker_DisconnectUnsubscribesEvents(t *testing.T) {
 	defer cleanup()
 
 	c := connectClient(t, sockPath)
-	c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "w-1"})
+	sendRequest(t, c, protocol.Request{Cmd: protocol.CmdConnect, Name: "w-1"})
 
 	// Subscribe to topic
-	resp, _ := c.Send(protocol.Request{Cmd: protocol.CmdSubscribe, Topic: "test.topic"})
+	resp := sendRequest(t, c, protocol.Request{Cmd: protocol.CmdSubscribe, Topic: "test.topic"})
 	if !resp.OK {
 		t.Fatalf("subscribe: %s", resp.Error)
 	}
@@ -563,8 +622,8 @@ func TestBroker_DisconnectUnsubscribesEvents(t *testing.T) {
 	// Verify subscription removed (check via status or another mechanism)
 	c2 := connectClient(t, sockPath)
 	defer c2.Close()
-	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "w-2"})
-	resp, _ = c2.Send(protocol.Request{Cmd: protocol.CmdStatus})
+	sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdConnect, Name: "w-2"})
+	resp = sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdStatus})
 	if !resp.OK {
 		t.Fatalf("status: %s", resp.Error)
 	}
@@ -572,7 +631,7 @@ func TestBroker_DisconnectUnsubscribesEvents(t *testing.T) {
 	var status struct {
 		Subscribers int `json:"subscribers"`
 	}
-	json.Unmarshal(resp.Data, &status)
+	unmarshalResponse(t, resp, &status)
 	if status.Subscribers != 0 {
 		t.Errorf("subscribers = %d, want 0 after disconnect", status.Subscribers)
 	}
@@ -584,10 +643,10 @@ func TestBroker_PublishesTaskEventsOnStateTransitions(t *testing.T) {
 	defer cleanup()
 
 	c := connectClient(t, sockPath)
-	c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "w-1"})
+	sendRequest(t, c, protocol.Request{Cmd: protocol.CmdConnect, Name: "w-1"})
 
 	// Subscribe to task.events
-	resp, _ := c.Send(protocol.Request{Cmd: protocol.CmdSubscribe, Topic: "task.events"})
+	resp := sendRequest(t, c, protocol.Request{Cmd: protocol.CmdSubscribe, Topic: "task.events"})
 	if !resp.OK {
 		t.Fatalf("subscribe: %s", resp.Error)
 	}
@@ -595,18 +654,15 @@ func TestBroker_PublishesTaskEventsOnStateTransitions(t *testing.T) {
 	// Create task (should publish event)
 	c2 := connectClient(t, sockPath)
 	defer c2.Close()
-	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "w-2"})
-	c2.Send(protocol.Request{
+	sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdConnect, Name: "w-2"})
+	sendRequest(t, c2, protocol.Request{
 		Cmd:     protocol.CmdTaskCreate,
 		Payload: json.RawMessage(`{"desc":"test"}`),
 		Type:    "test",
 	})
 
 	// Read event stream (should receive task.created event)
-	eventChan, err := c.ReadStream()
-	if err != nil {
-		t.Fatalf("ReadStream: %v", err)
-	}
+	eventChan := readStream(t, c)
 
 	select {
 	case evt := <-eventChan:
@@ -625,7 +681,7 @@ func TestBroker_InvalidJSONReturnsError(t *testing.T) {
 
 	c := connectClient(t, sockPath)
 	defer c.Close()
-	c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "w-1"})
+	sendRequest(t, c, protocol.Request{Cmd: protocol.CmdConnect, Name: "w-1"})
 
 	// Send request with missing required field (name for connect)
 	c2 := connectClient(t, sockPath)
@@ -649,34 +705,34 @@ func TestBroker_DisconnectOnlyRequeuesOwnTasks(t *testing.T) {
 
 	// Worker A connects and claims task 1
 	c1 := connectClient(t, sockPath)
-	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "worker-a"})
-	c1.Send(protocol.Request{Cmd: protocol.CmdTaskCreate, Payload: json.RawMessage(`{"desc":"task1"}`), Type: "test"})
-	resp1, _ := c1.Send(protocol.Request{Cmd: protocol.CmdTaskClaim})
+	sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdConnect, Name: "worker-a"})
+	sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdTaskCreate, Payload: json.RawMessage(`{"desc":"task1"}`), Type: "test"})
+	resp1 := sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdTaskClaim})
 	var claim1 struct {
 		ID int64 `json:"ID"`
 	}
-	json.Unmarshal(resp1.Data, &claim1)
+	unmarshalResponse(t, resp1, &claim1)
 
 	// Worker B connects and claims task 2
 	c2 := connectClient(t, sockPath)
-	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "worker-b"})
-	c2.Send(protocol.Request{Cmd: protocol.CmdTaskCreate, Payload: json.RawMessage(`{"desc":"task2"}`), Type: "test"})
-	resp2, _ := c2.Send(protocol.Request{Cmd: protocol.CmdTaskClaim})
+	sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdConnect, Name: "worker-b"})
+	sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdTaskCreate, Payload: json.RawMessage(`{"desc":"task2"}`), Type: "test"})
+	resp2 := sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdTaskClaim})
 	var claim2 struct {
 		ID int64 `json:"ID"`
 	}
-	json.Unmarshal(resp2.Data, &claim2)
+	unmarshalResponse(t, resp2, &claim2)
 
 	// Worker A disconnects
 	c1.Close()
 	time.Sleep(50 * time.Millisecond)
 
 	// Verify Worker B's task is still claimed
-	resp, _ := c2.Send(protocol.Request{Cmd: protocol.CmdTaskGet, TaskID: fmt.Sprintf("%d", claim2.ID)})
+	resp := sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdTaskGet, TaskID: fmt.Sprintf("%d", claim2.ID)})
 	var task struct {
 		State string `json:"State"`
 	}
-	json.Unmarshal(resp.Data, &task)
+	unmarshalResponse(t, resp, &task)
 	if task.State != "claimed" {
 		t.Errorf("Worker B's task state = %q, want claimed (should NOT be re-queued when Worker A disconnects)", task.State)
 	}
@@ -690,10 +746,10 @@ func TestBroker_InputValidation(t *testing.T) {
 	defer cleanup()
 
 	c := connectClient(t, sockPath)
-	c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "w-1"})
+	sendRequest(t, c, protocol.Request{Cmd: protocol.CmdConnect, Name: "w-1"})
 
 	// Test negative priority
-	resp, _ := c.Send(protocol.Request{
+	resp := sendRequest(t, c, protocol.Request{
 		Cmd:      protocol.CmdTaskCreate,
 		Payload:  json.RawMessage(`{"test":true}`),
 		Priority: -1,
@@ -706,7 +762,7 @@ func TestBroker_InputValidation(t *testing.T) {
 	}
 
 	// Test priority > 100
-	resp, _ = c.Send(protocol.Request{
+	resp = sendRequest(t, c, protocol.Request{
 		Cmd:      protocol.CmdTaskCreate,
 		Payload:  json.RawMessage(`{"test":true}`),
 		Priority: 101,
@@ -720,7 +776,7 @@ func TestBroker_InputValidation(t *testing.T) {
 	for i := range longName {
 		longName = longName[:i] + "a"
 	}
-	resp, _ = c.Send(protocol.Request{
+	resp = sendRequest(t, c, protocol.Request{
 		Cmd:  protocol.CmdConnect,
 		Name: longName,
 	})
@@ -740,7 +796,7 @@ func TestBroker_LargePayloadRoundTrip(t *testing.T) {
 
 	c := connectClient(t, sockPath)
 	defer c.Close()
-	c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "w-large"})
+	sendRequest(t, c, protocol.Request{Cmd: protocol.CmdConnect, Name: "w-large"})
 
 	payloadSize := 100 * 1024 // 100KB — above 64KB default, below 1MB config max
 	bigPayload := strings.Repeat("x", payloadSize)
@@ -772,16 +828,16 @@ func TestBroker_CleanDisconnectCleansUpOnce(t *testing.T) {
 	defer cleanup()
 
 	c := connectClient(t, sockPath)
-	c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "w-once"})
+	sendRequest(t, c, protocol.Request{Cmd: protocol.CmdConnect, Name: "w-once"})
 
 	// Acquire a lock, create+claim a task
-	c.Send(protocol.Request{Cmd: protocol.CmdLock, Resource: "file:once.go"})
-	c.Send(protocol.Request{
+	sendRequest(t, c, protocol.Request{Cmd: protocol.CmdLock, Resource: "file:once.go"})
+	sendRequest(t, c, protocol.Request{
 		Cmd:     protocol.CmdTaskCreate,
 		Payload: json.RawMessage(`{"desc":"once-test"}`),
 		Type:    "test",
 	})
-	c.Send(protocol.Request{Cmd: protocol.CmdTaskClaim})
+	sendRequest(t, c, protocol.Request{Cmd: protocol.CmdTaskClaim})
 
 	// Clean disconnect — triggers cleanup from deferred readLoop.
 	// Both should complete without panic or double-close errors.
@@ -798,8 +854,8 @@ func TestBroker_CleanDisconnectCleansUpOnce(t *testing.T) {
 	// Verify lock was released (cleanup ran at least once)
 	c2 := connectClient(t, sockPath)
 	defer c2.Close()
-	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "w-verify"})
-	resp, _ = c2.Send(protocol.Request{Cmd: protocol.CmdLock, Resource: "file:once.go"})
+	sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdConnect, Name: "w-verify"})
+	resp = sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdLock, Resource: "file:once.go"})
 	if !resp.OK {
 		t.Errorf("lock should be available after clean disconnect: %s", resp.Error)
 	}
@@ -850,14 +906,14 @@ func TestBroker_SendMessage(t *testing.T) {
 
 	c1 := connectClient(t, sockPath)
 	defer c1.Close()
-	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
 
 	c2 := connectClient(t, sockPath)
 	defer c2.Close()
-	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+	sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
 
 	// Alice sends to Bob
-	resp, _ := c1.Send(protocol.Request{
+	resp := sendRequest(t, c1, protocol.Request{
 		Cmd:     protocol.CmdSend,
 		Name:    "bob",
 		Message: "hello from alice",
@@ -876,13 +932,13 @@ func TestBroker_SendMessage(t *testing.T) {
 	}
 
 	// Bob checks inbox
-	resp, _ = c2.Send(protocol.Request{Cmd: protocol.CmdInbox})
+	resp = sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdInbox})
 	if !resp.OK {
 		t.Fatalf("inbox failed: %s", resp.Error)
 	}
 
 	var messages []map[string]interface{}
-	json.Unmarshal(resp.Data, &messages)
+	unmarshalResponse(t, resp, &messages)
 	if len(messages) != 1 {
 		t.Fatalf("inbox len = %d, want 1", len(messages))
 	}
@@ -1020,25 +1076,30 @@ func TestBroker_SendPushDelivery(t *testing.T) {
 
 	c1 := connectClient(t, sockPath)
 	defer c1.Close()
-	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
 
 	c2 := connectClient(t, sockPath)
 	defer c2.Close()
-	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+	sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
 
 	// Alice sends to Bob (who is online)
 	// This happens in a goroutine to allow Bob to receive the push concurrently
-	sendDone := make(chan bool)
+	sendDone := make(chan error, 1)
 	go func() {
-		resp, _ := c1.Send(protocol.Request{
+		resp, err := c1.Send(protocol.Request{
 			Cmd:     protocol.CmdSend,
 			Name:    "bob",
 			Message: "hello",
 		})
-		if !resp.OK {
-			t.Errorf("send failed: %s", resp.Error)
+		if err != nil {
+			sendDone <- fmt.Errorf("send: %w", err)
+			return
 		}
-		sendDone <- true
+		if !resp.OK {
+			sendDone <- fmt.Errorf("send failed: %s", resp.Error)
+			return
+		}
+		sendDone <- nil
 	}()
 
 	// Bob should receive the pushed message
@@ -1053,7 +1114,7 @@ func TestBroker_SendPushDelivery(t *testing.T) {
 
 	// Verify the pushed message has the right structure
 	var pushData map[string]interface{}
-	json.Unmarshal(pushResp.Data, &pushData)
+	unmarshalResponse(t, pushResp, &pushData)
 	if pushData["type"] != "message" {
 		t.Errorf("push type = %q, want 'message'", pushData["type"])
 	}
@@ -1065,23 +1126,38 @@ func TestBroker_SendPushDelivery(t *testing.T) {
 	}
 
 	// Wait for send to complete
-	<-sendDone
+	if err := <-sendDone; err != nil {
+		t.Fatal(err)
+	}
 
 	// Exercise writeMu with concurrent operations:
 	// Bob sends an inbox command while Alice sends another message
 	// This creates concurrent writes to Bob's connection (push + response)
+	concurrentSendDone := make(chan error, 1)
 	go func() {
-		c1.Send(protocol.Request{
+		resp, err := c1.Send(protocol.Request{
 			Cmd:     protocol.CmdSend,
 			Name:    "bob",
 			Message: "second message",
 		})
+		if err != nil {
+			concurrentSendDone <- fmt.Errorf("concurrent send: %w", err)
+			return
+		}
+		if !resp.OK {
+			concurrentSendDone <- fmt.Errorf("concurrent send failed: %s", resp.Error)
+			return
+		}
+		concurrentSendDone <- nil
 	}()
 
 	// Bob checks inbox concurrently
-	resp, _ := c2.Send(protocol.Request{Cmd: protocol.CmdInbox})
+	resp := sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdInbox})
 	if !resp.OK {
 		t.Fatalf("inbox failed: %s", resp.Error)
+	}
+	if err := <-concurrentSendDone; err != nil {
+		t.Fatal(err)
 	}
 
 	// Read the second push
@@ -1094,13 +1170,13 @@ func TestBroker_SendPushDelivery(t *testing.T) {
 	}
 
 	// Verify via inbox that messages have state 'seen' (Task 48: inbox marks messages as seen)
-	resp, _ = c2.Send(protocol.Request{Cmd: protocol.CmdInbox})
+	resp = sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdInbox})
 	if !resp.OK {
 		t.Fatalf("inbox failed: %s", resp.Error)
 	}
 
 	var messages []map[string]interface{}
-	json.Unmarshal(resp.Data, &messages)
+	unmarshalResponse(t, resp, &messages)
 	if len(messages) != 2 {
 		t.Fatalf("inbox len = %d, want 2", len(messages))
 	}
@@ -1119,10 +1195,10 @@ func TestBroker_SendOfflineDelivery(t *testing.T) {
 
 	c1 := connectClient(t, sockPath)
 	defer c1.Close()
-	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
 
 	// Alice sends to Bob (who is offline)
-	resp, _ := c1.Send(protocol.Request{
+	resp := sendRequest(t, c1, protocol.Request{
 		Cmd:     protocol.CmdSend,
 		Name:    "bob",
 		Message: "hello offline",
@@ -1134,16 +1210,16 @@ func TestBroker_SendOfflineDelivery(t *testing.T) {
 	// Bob connects later
 	c2 := connectClient(t, sockPath)
 	defer c2.Close()
-	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+	sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
 
 	// Bob checks inbox
-	resp, _ = c2.Send(protocol.Request{Cmd: protocol.CmdInbox})
+	resp = sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdInbox})
 	if !resp.OK {
 		t.Fatalf("inbox failed: %s", resp.Error)
 	}
 
 	var messages []map[string]interface{}
-	json.Unmarshal(resp.Data, &messages)
+	unmarshalResponse(t, resp, &messages)
 	if len(messages) != 1 {
 		t.Fatalf("inbox len = %d, want 1", len(messages))
 	}
@@ -1163,9 +1239,9 @@ func TestBroker_SendRequiresName(t *testing.T) {
 
 	c := connectClient(t, sockPath)
 	defer c.Close()
-	c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	sendRequest(t, c, protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
 
-	resp, _ := c.Send(protocol.Request{
+	resp := sendRequest(t, c, protocol.Request{
 		Cmd:     protocol.CmdSend,
 		Name:    "",
 		Message: "hello",
@@ -1185,9 +1261,9 @@ func TestBroker_SendRequiresMessage(t *testing.T) {
 
 	c := connectClient(t, sockPath)
 	defer c.Close()
-	c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	sendRequest(t, c, protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
 
-	resp, _ := c.Send(protocol.Request{
+	resp := sendRequest(t, c, protocol.Request{
 		Cmd:     protocol.CmdSend,
 		Name:    "bob",
 		Message: "",
@@ -1209,7 +1285,7 @@ func TestBroker_SendRequiresSession(t *testing.T) {
 	defer c.Close()
 
 	// Try to send without connecting
-	resp, _ := c.Send(protocol.Request{
+	resp := sendRequest(t, c, protocol.Request{
 		Cmd:     protocol.CmdSend,
 		Name:    "bob",
 		Message: "hello",
@@ -1227,7 +1303,7 @@ func TestBroker_MessagesSurviveRestart(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
 
-	sockPath := fmt.Sprintf("/tmp/waggle-test-%d.sock", time.Now().UnixNano())
+	sockPath := shortBrokerSocketPath(t, "waggle-test-*")
 	dbPath := fmt.Sprintf("%s/db", tmpDir)
 
 	// Start first broker
@@ -1240,8 +1316,8 @@ func TestBroker_MessagesSurviveRestart(t *testing.T) {
 
 	// Send message
 	c1 := connectClient(t, sockPath)
-	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
-	c1.Send(protocol.Request{
+	sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	sendRequest(t, c1, protocol.Request{
 		Cmd:     protocol.CmdSend,
 		Name:    "bob",
 		Message: "persistent message",
@@ -1261,20 +1337,19 @@ func TestBroker_MessagesSurviveRestart(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	defer func() {
 		b2.Shutdown()
-		os.Remove(sockPath)
 	}()
 
 	// Check inbox
 	c2 := connectClient(t, sockPath)
 	defer c2.Close()
-	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
-	resp, _ := c2.Send(protocol.Request{Cmd: protocol.CmdInbox})
+	sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+	resp := sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdInbox})
 	if !resp.OK {
 		t.Fatalf("inbox failed: %s", resp.Error)
 	}
 
 	var messages []map[string]interface{}
-	json.Unmarshal(resp.Data, &messages)
+	unmarshalResponse(t, resp, &messages)
 	if len(messages) != 1 {
 		t.Fatalf("inbox len = %d, want 1", len(messages))
 	}
@@ -1290,13 +1365,13 @@ func TestBroker_InboxPersistsAcrossReconnect(t *testing.T) {
 
 	c1 := connectClient(t, sockPath)
 	defer c1.Close()
-	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
 
 	c2 := connectClient(t, sockPath)
-	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+	sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
 
 	// Alice sends to Bob
-	c1.Send(protocol.Request{
+	sendRequest(t, c1, protocol.Request{
 		Cmd:     protocol.CmdSend,
 		Name:    "bob",
 		Message: "reconnect test",
@@ -1309,16 +1384,16 @@ func TestBroker_InboxPersistsAcrossReconnect(t *testing.T) {
 	// Bob reconnects
 	c3 := connectClient(t, sockPath)
 	defer c3.Close()
-	c3.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+	sendRequest(t, c3, protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
 
 	// Check inbox
-	resp, _ := c3.Send(protocol.Request{Cmd: protocol.CmdInbox})
+	resp := sendRequest(t, c3, protocol.Request{Cmd: protocol.CmdInbox})
 	if !resp.OK {
 		t.Fatalf("inbox failed: %s", resp.Error)
 	}
 
 	var messages []map[string]interface{}
-	json.Unmarshal(resp.Data, &messages)
+	unmarshalResponse(t, resp, &messages)
 	if len(messages) != 1 {
 		t.Fatalf("inbox len = %d, want 1", len(messages))
 	}
@@ -1334,18 +1409,18 @@ func TestBroker_MultipleSendersOrdering(t *testing.T) {
 
 	c1 := connectClient(t, sockPath)
 	defer c1.Close()
-	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
 
 	c2 := connectClient(t, sockPath)
 	defer c2.Close()
-	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+	sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
 
 	c3 := connectClient(t, sockPath)
 	defer c3.Close()
-	c3.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "charlie"})
+	sendRequest(t, c3, protocol.Request{Cmd: protocol.CmdConnect, Name: "charlie"})
 
 	// Alice sends to Charlie
-	c1.Send(protocol.Request{
+	sendRequest(t, c1, protocol.Request{
 		Cmd:     protocol.CmdSend,
 		Name:    "charlie",
 		Message: "from alice",
@@ -1363,7 +1438,7 @@ func TestBroker_MultipleSendersOrdering(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	// Bob sends to Charlie
-	c2.Send(protocol.Request{
+	sendRequest(t, c2, protocol.Request{
 		Cmd:     protocol.CmdSend,
 		Name:    "charlie",
 		Message: "from bob",
@@ -1379,13 +1454,13 @@ func TestBroker_MultipleSendersOrdering(t *testing.T) {
 	}
 
 	// Charlie checks inbox
-	resp, _ := c3.Send(protocol.Request{Cmd: protocol.CmdInbox})
+	resp := sendRequest(t, c3, protocol.Request{Cmd: protocol.CmdInbox})
 	if !resp.OK {
 		t.Fatalf("inbox failed: %s", resp.Error)
 	}
 
 	var messages []map[string]interface{}
-	json.Unmarshal(resp.Data, &messages)
+	unmarshalResponse(t, resp, &messages)
 	if len(messages) != 2 {
 		t.Fatalf("inbox len = %d, want 2", len(messages))
 	}
@@ -1406,10 +1481,10 @@ func TestBroker_SendToSelf(t *testing.T) {
 
 	c := connectClient(t, sockPath)
 	defer c.Close()
-	c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	sendRequest(t, c, protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
 
 	// Alice sends to herself
-	resp, _ := c.Send(protocol.Request{
+	resp := sendRequest(t, c, protocol.Request{
 		Cmd:     protocol.CmdSend,
 		Name:    "alice",
 		Message: "note to self",
@@ -1420,19 +1495,19 @@ func TestBroker_SendToSelf(t *testing.T) {
 
 	// Verify the send response is correct (not corrupted by push)
 	var sendData map[string]interface{}
-	json.Unmarshal(resp.Data, &sendData)
+	unmarshalResponse(t, resp, &sendData)
 	if sendData["body"] != "note to self" {
 		t.Errorf("send response body = %q, want 'note to self'", sendData["body"])
 	}
 
 	// Check inbox — message should be there
-	resp, _ = c.Send(protocol.Request{Cmd: protocol.CmdInbox})
+	resp = sendRequest(t, c, protocol.Request{Cmd: protocol.CmdInbox})
 	if !resp.OK {
 		t.Fatalf("inbox failed: %s", resp.Error)
 	}
 
 	var messages []map[string]interface{}
-	json.Unmarshal(resp.Data, &messages)
+	unmarshalResponse(t, resp, &messages)
 	if len(messages) != 1 {
 		t.Fatalf("inbox len = %d, want 1", len(messages))
 	}
@@ -1453,7 +1528,7 @@ func TestBroker_SessionNameCollision(t *testing.T) {
 	// Alice connects on first connection
 	c1 := connectClient(t, sockPath)
 	defer c1.Close()
-	resp1, _ := c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	resp1 := sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
 	if !resp1.OK {
 		t.Fatalf("first connect failed: %s", resp1.Error)
 	}
@@ -1461,7 +1536,7 @@ func TestBroker_SessionNameCollision(t *testing.T) {
 	// Second connection tries same name — must be rejected
 	c2 := connectClient(t, sockPath)
 	defer c2.Close()
-	resp2, _ := c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	resp2 := sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
 	if resp2.OK {
 		t.Fatal("expected second connect to fail, but got OK")
 	}
@@ -1472,8 +1547,8 @@ func TestBroker_SessionNameCollision(t *testing.T) {
 	// Original alice still works — bob can send to her and she receives push
 	c3 := connectClient(t, sockPath)
 	defer c3.Close()
-	c3.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
-	sendResp, _ := c3.Send(protocol.Request{
+	sendRequest(t, c3, protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+	sendResp := sendRequest(t, c3, protocol.Request{
 		Cmd:     protocol.CmdSend,
 		Name:    "alice",
 		Message: "test collision",
@@ -1491,7 +1566,7 @@ func TestBroker_SessionNameCollision(t *testing.T) {
 	}
 
 	var pushData map[string]interface{}
-	json.Unmarshal(pushResp.Data, &pushData)
+	unmarshalResponse(t, pushResp, &pushData)
 	if pushData["body"] != "test collision" {
 		t.Errorf("push body = %q, want 'test collision'", pushData["body"])
 	}
@@ -1505,7 +1580,7 @@ func TestBroker_DuplicateNameRejected(t *testing.T) {
 	// Client A connects as "agent-dup"
 	cA := connectClient(t, sockPath)
 	defer cA.Close()
-	respA, _ := cA.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "agent-dup"})
+	respA := sendRequest(t, cA, protocol.Request{Cmd: protocol.CmdConnect, Name: "agent-dup"})
 	if !respA.OK {
 		t.Fatalf("client A connect failed: %s", respA.Error)
 	}
@@ -1513,7 +1588,7 @@ func TestBroker_DuplicateNameRejected(t *testing.T) {
 	// Client B tries to connect as "agent-dup" — must be rejected
 	cB := connectClient(t, sockPath)
 	defer cB.Close()
-	respB, _ := cB.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "agent-dup"})
+	respB := sendRequest(t, cB, protocol.Request{Cmd: protocol.CmdConnect, Name: "agent-dup"})
 	if respB.OK {
 		t.Fatal("expected client B connect to fail, but got OK")
 	}
@@ -1524,8 +1599,8 @@ func TestBroker_DuplicateNameRejected(t *testing.T) {
 	// Client A is still functional — verify by sending a message to it
 	cC := connectClient(t, sockPath)
 	defer cC.Close()
-	cC.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "verifier"})
-	sendResp, _ := cC.Send(protocol.Request{
+	sendRequest(t, cC, protocol.Request{Cmd: protocol.CmdConnect, Name: "verifier"})
+	sendResp := sendRequest(t, cC, protocol.Request{
 		Cmd:     protocol.CmdSend,
 		Name:    "agent-dup",
 		Message: "still alive",
@@ -1542,7 +1617,7 @@ func TestBroker_DuplicateNameRejected(t *testing.T) {
 		t.Fatalf("push response not OK: %s", pushResp.Error)
 	}
 	var pushData map[string]interface{}
-	json.Unmarshal(pushResp.Data, &pushData)
+	unmarshalResponse(t, pushResp, &pushData)
 	if pushData["body"] != "still alive" {
 		t.Errorf("push body = %q, want 'still alive'", pushData["body"])
 	}
@@ -1556,14 +1631,14 @@ func TestBroker_ConcurrentSendToSameRecipient(t *testing.T) {
 	// Bob connects and will receive all messages
 	c1 := connectClient(t, sockPath)
 	defer c1.Close()
-	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+	sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
 
 	// 10 senders connect
 	senders := make([]*client.Client, 10)
 	for i := 0; i < 10; i++ {
 		c := connectClient(t, sockPath)
 		defer c.Close()
-		c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: fmt.Sprintf("sender-%d", i)})
+		sendRequest(t, c, protocol.Request{Cmd: protocol.CmdConnect, Name: fmt.Sprintf("sender-%d", i)})
 		senders[i] = c
 	}
 
@@ -1571,11 +1646,16 @@ func TestBroker_ConcurrentSendToSameRecipient(t *testing.T) {
 	done := make(chan bool, 10)
 	for i := 0; i < 10; i++ {
 		go func(idx int) {
-			resp, _ := senders[idx].Send(protocol.Request{
+			resp, err := senders[idx].Send(protocol.Request{
 				Cmd:     protocol.CmdSend,
 				Name:    "bob",
 				Message: fmt.Sprintf("msg-%d", idx),
 			})
+			if err != nil {
+				t.Errorf("sender-%d send error: %v", idx, err)
+				done <- true
+				return
+			}
 			if !resp.OK {
 				t.Errorf("sender-%d send failed: %s", idx, resp.Error)
 			}
@@ -1597,13 +1677,13 @@ func TestBroker_ConcurrentSendToSameRecipient(t *testing.T) {
 	}
 
 	// Verify inbox has all 10 messages
-	resp, _ := c1.Send(protocol.Request{Cmd: protocol.CmdInbox})
+	resp := sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdInbox})
 	if !resp.OK {
 		t.Fatalf("inbox failed: %s", resp.Error)
 	}
 
 	var messages []map[string]interface{}
-	json.Unmarshal(resp.Data, &messages)
+	unmarshalResponse(t, resp, &messages)
 	if len(messages) != 10 {
 		t.Fatalf("inbox len = %d, want 10", len(messages))
 	}
@@ -1617,8 +1697,8 @@ func TestBroker_SubscribeAndPushRace(t *testing.T) {
 	// Alice subscribes to task.events
 	c1 := connectClient(t, sockPath)
 	defer c1.Close()
-	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
-	resp, _ := c1.Send(protocol.Request{Cmd: protocol.CmdSubscribe, Topic: "task.events"})
+	sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	resp := sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdSubscribe, Topic: "task.events"})
 	if !resp.OK {
 		t.Fatalf("subscribe failed: %s", resp.Error)
 	}
@@ -1626,18 +1706,18 @@ func TestBroker_SubscribeAndPushRace(t *testing.T) {
 	// Bob connects
 	c2 := connectClient(t, sockPath)
 	defer c2.Close()
-	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+	sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
 
 	// Bob creates tasks and sends messages sequentially (not concurrently)
 	// The race we're testing is on the SERVER side (writeMu protecting concurrent writes to alice's connection)
 	// NOT on the client side (c2 is used from one goroutine only)
 	for i := 0; i < 5; i++ {
-		c2.Send(protocol.Request{
+		sendRequest(t, c2, protocol.Request{
 			Cmd:     protocol.CmdTaskCreate,
 			Payload: json.RawMessage(fmt.Sprintf(`{"task":%d}`, i)),
 			Type:    "test",
 		})
-		c2.Send(protocol.Request{
+		sendRequest(t, c2, protocol.Request{
 			Cmd:     protocol.CmdSend,
 			Name:    "alice",
 			Message: fmt.Sprintf("msg-%d", i),
@@ -1669,11 +1749,11 @@ func TestBroker_SendRecipientNameTooLong(t *testing.T) {
 
 	c := connectClient(t, sockPath)
 	defer c.Close()
-	c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	sendRequest(t, c, protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
 
 	// Create a name longer than MaxFieldLength (256)
 	longName := strings.Repeat("a", 257)
-	resp, _ := c.Send(protocol.Request{
+	resp := sendRequest(t, c, protocol.Request{
 		Cmd:     protocol.CmdSend,
 		Name:    longName,
 		Message: "test",
@@ -1693,7 +1773,7 @@ func TestBroker_SendMessageBodyTooLarge(t *testing.T) {
 
 	c := connectClient(t, sockPath)
 	defer c.Close()
-	c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	sendRequest(t, c, protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
 
 	// Create a message just under MaxMessageSize but large enough to test validation
 	// We can't test > MaxMessageSize because the client scanner will fail first
@@ -1712,14 +1792,14 @@ func TestBroker_Ack(t *testing.T) {
 
 	c1 := connectClient(t, sockPath)
 	defer c1.Close()
-	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
 
 	c2 := connectClient(t, sockPath)
 	defer c2.Close()
-	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+	sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
 
 	// Alice sends to Bob
-	resp, _ := c1.Send(protocol.Request{
+	resp := sendRequest(t, c1, protocol.Request{
 		Cmd:     protocol.CmdSend,
 		Name:    "bob",
 		Message: "hello",
@@ -1732,13 +1812,13 @@ func TestBroker_Ack(t *testing.T) {
 	var msgData struct {
 		ID int64 `json:"id"`
 	}
-	json.Unmarshal(resp.Data, &msgData)
+	unmarshalResponse(t, resp, &msgData)
 
 	// Bob receives push
-	c2.Receive()
+	receiveResponse(t, c2)
 
 	// Bob acks the message
-	resp, _ = c2.Send(protocol.Request{
+	resp = sendRequest(t, c2, protocol.Request{
 		Cmd:       protocol.CmdAck,
 		MessageID: msgData.ID,
 	})
@@ -1747,13 +1827,13 @@ func TestBroker_Ack(t *testing.T) {
 	}
 
 	// Verify message no longer in inbox
-	resp, _ = c2.Send(protocol.Request{Cmd: protocol.CmdInbox})
+	resp = sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdInbox})
 	if !resp.OK {
 		t.Fatalf("inbox failed: %s", resp.Error)
 	}
 
 	var messages []map[string]interface{}
-	json.Unmarshal(resp.Data, &messages)
+	unmarshalResponse(t, resp, &messages)
 	for _, msg := range messages {
 		if int64(msg["id"].(float64)) == msgData.ID {
 			t.Error("acked message should not be in inbox")
@@ -1768,9 +1848,9 @@ func TestBroker_AckNonexistent(t *testing.T) {
 
 	c := connectClient(t, sockPath)
 	defer c.Close()
-	c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	sendRequest(t, c, protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
 
-	resp, _ := c.Send(protocol.Request{
+	resp := sendRequest(t, c, protocol.Request{
 		Cmd:       protocol.CmdAck,
 		MessageID: 99999,
 	})
@@ -1789,14 +1869,14 @@ func TestBroker_AckForbidden(t *testing.T) {
 
 	c1 := connectClient(t, sockPath)
 	defer c1.Close()
-	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
 
 	c2 := connectClient(t, sockPath)
 	defer c2.Close()
-	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+	sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
 
 	// Alice sends to Bob
-	resp, _ := c1.Send(protocol.Request{
+	resp := sendRequest(t, c1, protocol.Request{
 		Cmd:     protocol.CmdSend,
 		Name:    "bob",
 		Message: "hello",
@@ -1808,10 +1888,10 @@ func TestBroker_AckForbidden(t *testing.T) {
 	var msgData struct {
 		ID int64 `json:"id"`
 	}
-	json.Unmarshal(resp.Data, &msgData)
+	unmarshalResponse(t, resp, &msgData)
 
 	// Alice tries to ack Bob's message
-	resp, _ = c1.Send(protocol.Request{
+	resp = sendRequest(t, c1, protocol.Request{
 		Cmd:       protocol.CmdAck,
 		MessageID: msgData.ID,
 	})
@@ -1830,14 +1910,14 @@ func TestBroker_FullAckLifecycle(t *testing.T) {
 
 	c1 := connectClient(t, sockPath)
 	defer c1.Close()
-	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
 
 	c2 := connectClient(t, sockPath)
 	defer c2.Close()
-	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+	sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
 
 	// Alice sends to Bob (state: queued → pushed)
-	resp, _ := c1.Send(protocol.Request{
+	resp := sendRequest(t, c1, protocol.Request{
 		Cmd:     protocol.CmdSend,
 		Name:    "bob",
 		Message: "lifecycle test",
@@ -1849,7 +1929,7 @@ func TestBroker_FullAckLifecycle(t *testing.T) {
 	var msgData struct {
 		ID int64 `json:"id"`
 	}
-	json.Unmarshal(resp.Data, &msgData)
+	unmarshalResponse(t, resp, &msgData)
 
 	// After send, state could be "queued" or "pushed" (push happens synchronously for connected recipients)
 	state, err := b.msgStore.GetState(msgData.ID)
@@ -1861,10 +1941,10 @@ func TestBroker_FullAckLifecycle(t *testing.T) {
 	}
 
 	// Bob receives push
-	c2.Receive()
+	receiveResponse(t, c2)
 
 	// Bob checks inbox (state: pushed → seen)
-	resp, _ = c2.Send(protocol.Request{Cmd: protocol.CmdInbox})
+	resp = sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdInbox})
 	if !resp.OK {
 		t.Fatalf("inbox failed: %s", resp.Error)
 	}
@@ -1879,7 +1959,7 @@ func TestBroker_FullAckLifecycle(t *testing.T) {
 	}
 
 	// Bob acks (state: seen → acked)
-	resp, _ = c2.Send(protocol.Request{
+	resp = sendRequest(t, c2, protocol.Request{
 		Cmd:       protocol.CmdAck,
 		MessageID: msgData.ID,
 	})
@@ -1897,13 +1977,13 @@ func TestBroker_FullAckLifecycle(t *testing.T) {
 	}
 
 	// Verify message no longer in inbox
-	resp, _ = c2.Send(protocol.Request{Cmd: protocol.CmdInbox})
+	resp = sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdInbox})
 	if !resp.OK {
 		t.Fatalf("inbox failed: %s", resp.Error)
 	}
 
 	var messages []map[string]interface{}
-	json.Unmarshal(resp.Data, &messages)
+	unmarshalResponse(t, resp, &messages)
 	if len(messages) != 0 {
 		t.Errorf("inbox len = %d, want 0 (acked message excluded)", len(messages))
 	}
@@ -1916,17 +1996,18 @@ func TestBroker_AwaitAck(t *testing.T) {
 
 	c1 := connectClient(t, sockPath)
 	defer c1.Close()
-	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
 
 	c2 := connectClient(t, sockPath)
 	defer c2.Close()
-	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+	sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
 
 	// Alice sends with await-ack (blocks)
 	sendDone := make(chan bool)
 	var sendResp *protocol.Response
+	var sendErr error
 	go func() {
-		sendResp, _ = c1.Send(protocol.Request{
+		sendResp, sendErr = c1.Send(protocol.Request{
 			Cmd:      protocol.CmdSend,
 			Name:     "bob",
 			Message:  "await test",
@@ -1937,14 +2018,14 @@ func TestBroker_AwaitAck(t *testing.T) {
 	}()
 
 	// Bob receives push
-	pushResp, _ := c2.Receive()
+	pushResp := receiveResponse(t, c2)
 	var pushData struct {
 		ID int64 `json:"id"`
 	}
-	json.Unmarshal(pushResp.Data, &pushData)
+	unmarshalResponse(t, pushResp, &pushData)
 
 	// Bob acks
-	c2.Send(protocol.Request{
+	sendRequest(t, c2, protocol.Request{
 		Cmd:       protocol.CmdAck,
 		MessageID: pushData.ID,
 	})
@@ -1952,6 +2033,9 @@ func TestBroker_AwaitAck(t *testing.T) {
 	// Alice's send should unblock
 	select {
 	case <-sendDone:
+		if sendErr != nil {
+			t.Fatalf("send: %v", sendErr)
+		}
 		if !sendResp.OK {
 			t.Errorf("send should succeed after ack: %s", sendResp.Error)
 		}
@@ -1967,14 +2051,14 @@ func TestBroker_AwaitAckTimeout(t *testing.T) {
 
 	c1 := connectClient(t, sockPath)
 	defer c1.Close()
-	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
 
 	c2 := connectClient(t, sockPath)
 	defer c2.Close()
-	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+	sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
 
 	// Alice sends with await-ack and short timeout
-	resp, _ := c1.Send(protocol.Request{
+	resp := sendRequest(t, c1, protocol.Request{
 		Cmd:      protocol.CmdSend,
 		Name:     "bob",
 		Message:  "timeout test",
@@ -1998,14 +2082,14 @@ func TestBroker_AwaitAckNoLeak(t *testing.T) {
 
 	c1 := connectClient(t, sockPath)
 	defer c1.Close()
-	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
 
 	c2 := connectClient(t, sockPath)
 	defer c2.Close()
-	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+	sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
 
 	// Alice sends with await-ack and short timeout
-	c1.Send(protocol.Request{
+	sendRequest(t, c1, protocol.Request{
 		Cmd:      protocol.CmdSend,
 		Name:     "bob",
 		Message:  "leak test",
@@ -2025,14 +2109,14 @@ func TestBroker_AwaitAckNoLeak(t *testing.T) {
 	}
 
 	// Also verify by trying to ack the message and ensuring it doesn't crash
-	pushResp, _ := c2.Receive()
+	pushResp := receiveResponse(t, c2)
 	var pushData struct {
 		ID int64 `json:"id"`
 	}
-	json.Unmarshal(pushResp.Data, &pushData)
+	unmarshalResponse(t, pushResp, &pushData)
 
 	// Ack should succeed but not crash (waiter already removed)
-	resp, _ := c2.Send(protocol.Request{
+	resp := sendRequest(t, c2, protocol.Request{
 		Cmd:       protocol.CmdAck,
 		MessageID: pushData.ID,
 	})
@@ -2046,8 +2130,7 @@ func TestBroker_AwaitAckBrokerShutdown(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
 
-	// Use /tmp for socket to avoid path length issues
-	sockPath := fmt.Sprintf("/tmp/waggle-test-%d.sock", time.Now().UnixNano())
+	sockPath := shortBrokerSocketPath(t, "waggle-test-*")
 	dbPath := fmt.Sprintf("%s/db", tmpDir)
 
 	b, err := New(Config{SocketPath: sockPath, DBPath: dbPath})
@@ -2060,11 +2143,11 @@ func TestBroker_AwaitAckBrokerShutdown(t *testing.T) {
 
 	c1 := connectClient(t, sockPath)
 	defer c1.Close()
-	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
 
 	c2 := connectClient(t, sockPath)
 	defer c2.Close()
-	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+	sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
 
 	// Alice sends with await-ack (long timeout)
 	sendDone := make(chan *protocol.Response)
@@ -2107,20 +2190,20 @@ func TestBroker_PresenceShowsConnected(t *testing.T) {
 
 	c1 := connectClient(t, sockPath)
 	defer c1.Close()
-	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
 
 	c2 := connectClient(t, sockPath)
 	defer c2.Close()
-	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+	sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
 
 	// Check presence
-	resp, _ := c1.Send(protocol.Request{Cmd: protocol.CmdPresence})
+	resp := sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdPresence})
 	if !resp.OK {
 		t.Fatalf("presence failed: %s", resp.Error)
 	}
 
 	var agents []map[string]string
-	json.Unmarshal(resp.Data, &agents)
+	unmarshalResponse(t, resp, &agents)
 	if len(agents) != 2 {
 		t.Fatalf("presence len = %d, want 2", len(agents))
 	}
@@ -2147,7 +2230,7 @@ func TestBroker_SpawnStatus(t *testing.T) {
 
 	c := connectClient(t, sockPath)
 	defer c.Close()
-	c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "cli"})
+	sendRequest(t, c, protocol.Request{Cmd: protocol.CmdConnect, Name: "cli"})
 
 	// Add an agent to spawn manager
 	err := b.spawnMgr.Add("worker-1", "claude", 12345)
@@ -2156,13 +2239,13 @@ func TestBroker_SpawnStatus(t *testing.T) {
 	}
 
 	// Get status
-	resp, _ := c.Send(protocol.Request{Cmd: protocol.CmdStatus})
+	resp := sendRequest(t, c, protocol.Request{Cmd: protocol.CmdStatus})
 	if !resp.OK {
 		t.Fatalf("status failed: %s", resp.Error)
 	}
 
 	var status map[string]interface{}
-	json.Unmarshal(resp.Data, &status)
+	unmarshalResponse(t, resp, &status)
 
 	// Verify spawned key exists
 	spawned, ok := status["spawned"]
@@ -2189,14 +2272,14 @@ func TestBroker_SpawnRegister(t *testing.T) {
 
 	c := connectClient(t, sockPath)
 	defer c.Close()
-	c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "cli"})
+	sendRequest(t, c, protocol.Request{Cmd: protocol.CmdConnect, Name: "cli"})
 
 	// Register a spawn
-	spawnData, _ := json.Marshal(map[string]any{
+	spawnData := marshalJSON(t, map[string]any{
 		"pid":  12345,
 		"type": "claude",
 	})
-	resp, _ := c.Send(protocol.Request{
+	resp := sendRequest(t, c, protocol.Request{
 		Cmd:     protocol.CmdSpawnRegister,
 		Name:    "worker-1",
 		Payload: spawnData,
@@ -2206,13 +2289,13 @@ func TestBroker_SpawnRegister(t *testing.T) {
 	}
 
 	// Verify status includes spawn
-	resp, _ = c.Send(protocol.Request{Cmd: protocol.CmdStatus})
+	resp = sendRequest(t, c, protocol.Request{Cmd: protocol.CmdStatus})
 	if !resp.OK {
 		t.Fatalf("status failed: %s", resp.Error)
 	}
 
 	var status map[string]interface{}
-	json.Unmarshal(resp.Data, &status)
+	unmarshalResponse(t, resp, &status)
 
 	spawned, ok := status["spawned"]
 	if !ok {
@@ -2236,15 +2319,15 @@ func TestBroker_SpawnRegisterDuplicate(t *testing.T) {
 
 	c := connectClient(t, sockPath)
 	defer c.Close()
-	c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "cli"})
+	sendRequest(t, c, protocol.Request{Cmd: protocol.CmdConnect, Name: "cli"})
 
-	spawnData, _ := json.Marshal(map[string]any{
+	spawnData := marshalJSON(t, map[string]any{
 		"pid":  12345,
 		"type": "claude",
 	})
 
 	// First register
-	resp, _ := c.Send(protocol.Request{
+	resp := sendRequest(t, c, protocol.Request{
 		Cmd:     protocol.CmdSpawnRegister,
 		Name:    "worker-1",
 		Payload: spawnData,
@@ -2254,7 +2337,7 @@ func TestBroker_SpawnRegisterDuplicate(t *testing.T) {
 	}
 
 	// Second register same name
-	resp, _ = c.Send(protocol.Request{
+	resp = sendRequest(t, c, protocol.Request{
 		Cmd:     protocol.CmdSpawnRegister,
 		Name:    "worker-1",
 		Payload: spawnData,
@@ -2272,11 +2355,11 @@ func TestBroker_SpawnUpdatePID(t *testing.T) {
 	c := connectClient(t, sockPath)
 	defer c.Close()
 
-	c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "spawner"})
+	sendRequest(t, c, protocol.Request{Cmd: protocol.CmdConnect, Name: "spawner"})
 
 	// Register with PID=0
-	regData, _ := json.Marshal(map[string]any{"pid": 0, "type": "claude"})
-	resp, _ := c.Send(protocol.Request{
+	regData := marshalJSON(t, map[string]any{"pid": 0, "type": "claude"})
+	resp := sendRequest(t, c, protocol.Request{
 		Cmd:     protocol.CmdSpawnRegister,
 		Name:    "worker-1",
 		Payload: regData,
@@ -2286,8 +2369,8 @@ func TestBroker_SpawnUpdatePID(t *testing.T) {
 	}
 
 	// Update PID
-	pidData, _ := json.Marshal(map[string]any{"pid": 12345})
-	resp, _ = c.Send(protocol.Request{
+	pidData := marshalJSON(t, map[string]any{"pid": 12345})
+	resp = sendRequest(t, c, protocol.Request{
 		Cmd:     protocol.CmdSpawnUpdatePID,
 		Name:    "worker-1",
 		Payload: pidData,
@@ -2297,9 +2380,9 @@ func TestBroker_SpawnUpdatePID(t *testing.T) {
 	}
 
 	// Verify via status
-	resp, _ = c.Send(protocol.Request{Cmd: protocol.CmdStatus})
+	resp = sendRequest(t, c, protocol.Request{Cmd: protocol.CmdStatus})
 	var status map[string]interface{}
-	json.Unmarshal(resp.Data, &status)
+	unmarshalResponse(t, resp, &status)
 	spawned := status["spawned"].([]interface{})
 	if len(spawned) != 1 {
 		t.Fatalf("spawned len = %d, want 1", len(spawned))
@@ -2312,7 +2395,8 @@ func TestBroker_SpawnUpdatePID(t *testing.T) {
 
 // TestBroker_SpawnStatusAfterStop — spawned list is empty after shutdown
 func TestBroker_SpawnStatusAfterStop(t *testing.T) {
-	_, b, _ := startTestBroker(t)
+	_, b, cleanup := startTestBroker(t)
+	_ = cleanup // This test calls b.Shutdown directly to assert post-stop state.
 
 	// Add agent directly
 	b.spawnMgr.Add("worker-1", "claude", 99999)
@@ -2340,15 +2424,15 @@ func TestBroker_PresenceConnectDisconnect(t *testing.T) {
 
 	c1 := connectClient(t, sockPath)
 	defer c1.Close()
-	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
 
 	c2 := connectClient(t, sockPath)
-	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+	sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
 
 	// Check presence — both present
-	resp, _ := c1.Send(protocol.Request{Cmd: protocol.CmdPresence})
+	resp := sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdPresence})
 	var agents []map[string]string
-	json.Unmarshal(resp.Data, &agents)
+	unmarshalResponse(t, resp, &agents)
 	if len(agents) != 2 {
 		t.Fatalf("presence len = %d, want 2", len(agents))
 	}
@@ -2358,8 +2442,8 @@ func TestBroker_PresenceConnectDisconnect(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Check presence — only alice
-	resp, _ = c1.Send(protocol.Request{Cmd: protocol.CmdPresence})
-	json.Unmarshal(resp.Data, &agents)
+	resp = sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdPresence})
+	unmarshalResponse(t, resp, &agents)
 	if len(agents) != 1 {
 		t.Fatalf("presence len = %d, want 1 after disconnect", len(agents))
 	}
@@ -2375,10 +2459,10 @@ func TestBroker_PresenceEvents(t *testing.T) {
 
 	c1 := connectClient(t, sockPath)
 	defer c1.Close()
-	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
 
 	// Subscribe to presence.events
-	resp, _ := c1.Send(protocol.Request{Cmd: protocol.CmdSubscribe, Topic: "presence.events"})
+	resp := sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdSubscribe, Topic: "presence.events"})
 	if !resp.OK {
 		t.Fatalf("subscribe failed: %s", resp.Error)
 	}
@@ -2388,7 +2472,7 @@ func TestBroker_PresenceEvents(t *testing.T) {
 	// Bob connects
 	c2 := connectClient(t, sockPath)
 	defer c2.Close()
-	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+	sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
 
 	// Alice should receive presence.online event
 	select {
@@ -2411,14 +2495,14 @@ func TestBroker_SendWithPriority(t *testing.T) {
 
 	c1 := connectClient(t, sockPath)
 	defer c1.Close()
-	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
 
 	c2 := connectClient(t, sockPath)
 	defer c2.Close()
-	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+	sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
 
 	// Alice sends with priority
-	resp, _ := c1.Send(protocol.Request{
+	resp := sendRequest(t, c1, protocol.Request{
 		Cmd:         protocol.CmdSend,
 		Name:        "bob",
 		Message:     "urgent",
@@ -2429,16 +2513,16 @@ func TestBroker_SendWithPriority(t *testing.T) {
 	}
 
 	// Bob receives push
-	c2.Receive()
+	receiveResponse(t, c2)
 
 	// Bob checks inbox
-	resp, _ = c2.Send(protocol.Request{Cmd: protocol.CmdInbox})
+	resp = sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdInbox})
 	if !resp.OK {
 		t.Fatalf("inbox failed: %s", resp.Error)
 	}
 
 	var messages []map[string]interface{}
-	json.Unmarshal(resp.Data, &messages)
+	unmarshalResponse(t, resp, &messages)
 	if len(messages) != 1 {
 		t.Fatalf("inbox len = %d, want 1", len(messages))
 	}
@@ -2454,14 +2538,14 @@ func TestBroker_SendWithTTL(t *testing.T) {
 
 	c1 := connectClient(t, sockPath)
 	defer c1.Close()
-	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
 
 	c2 := connectClient(t, sockPath)
 	defer c2.Close()
-	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+	sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
 
 	// Alice sends with TTL
-	resp, _ := c1.Send(protocol.Request{
+	resp := sendRequest(t, c1, protocol.Request{
 		Cmd:     protocol.CmdSend,
 		Name:    "bob",
 		Message: "expires soon",
@@ -2472,19 +2556,19 @@ func TestBroker_SendWithTTL(t *testing.T) {
 	}
 
 	// Bob receives push
-	c2.Receive()
+	receiveResponse(t, c2)
 
 	// Wait for TTL to expire
 	time.Sleep(2 * time.Second)
 
 	// Bob checks inbox — should be empty (belt-and-suspenders filter)
-	resp, _ = c2.Send(protocol.Request{Cmd: protocol.CmdInbox})
+	resp = sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdInbox})
 	if !resp.OK {
 		t.Fatalf("inbox failed: %s", resp.Error)
 	}
 
 	var messages []map[string]interface{}
-	json.Unmarshal(resp.Data, &messages)
+	unmarshalResponse(t, resp, &messages)
 	if len(messages) != 0 {
 		t.Errorf("inbox len = %d, want 0 (expired)", len(messages))
 	}
@@ -2498,14 +2582,14 @@ func TestBroker_TTLCheckerRuns(t *testing.T) {
 
 	c1 := connectClient(t, sockPath)
 	defer c1.Close()
-	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
 
 	c2 := connectClient(t, sockPath)
 	defer c2.Close()
-	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+	sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
 
 	// Alice sends with TTL
-	resp, _ := c1.Send(protocol.Request{
+	resp := sendRequest(t, c1, protocol.Request{
 		Cmd:     protocol.CmdSend,
 		Name:    "bob",
 		Message: "expires",
@@ -2518,10 +2602,10 @@ func TestBroker_TTLCheckerRuns(t *testing.T) {
 	var msgData struct {
 		ID int64 `json:"id"`
 	}
-	json.Unmarshal(resp.Data, &msgData)
+	unmarshalResponse(t, resp, &msgData)
 
 	// Bob receives push
-	c2.Receive()
+	receiveResponse(t, c2)
 
 	// Wait for TTL to expire (1s) and checker to fire (500ms period)
 	time.Sleep(2 * time.Second)
@@ -2536,13 +2620,13 @@ func TestBroker_TTLCheckerRuns(t *testing.T) {
 	}
 
 	// Bob checks inbox
-	resp, _ = c2.Send(protocol.Request{Cmd: protocol.CmdInbox})
+	resp = sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdInbox})
 	if !resp.OK {
 		t.Fatalf("inbox failed: %s", resp.Error)
 	}
 
 	var messages []map[string]interface{}
-	json.Unmarshal(resp.Data, &messages)
+	unmarshalResponse(t, resp, &messages)
 	if len(messages) != 0 {
 		t.Errorf("inbox len = %d, want 0 (expired)", len(messages))
 	}
@@ -2563,44 +2647,53 @@ func TestBroker_AwaitAckRaceEarlyAck(t *testing.T) {
 
 	c1 := connectClient(t, sockPath)
 	defer c1.Close()
-	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
 
 	c2 := connectClient(t, sockPath)
 	defer c2.Close()
-	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+	sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
 
 	// Alice sends with await-ack
-	sendDone := make(chan *protocol.Response)
+	sendDone := make(chan struct {
+		resp *protocol.Response
+		err  error
+	}, 1)
 	go func() {
-		resp, _ := c1.Send(protocol.Request{
+		resp, err := c1.Send(protocol.Request{
 			Cmd:      protocol.CmdSend,
 			Name:     "bob",
 			Message:  "race test",
 			AwaitAck: true,
 			Timeout:  5,
 		})
-		sendDone <- resp
+		sendDone <- struct {
+			resp *protocol.Response
+			err  error
+		}{resp: resp, err: err}
 	}()
 
 	// Bob receives push and acks immediately
 	// This creates the race: ack might arrive before sender enters select
-	pushResp, _ := c2.Receive()
+	pushResp := receiveResponse(t, c2)
 	var pushData struct {
 		ID int64 `json:"id"`
 	}
-	json.Unmarshal(pushResp.Data, &pushData)
+	unmarshalResponse(t, pushResp, &pushData)
 
 	// Ack immediately (no delay)
-	c2.Send(protocol.Request{
+	sendRequest(t, c2, protocol.Request{
 		Cmd:       protocol.CmdAck,
 		MessageID: pushData.ID,
 	})
 
 	// Alice's send should unblock (not timeout)
 	select {
-	case resp := <-sendDone:
-		if !resp.OK {
-			t.Errorf("send should succeed after ack: %s (code=%s)", resp.Error, resp.Code)
+	case result := <-sendDone:
+		if result.err != nil {
+			t.Fatalf("send: %v", result.err)
+		}
+		if !result.resp.OK {
+			t.Errorf("send should succeed after ack: %s (code=%s)", result.resp.Error, result.resp.Code)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("send timed out despite ack (race condition not fixed)")
@@ -2615,8 +2708,8 @@ func TestBroker_PresenceEventOnDisconnect(t *testing.T) {
 	// Observer subscribes to presence events
 	observer := connectClient(t, sockPath)
 	defer observer.Close()
-	observer.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "observer"})
-	resp, _ := observer.Send(protocol.Request{Cmd: protocol.CmdSubscribe, Topic: "presence.events"})
+	sendRequest(t, observer, protocol.Request{Cmd: protocol.CmdConnect, Name: "observer"})
+	resp := sendRequest(t, observer, protocol.Request{Cmd: protocol.CmdSubscribe, Topic: "presence.events"})
 	if !resp.OK {
 		t.Fatalf("subscribe failed: %s", resp.Error)
 	}
@@ -2625,7 +2718,7 @@ func TestBroker_PresenceEventOnDisconnect(t *testing.T) {
 
 	// Worker connects
 	worker := connectClient(t, sockPath)
-	worker.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "worker-1"})
+	sendRequest(t, worker, protocol.Request{Cmd: protocol.CmdConnect, Name: "worker-1"})
 
 	// Drain the connect event
 	select {
@@ -2635,7 +2728,7 @@ func TestBroker_PresenceEventOnDisconnect(t *testing.T) {
 	}
 
 	// Worker disconnects
-	worker.Send(protocol.Request{Cmd: protocol.CmdDisconnect})
+	sendRequest(t, worker, protocol.Request{Cmd: protocol.CmdDisconnect})
 	worker.Close()
 
 	// Observer should receive presence.offline event
@@ -2645,7 +2738,7 @@ func TestBroker_PresenceEventOnDisconnect(t *testing.T) {
 			t.Errorf("event = %q, want presence.offline", evt.Event)
 		}
 		var data map[string]string
-		json.Unmarshal(evt.Data, &data)
+		unmarshalJSON(t, evt.Data, &data)
 		if data["name"] != "worker-1" {
 			t.Errorf("name = %q, want worker-1", data["name"])
 		}
@@ -2659,20 +2752,17 @@ func TestBroker_CreateTaskWithTTL(t *testing.T) {
 	sockPath, b, cleanup := startTestBroker(t)
 	defer cleanup()
 
-	c, err := client.Connect(sockPath, 5*time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
+	c := connectClient(t, sockPath)
 	defer c.Close()
 
 	// Connect
-	resp, _ := c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "cli"})
+	resp := sendRequest(t, c, protocol.Request{Cmd: protocol.CmdConnect, Name: "cli"})
 	if !resp.OK {
 		t.Fatalf("connect failed: %s", resp.Error)
 	}
 
 	// Create task with TTL=60
-	resp, _ = c.Send(protocol.Request{
+	resp = sendRequest(t, c, protocol.Request{
 		Cmd:     protocol.CmdTaskCreate,
 		Payload: json.RawMessage(`{"desc":"ttl test"}`),
 		Type:    "test",
@@ -2686,7 +2776,7 @@ func TestBroker_CreateTaskWithTTL(t *testing.T) {
 	var taskData struct {
 		ID int64 `json:"id"`
 	}
-	json.Unmarshal(resp.Data, &taskData)
+	unmarshalResponse(t, resp, &taskData)
 	task, err := b.store.Get(taskData.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -2701,7 +2791,7 @@ func TestBroker_TaskTTLCheckerRuns(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
 
-	sockPath := fmt.Sprintf("/tmp/waggle-test-%d.sock", time.Now().UnixNano())
+	sockPath := shortBrokerSocketPath(t, "waggle-test-*")
 	dbPath := fmt.Sprintf("%s/db", tmpDir)
 
 	// Create broker with short task TTL check period
@@ -2718,23 +2808,19 @@ func TestBroker_TaskTTLCheckerRuns(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	defer func() {
 		b.Shutdown()
-		os.Remove(sockPath)
 	}()
 
-	c, err := client.Connect(sockPath, 5*time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
+	c := connectClient(t, sockPath)
 	defer c.Close()
 
 	// Connect
-	resp, _ := c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "cli"})
+	resp := sendRequest(t, c, protocol.Request{Cmd: protocol.CmdConnect, Name: "cli"})
 	if !resp.OK {
 		t.Fatalf("connect failed: %s", resp.Error)
 	}
 
 	// Create task with TTL=1 second
-	resp, _ = c.Send(protocol.Request{
+	resp = sendRequest(t, c, protocol.Request{
 		Cmd:     protocol.CmdTaskCreate,
 		Payload: json.RawMessage(`{"desc":"expires soon"}`),
 		Type:    "test",
@@ -2747,7 +2833,7 @@ func TestBroker_TaskTTLCheckerRuns(t *testing.T) {
 	var taskData struct {
 		ID int64 `json:"id"`
 	}
-	json.Unmarshal(resp.Data, &taskData)
+	unmarshalResponse(t, resp, &taskData)
 	taskID := taskData.ID
 
 	// Wait for TTL to expire + checker to run
@@ -2771,21 +2857,18 @@ func TestBroker_StatusQueueHealth(t *testing.T) {
 	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
-	c, err := client.Connect(sockPath, 5*time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
+	c := connectClient(t, sockPath)
 	defer c.Close()
 
 	// Connect
-	resp, _ := c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "cli"})
+	resp := sendRequest(t, c, protocol.Request{Cmd: protocol.CmdConnect, Name: "cli"})
 	if !resp.OK {
 		t.Fatalf("connect failed: %s", resp.Error)
 	}
 
 	// Create 2 tasks
 	for i := 0; i < 2; i++ {
-		resp, _ = c.Send(protocol.Request{
+		resp = sendRequest(t, c, protocol.Request{
 			Cmd:     protocol.CmdTaskCreate,
 			Payload: json.RawMessage(fmt.Sprintf(`{"desc":"task %d"}`, i)),
 			Type:    "test",
@@ -2796,14 +2879,14 @@ func TestBroker_StatusQueueHealth(t *testing.T) {
 	}
 
 	// Get status
-	resp, _ = c.Send(protocol.Request{Cmd: protocol.CmdStatus})
+	resp = sendRequest(t, c, protocol.Request{Cmd: protocol.CmdStatus})
 	if !resp.OK {
 		t.Fatalf("status failed: %s", resp.Error)
 	}
 
 	// Verify queue_health is present
 	var statusData map[string]interface{}
-	json.Unmarshal(resp.Data, &statusData)
+	unmarshalResponse(t, resp, &statusData)
 	queueHealth, ok := statusData["queue_health"]
 	if !ok {
 		t.Fatal("expected queue_health in status")
@@ -2820,7 +2903,7 @@ func TestBroker_TaskStaleEvent(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
 
-	sockPath := fmt.Sprintf("/tmp/waggle-test-%d.sock", time.Now().UnixNano())
+	sockPath := shortBrokerSocketPath(t, "waggle-test-*")
 	dbPath := fmt.Sprintf("%s/db", tmpDir)
 
 	// Create broker with short task TTL check period and stale threshold
@@ -2838,24 +2921,20 @@ func TestBroker_TaskStaleEvent(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	defer func() {
 		b.Shutdown()
-		os.Remove(sockPath)
 	}()
 
 	// Subscriber client
-	c1, err := client.Connect(sockPath, 5*time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
+	c1 := connectClient(t, sockPath)
 	defer c1.Close()
 
 	// Connect subscriber
-	resp, _ := c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "subscriber"})
+	resp := sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdConnect, Name: "subscriber"})
 	if !resp.OK {
 		t.Fatalf("connect failed: %s", resp.Error)
 	}
 
 	// Subscribe to task.events
-	resp, _ = c1.Send(protocol.Request{
+	resp = sendRequest(t, c1, protocol.Request{
 		Cmd:   protocol.CmdSubscribe,
 		Topic: "task.events",
 	})
@@ -2864,22 +2943,16 @@ func TestBroker_TaskStaleEvent(t *testing.T) {
 	}
 
 	// Start reading events
-	eventCh, err := c1.ReadStream()
-	if err != nil {
-		t.Fatalf("read stream: %v", err)
-	}
+	eventCh := readStream(t, c1)
 
 	// Creator client (separate connection to avoid protocol race)
-	c2, err := client.Connect(sockPath, 5*time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
+	c2 := connectClient(t, sockPath)
 	defer c2.Close()
 
-	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "creator"})
+	sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdConnect, Name: "creator"})
 
 	// Create task (will become stale after 1 second)
-	resp, _ = c2.Send(protocol.Request{
+	resp = sendRequest(t, c2, protocol.Request{
 		Cmd:     protocol.CmdTaskCreate,
 		Payload: json.RawMessage(`{"desc":"stale task"}`),
 		Type:    "test",
@@ -2912,9 +2985,7 @@ func TestBroker_TaskStaleEvent(t *testing.T) {
 
 	// Parse the event data
 	var data map[string]interface{}
-	if err := json.Unmarshal(staleEvent.Data, &data); err != nil {
-		t.Fatalf("failed to parse event data: %v", err)
-	}
+	unmarshalJSON(t, staleEvent.Data, &data)
 
 	// Verify stale_count > 0
 	staleCount, ok := data["stale_count"].(float64)
@@ -2935,10 +3006,10 @@ func TestBroker_CreateTaskWithInvalidTTL(t *testing.T) {
 
 	c := connectClient(t, sockPath)
 	defer c.Close()
-	c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "cli"})
+	sendRequest(t, c, protocol.Request{Cmd: protocol.CmdConnect, Name: "cli"})
 
 	// Negative TTL
-	resp, _ := c.Send(protocol.Request{
+	resp := sendRequest(t, c, protocol.Request{
 		Cmd:     protocol.CmdTaskCreate,
 		Payload: json.RawMessage(`{"desc":"neg ttl"}`),
 		Type:    "test",
@@ -2952,7 +3023,7 @@ func TestBroker_CreateTaskWithInvalidTTL(t *testing.T) {
 	}
 
 	// Exceeds max TTL
-	resp, _ = c.Send(protocol.Request{
+	resp = sendRequest(t, c, protocol.Request{
 		Cmd:     protocol.CmdTaskCreate,
 		Payload: json.RawMessage(`{"desc":"big ttl"}`),
 		Type:    "test",
@@ -2975,20 +3046,17 @@ func TestBroker_CustomEventHasTopic(t *testing.T) {
 
 	c1 := connectClient(t, sockPath)
 	defer c1.Close()
-	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "subscriber"})
-	resp, _ := c1.Send(protocol.Request{Cmd: protocol.CmdSubscribe, Topic: "chat.demo"})
+	sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdConnect, Name: "subscriber"})
+	resp := sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdSubscribe, Topic: "chat.demo"})
 	if !resp.OK {
 		t.Fatalf("subscribe: %s", resp.Error)
 	}
-	eventCh, err := c1.ReadStream()
-	if err != nil {
-		t.Fatalf("ReadStream: %v", err)
-	}
+	eventCh := readStream(t, c1)
 
 	c2 := connectClient(t, sockPath)
 	defer c2.Close()
-	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "publisher"})
-	c2.Send(protocol.Request{Cmd: protocol.CmdPublish, Topic: "chat.demo", Message: `{"msg":"hi"}`})
+	sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdConnect, Name: "publisher"})
+	sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdPublish, Topic: "chat.demo", Message: `{"msg":"hi"}`})
 
 	select {
 	case evt := <-eventCh:
@@ -3007,14 +3075,14 @@ func TestBroker_CustomEventHasTimestamp(t *testing.T) {
 
 	c1 := connectClient(t, sockPath)
 	defer c1.Close()
-	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "subscriber"})
-	c1.Send(protocol.Request{Cmd: protocol.CmdSubscribe, Topic: "chat.demo"})
+	sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdConnect, Name: "subscriber"})
+	sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdSubscribe, Topic: "chat.demo"})
 	eventCh := readStream(t, c1)
 
 	c2 := connectClient(t, sockPath)
 	defer c2.Close()
-	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "publisher"})
-	c2.Send(protocol.Request{Cmd: protocol.CmdPublish, Topic: "chat.demo", Message: `{"msg":"hi"}`})
+	sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdConnect, Name: "publisher"})
+	sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdPublish, Topic: "chat.demo", Message: `{"msg":"hi"}`})
 
 	select {
 	case evt := <-eventCh:
@@ -3036,14 +3104,14 @@ func TestBroker_CustomEventHasData(t *testing.T) {
 
 	c1 := connectClient(t, sockPath)
 	defer c1.Close()
-	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "subscriber"})
-	c1.Send(protocol.Request{Cmd: protocol.CmdSubscribe, Topic: "chat.demo"})
+	sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdConnect, Name: "subscriber"})
+	sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdSubscribe, Topic: "chat.demo"})
 	eventCh := readStream(t, c1)
 
 	c2 := connectClient(t, sockPath)
 	defer c2.Close()
-	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "publisher"})
-	c2.Send(protocol.Request{Cmd: protocol.CmdPublish, Topic: "chat.demo", Message: `{"key":"value"}`})
+	sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdConnect, Name: "publisher"})
+	sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdPublish, Topic: "chat.demo", Message: `{"key":"value"}`})
 
 	select {
 	case evt := <-eventCh:
@@ -3051,9 +3119,7 @@ func TestBroker_CustomEventHasData(t *testing.T) {
 			t.Error("event.Data should be non-empty")
 		}
 		var data map[string]string
-		if err := json.Unmarshal(evt.Data, &data); err != nil {
-			t.Fatalf("failed to parse event.Data: %v", err)
-		}
+		unmarshalJSON(t, evt.Data, &data)
 		if data["key"] != "value" {
 			t.Errorf("event.Data[key] = %q, want %q", data["key"], "value")
 		}
@@ -3069,14 +3135,14 @@ func TestBroker_CustomEventName(t *testing.T) {
 
 	c1 := connectClient(t, sockPath)
 	defer c1.Close()
-	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "subscriber"})
-	c1.Send(protocol.Request{Cmd: protocol.CmdSubscribe, Topic: "chat.demo"})
+	sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdConnect, Name: "subscriber"})
+	sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdSubscribe, Topic: "chat.demo"})
 	eventCh := readStream(t, c1)
 
 	c2 := connectClient(t, sockPath)
 	defer c2.Close()
-	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "publisher"})
-	c2.Send(protocol.Request{Cmd: protocol.CmdPublish, Topic: "chat.demo", Message: `{"msg":"hi"}`})
+	sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdConnect, Name: "publisher"})
+	sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdPublish, Topic: "chat.demo", Message: `{"msg":"hi"}`})
 
 	select {
 	case evt := <-eventCh:
@@ -3095,8 +3161,8 @@ func TestBroker_TaskEventsRegression(t *testing.T) {
 
 	c1 := connectClient(t, sockPath)
 	defer c1.Close()
-	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "subscriber"})
-	resp, _ := c1.Send(protocol.Request{Cmd: protocol.CmdSubscribe, Topic: "task.events"})
+	sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdConnect, Name: "subscriber"})
+	resp := sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdSubscribe, Topic: "task.events"})
 	if !resp.OK {
 		t.Fatalf("subscribe: %s", resp.Error)
 	}
@@ -3104,8 +3170,8 @@ func TestBroker_TaskEventsRegression(t *testing.T) {
 
 	c2 := connectClient(t, sockPath)
 	defer c2.Close()
-	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "creator"})
-	c2.Send(protocol.Request{
+	sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdConnect, Name: "creator"})
+	sendRequest(t, c2, protocol.Request{
 		Cmd:     protocol.CmdTaskCreate,
 		Payload: json.RawMessage(`{"desc":"regression"}`),
 		Type:    "test",
@@ -3137,8 +3203,8 @@ func TestBroker_PresenceEventsRegression(t *testing.T) {
 
 	c1 := connectClient(t, sockPath)
 	defer c1.Close()
-	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "subscriber"})
-	resp, _ := c1.Send(protocol.Request{Cmd: protocol.CmdSubscribe, Topic: "presence.events"})
+	sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdConnect, Name: "subscriber"})
+	resp := sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdSubscribe, Topic: "presence.events"})
 	if !resp.OK {
 		t.Fatalf("subscribe: %s", resp.Error)
 	}
@@ -3146,7 +3212,7 @@ func TestBroker_PresenceEventsRegression(t *testing.T) {
 
 	c2 := connectClient(t, sockPath)
 	defer c2.Close()
-	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "new-agent"})
+	sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdConnect, Name: "new-agent"})
 
 	select {
 	case evt := <-eventCh:
@@ -3171,9 +3237,9 @@ func TestBroker_CustomEventInvalidJSON(t *testing.T) {
 
 	c := connectClient(t, sockPath)
 	defer c.Close()
-	c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "publisher"})
+	sendRequest(t, c, protocol.Request{Cmd: protocol.CmdConnect, Name: "publisher"})
 
-	resp, _ := c.Send(protocol.Request{
+	resp := sendRequest(t, c, protocol.Request{
 		Cmd:     protocol.CmdPublish,
 		Topic:   "chat.demo",
 		Message: "not json",
@@ -3193,14 +3259,14 @@ func TestBroker_CustomEventEmptyMessage(t *testing.T) {
 
 	c1 := connectClient(t, sockPath)
 	defer c1.Close()
-	c1.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "subscriber"})
-	c1.Send(protocol.Request{Cmd: protocol.CmdSubscribe, Topic: "chat.demo"})
+	sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdConnect, Name: "subscriber"})
+	sendRequest(t, c1, protocol.Request{Cmd: protocol.CmdSubscribe, Topic: "chat.demo"})
 	eventCh := readStream(t, c1)
 
 	c2 := connectClient(t, sockPath)
 	defer c2.Close()
-	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "publisher"})
-	resp, _ := c2.Send(protocol.Request{Cmd: protocol.CmdPublish, Topic: "chat.demo", Message: ""})
+	sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdConnect, Name: "publisher"})
+	resp := sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdPublish, Topic: "chat.demo", Message: ""})
 	if !resp.OK {
 		t.Fatalf("publish with empty message should succeed: %s", resp.Error)
 	}
@@ -4180,9 +4246,7 @@ func TestBroker_ListenerDoesNotBlockAgentCLI(t *testing.T) {
 	}
 
 	var inbox []map[string]any
-	if err := json.Unmarshal(inboxResp.Data, &inbox); err != nil {
-		t.Fatal(err)
-	}
+	unmarshalResponse(t, inboxResp, &inbox)
 	if len(inbox) != 1 {
 		t.Fatalf("inbox length = %d, want 1", len(inbox))
 	}
@@ -4256,10 +4320,7 @@ func TestBroker_PushToListenerSession(t *testing.T) {
 	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
-	baseConn, err := client.Connect(sockPath, 5*time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
+	baseConn := connectClient(t, sockPath)
 	defer baseConn.Close()
 
 	baseResp, err := baseConn.Send(protocol.Request{
@@ -4275,10 +4336,7 @@ func TestBroker_PushToListenerSession(t *testing.T) {
 	pushToken := pushTokenFromResponse(t, baseResp)
 
 	// Connect as "alice-push" (the persistent listener)
-	listenerConn, err := client.Connect(sockPath, 5*time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
+	listenerConn := connectClient(t, sockPath)
 	defer listenerConn.Close()
 
 	connectReq := protocol.Request{
@@ -4296,10 +4354,7 @@ func TestBroker_PushToListenerSession(t *testing.T) {
 	}
 
 	// Connect as sender
-	senderConn, err := client.Connect(sockPath, 5*time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
+	senderConn := connectClient(t, sockPath)
 	defer senderConn.Close()
 
 	connectReq = protocol.Request{
@@ -4331,9 +4386,7 @@ func TestBroker_PushToListenerSession(t *testing.T) {
 	}
 
 	var data map[string]any
-	if err := json.Unmarshal(recvResp.Data, &data); err != nil {
-		t.Fatal(err)
-	}
+	unmarshalResponse(t, recvResp, &data)
 
 	if data["type"] != "message" {
 		t.Errorf("expected type=message, got %v", data["type"])
@@ -4350,10 +4403,7 @@ func TestBroker_SelfSendDoesNotPushToListener(t *testing.T) {
 	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
-	baseConn, err := client.Connect(sockPath, 5*time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
+	baseConn := connectClient(t, sockPath)
 	defer baseConn.Close()
 
 	baseResp, err := baseConn.Send(protocol.Request{
@@ -4368,10 +4418,7 @@ func TestBroker_SelfSendDoesNotPushToListener(t *testing.T) {
 	}
 	pushToken := pushTokenFromResponse(t, baseResp)
 
-	listenerConn, err := client.Connect(sockPath, 5*time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
+	listenerConn := connectClient(t, sockPath)
 	defer listenerConn.Close()
 
 	pushResp, err := listenerConn.Send(protocol.Request{
@@ -4416,10 +4463,7 @@ func TestBroker_ListenReceivesPush(t *testing.T) {
 	sockPath, _, cleanup := startTestBroker(t)
 	defer cleanup()
 
-	baseConn, err := client.Connect(sockPath, 5*time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
+	baseConn := connectClient(t, sockPath)
 	defer baseConn.Close()
 
 	baseResp, err := baseConn.Send(protocol.Request{
@@ -4435,10 +4479,7 @@ func TestBroker_ListenReceivesPush(t *testing.T) {
 	pushToken := pushTokenFromResponse(t, baseResp)
 
 	// Connect listener using ReadMessages
-	listenerConn, err := client.Connect(sockPath, 5*time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
+	listenerConn := connectClient(t, sockPath)
 	defer listenerConn.Close()
 
 	connectReq := protocol.Request{
@@ -4462,10 +4503,7 @@ func TestBroker_ListenReceivesPush(t *testing.T) {
 	}
 
 	// Connect sender
-	senderConn, err := client.Connect(sockPath, 5*time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
+	senderConn := connectClient(t, sockPath)
 	defer senderConn.Close()
 
 	connectReq = protocol.Request{
@@ -4542,7 +4580,7 @@ func TestClient_ReadMessagesFilters(t *testing.T) {
 	// This will push to "filter-test-push" via the broker's -push logic
 	sender := connectClient(t, sockPath)
 	defer sender.Close()
-	sender.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "sender-filter"})
+	sendRequest(t, sender, protocol.Request{Cmd: protocol.CmdConnect, Name: "sender-filter"})
 	sendResp, err := sender.Send(protocol.Request{
 		Cmd:     protocol.CmdSend,
 		Name:    "filter-test",
@@ -4604,15 +4642,15 @@ func TestPresence_StripsPushAndDeduplicates(t *testing.T) {
 
 	c2 := connectClient(t, sockPath)
 	defer c2.Close()
-	c2.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+	sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
 
 	c3 := connectClient(t, sockPath)
 	defer c3.Close()
-	c3.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "probe"})
+	sendRequest(t, c3, protocol.Request{Cmd: protocol.CmdConnect, Name: "probe"})
 
-	resp, _ := c3.Send(protocol.Request{Cmd: protocol.CmdPresence})
+	resp := sendRequest(t, c3, protocol.Request{Cmd: protocol.CmdPresence})
 	var agents []map[string]string
-	json.Unmarshal(resp.Data, &agents)
+	unmarshalResponse(t, resp, &agents)
 
 	names := make(map[string]bool)
 	for _, a := range agents {

@@ -124,6 +124,15 @@ func hasHealthIssueContaining(issues []HealthIssue, problem string) bool {
 	return false
 }
 
+func hasHealthIssueForAssetContaining(issues []HealthIssue, asset, problem string) bool {
+	for _, issue := range issues {
+		if issue.Asset == asset && strings.Contains(issue.Problem, problem) {
+			return true
+		}
+	}
+	return false
+}
+
 func TestCheckClaudeCode_Healthy(t *testing.T) {
 	tmpHome := t.TempDir()
 
@@ -166,6 +175,125 @@ func TestCheckClaudeCode_BrokenStaleCanonicalContent(t *testing.T) {
 	}
 }
 
+func TestCheckClaudeCode_BrokenSymlinkedHook(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	if err := installClaudeCode(tmpHome); err != nil {
+		t.Fatalf("install failed: %v", err)
+	}
+
+	hookPath := filepath.Join(tmpHome, ".claude", "hooks", "waggle-connect.sh")
+	canonical, err := claudeCodeFiles.ReadFile("claude-code/hook.sh")
+	if err != nil {
+		t.Fatalf("read canonical hook: %v", err)
+	}
+	targetPath := filepath.Join(tmpHome, "hook-target.sh")
+	if err := os.WriteFile(targetPath, canonical, 0o755); err != nil {
+		t.Fatalf("write hook target: %v", err)
+	}
+	if err := os.Remove(hookPath); err != nil {
+		t.Fatalf("remove installed hook: %v", err)
+	}
+	if err := os.Symlink(targetPath, hookPath); err != nil {
+		t.Fatalf("symlink hook: %v", err)
+	}
+
+	issues, state := CheckClaudeCode(tmpHome)
+	if state != StateBroken {
+		t.Fatalf("expected StateBroken for symlinked Claude Code hook, got %q", state)
+	}
+	if !hasHealthIssueContaining(issues, "symlink") {
+		t.Fatalf("expected symlink issue, got %+v", issues)
+	}
+}
+
+func TestCheckClaudeCode_DanglingSymlinkedSkillReportsOnlySymlink(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	if err := installClaudeCode(tmpHome); err != nil {
+		t.Fatalf("install failed: %v", err)
+	}
+
+	skillPath := filepath.Join(tmpHome, ".claude", "skills", "waggle", "send.md")
+	if err := os.Remove(skillPath); err != nil {
+		t.Fatalf("remove installed skill: %v", err)
+	}
+	if err := os.Symlink(filepath.Join(tmpHome, "missing-target.md"), skillPath); err != nil {
+		t.Fatalf("symlink skill: %v", err)
+	}
+
+	issues, state := CheckClaudeCode(tmpHome)
+	if state != StateBroken {
+		t.Fatalf("expected StateBroken for dangling skill symlink, got %q", state)
+	}
+	if !hasHealthIssueForAssetContaining(issues, skillPath, "symlink") {
+		t.Fatalf("expected symlink issue for %s, got %+v", skillPath, issues)
+	}
+	if hasHealthIssueForAssetContaining(issues, skillPath, "missing") {
+		t.Fatalf("did not expect redundant missing issue for dangling symlink, got %+v", issues)
+	}
+}
+
+func TestCheckClaudeCode_DanglingSymlinkedHookWithoutFingerprintIsBroken(t *testing.T) {
+	tmpHome := t.TempDir()
+	hooksDir := filepath.Join(tmpHome, ".claude", "hooks")
+	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	hookPath := filepath.Join(hooksDir, "waggle-connect.sh")
+	if err := os.Symlink(filepath.Join(tmpHome, "missing-hook.sh"), hookPath); err != nil {
+		t.Fatalf("symlink hook: %v", err)
+	}
+
+	issues, state := CheckClaudeCode(tmpHome)
+	if state != StateBroken {
+		t.Fatalf("expected StateBroken for dangling hook symlink, got %q", state)
+	}
+	if !hasHealthIssueForAssetContaining(issues, hookPath, "symlink") {
+		t.Fatalf("expected symlink issue for %s, got %+v", hookPath, issues)
+	}
+	if hasHealthIssueForAssetContaining(issues, hookPath, "missing") {
+		t.Fatalf("did not expect redundant missing issue for dangling symlink, got %+v", issues)
+	}
+}
+
+func TestCheckClaudeCode_DanglingSymlinkedManagedFilesReportOnlySymlink(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		file string
+	}{
+		{name: "hook", file: filepath.Join(".claude", "hooks", "waggle-connect.sh")},
+		{name: "heartbeat", file: filepath.Join(".claude", "hooks", "waggle-heartbeat.sh")},
+		{name: "push", file: filepath.Join(".claude", "hooks", "waggle-push.js")},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpHome := t.TempDir()
+			if err := installClaudeCode(tmpHome); err != nil {
+				t.Fatalf("install failed: %v", err)
+			}
+
+			path := filepath.Join(tmpHome, tt.file)
+			if err := os.Remove(path); err != nil {
+				t.Fatalf("remove installed file: %v", err)
+			}
+			if err := os.Symlink(filepath.Join(tmpHome, "missing-"+tt.name), path); err != nil {
+				t.Fatalf("symlink file: %v", err)
+			}
+
+			issues, state := CheckClaudeCode(tmpHome)
+			if state != StateBroken {
+				t.Fatalf("expected StateBroken for dangling %s symlink, got %q", tt.name, state)
+			}
+			if !hasHealthIssueForAssetContaining(issues, path, "symlink") {
+				t.Fatalf("expected symlink issue for %s, got %+v", path, issues)
+			}
+			if hasHealthIssueForAssetContaining(issues, path, "missing") {
+				t.Fatalf("did not expect redundant missing issue for dangling symlink, got %+v", issues)
+			}
+		})
+	}
+}
+
 func TestCheckClaudeCode_BrokenInvalidSettingsJSON(t *testing.T) {
 	tmpHome := t.TempDir()
 
@@ -184,6 +312,46 @@ func TestCheckClaudeCode_BrokenInvalidSettingsJSON(t *testing.T) {
 	}
 	if !hasHealthIssueContaining(issues, "cannot parse settings.json") {
 		t.Fatalf("expected invalid settings.json issue, got %+v", issues)
+	}
+}
+
+func TestCheckClaudeCode_BrokenInvalidSettingsJSONPreservesPathIssues(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	if err := installClaudeCode(tmpHome); err != nil {
+		t.Fatalf("install failed: %v", err)
+	}
+
+	settingsPath := filepath.Join(tmpHome, ".claude", "settings.json")
+	if err := os.WriteFile(settingsPath, []byte(`{"hooks":`), 0644); err != nil {
+		t.Fatalf("write invalid settings.json: %v", err)
+	}
+
+	hookPath := filepath.Join(tmpHome, ".claude", "hooks", "waggle-connect.sh")
+	canonical, err := claudeCodeFiles.ReadFile("claude-code/hook.sh")
+	if err != nil {
+		t.Fatalf("read canonical hook: %v", err)
+	}
+	targetPath := filepath.Join(tmpHome, "hook-target.sh")
+	if err := os.WriteFile(targetPath, canonical, 0o755); err != nil {
+		t.Fatalf("write hook target: %v", err)
+	}
+	if err := os.Remove(hookPath); err != nil {
+		t.Fatalf("remove installed hook: %v", err)
+	}
+	if err := os.Symlink(targetPath, hookPath); err != nil {
+		t.Fatalf("symlink hook: %v", err)
+	}
+
+	issues, state := CheckClaudeCode(tmpHome)
+	if state != StateBroken {
+		t.Fatalf("expected StateBroken for invalid settings.json and symlinked hook, got %q", state)
+	}
+	if !hasHealthIssueContaining(issues, "cannot parse settings.json") {
+		t.Fatalf("expected invalid settings.json issue, got %+v", issues)
+	}
+	if !hasHealthIssueContaining(issues, "symlink") {
+		t.Fatalf("expected symlink issue, got %+v", issues)
 	}
 }
 
@@ -428,6 +596,23 @@ func TestCheckCodex_NotInstalled_NoMarker(t *testing.T) {
 	}
 }
 
+func TestCheckCodex_BrokenUnreadableAgentsFile(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	agentsPath := filepath.Join(tmpHome, ".codex", "AGENTS.md")
+	if err := os.MkdirAll(agentsPath, 0755); err != nil {
+		t.Fatalf("failed to create unreadable AGENTS.md stand-in: %v", err)
+	}
+
+	issues, state := CheckCodex(tmpHome)
+	if state != StateBroken {
+		t.Fatalf("expected StateBroken for unreadable AGENTS.md, got %q", state)
+	}
+	if !hasHealthIssueContaining(issues, "failed to read AGENTS.md") {
+		t.Fatalf("expected AGENTS.md read failure issue, got %+v", issues)
+	}
+}
+
 func TestCheckCodex_Healthy(t *testing.T) {
 	tmpHome := t.TempDir()
 
@@ -443,6 +628,64 @@ func TestCheckCodex_Healthy(t *testing.T) {
 	}
 	if len(issues) != 0 {
 		t.Errorf("expected 0 issues, got %d: %+v", len(issues), issues)
+	}
+}
+
+func TestCheckCodex_BrokenSymlinkedAgentsFile(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	if err := installCodex(tmpHome); err != nil {
+		t.Fatalf("install failed: %v", err)
+	}
+	agentsPath := filepath.Join(tmpHome, ".codex", "AGENTS.md")
+	targetPath := filepath.Join(tmpHome, "target-AGENTS.md")
+	data, err := os.ReadFile(agentsPath)
+	if err != nil {
+		t.Fatalf("read AGENTS.md: %v", err)
+	}
+	if err := os.WriteFile(targetPath, data, 0644); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	if err := os.Remove(agentsPath); err != nil {
+		t.Fatalf("remove AGENTS.md: %v", err)
+	}
+	if err := os.Symlink(targetPath, agentsPath); err != nil {
+		t.Fatalf("symlink AGENTS.md: %v", err)
+	}
+
+	issues, state := CheckCodex(tmpHome)
+	if state != StateBroken {
+		t.Fatalf("expected StateBroken for symlinked AGENTS.md, got %q", state)
+	}
+	if !hasHealthIssueContaining(issues, "symlink") {
+		t.Fatalf("expected symlink issue, got %+v", issues)
+	}
+}
+
+func TestCheckCodex_DanglingSymlinkedSkillReportsOnlySymlink(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	if err := installCodex(tmpHome); err != nil {
+		t.Fatalf("install failed: %v", err)
+	}
+
+	skillPath := filepath.Join(tmpHome, ".codex", "skills", "waggle-runtime", "SKILL.md")
+	if err := os.Remove(skillPath); err != nil {
+		t.Fatalf("remove installed skill: %v", err)
+	}
+	if err := os.Symlink(filepath.Join(tmpHome, "missing-target.md"), skillPath); err != nil {
+		t.Fatalf("symlink skill: %v", err)
+	}
+
+	issues, state := CheckCodex(tmpHome)
+	if state != StateBroken {
+		t.Fatalf("expected StateBroken for dangling skill symlink, got %q", state)
+	}
+	if !hasHealthIssueForAssetContaining(issues, skillPath, "symlink") {
+		t.Fatalf("expected symlink issue for %s, got %+v", skillPath, issues)
+	}
+	if hasHealthIssueForAssetContaining(issues, skillPath, "missing") {
+		t.Fatalf("did not expect redundant missing issue for dangling symlink, got %+v", issues)
 	}
 }
 

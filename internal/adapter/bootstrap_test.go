@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/seungpyoson/waggle/internal/config"
+	"github.com/seungpyoson/waggle/internal/install"
 	rt "github.com/seungpyoson/waggle/internal/runtime"
 )
 
@@ -88,6 +89,7 @@ func TestAdapterBootstrap_RoundTrip(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("WAGGLE_PROJECT_ID", "proj-roundtrip")
 	t.Setenv("WAGGLE_ADAPTER_SKIP_RUNTIME_START", "1")
+	installCodexForBootstrapTest(t)
 
 	// Open store for test manipulation
 	store, err := rt.OpenStore(config.NewPaths(""))
@@ -160,6 +162,7 @@ func TestAdapterBootstrap_SkipsGracefullyWithoutProjectContext(t *testing.T) {
 	t.Setenv("WAGGLE_PROJECT_ID", "")
 	t.Setenv("WAGGLE_ROOT", "")
 	t.Setenv("WAGGLE_ADAPTER_SKIP_RUNTIME_START", "1")
+	installCodexForBootstrapTest(t)
 
 	// Change to a non-git directory so project resolution fails.
 	origDir, _ := os.Getwd()
@@ -190,6 +193,7 @@ func TestAdapterBootstrap_SkipsGracefullyWhenRuntimeStoreUnavailable(t *testing.
 	t.Setenv("HOME", home)
 	t.Setenv("WAGGLE_PROJECT_ID", "proj-runtime-db-unavailable")
 	t.Setenv("WAGGLE_ADAPTER_SKIP_RUNTIME_START", "1")
+	installCodexForBootstrapTest(t)
 
 	waggleDir := filepath.Join(home, ".waggle")
 	if err := os.MkdirAll(waggleDir, 0o755); err != nil {
@@ -214,6 +218,27 @@ func TestAdapterBootstrap_SkipsGracefullyWhenRuntimeStoreUnavailable(t *testing.
 	}
 	if result.RuntimeError == "" {
 		t.Fatalf("Bootstrap should expose runtime error for diagnostics")
+	}
+}
+
+func TestAdapterBootstrapSkipsWhenIntegrationNotInstalledWithoutCreatingState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("WAGGLE_PROJECT_ID", "proj-uninstalled")
+	t.Setenv("WAGGLE_ADAPTER_SKIP_RUNTIME_START", "1")
+
+	result, err := Bootstrap(BootstrapInput{Tool: "codex"})
+	if err != nil {
+		t.Fatalf("Bootstrap: %v", err)
+	}
+	if !result.Skipped {
+		t.Fatalf("Bootstrap skipped = false, want true for uninstalled integration")
+	}
+	if !strings.Contains(result.SkipReason, "integration is not installed") {
+		t.Fatalf("skip reason = %q, want not installed", result.SkipReason)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".waggle")); !os.IsNotExist(err) {
+		t.Fatalf(".waggle should not be recreated for stale bootstrap, stat err = %v", err)
 	}
 }
 
@@ -283,6 +308,7 @@ func TestBootstrapWritesTTYMappingFallback(t *testing.T) {
 	t.Setenv("TTY", "/dev/ttys009")
 	t.Setenv("WAGGLE_PROJECT_ID", "proj-tty")
 	t.Setenv("WAGGLE_ADAPTER_SKIP_RUNTIME_START", "1")
+	installCodexForBootstrapTest(t)
 
 	result, err := Bootstrap(BootstrapInput{Tool: "codex"})
 	if err != nil {
@@ -364,6 +390,7 @@ func TestBootstrap_LogsWhenSessionMappingWriteFails(t *testing.T) {
 	t.Setenv("WAGGLE_PROJECT_ID", "proj-log-warning")
 	t.Setenv("WAGGLE_ADAPTER_SKIP_RUNTIME_START", "1")
 	t.Setenv("WAGGLE_AGENT_PPID", "4242")
+	installCodexForBootstrapTest(t)
 
 	runtimeDir := config.NewPaths("").RuntimeDir
 	if err := os.MkdirAll(runtimeDir, 0o700); err != nil {
@@ -398,6 +425,13 @@ func TestBootstrap_LogsWhenSessionMappingWriteFails(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "push delivery degraded") {
 		t.Fatalf("expected push delivery degraded detail, got %q", buf.String())
+	}
+}
+
+func installCodexForBootstrapTest(t *testing.T) {
+	t.Helper()
+	if err := install.InstallCodex(); err != nil {
+		t.Fatalf("install Codex integration: %v", err)
 	}
 }
 

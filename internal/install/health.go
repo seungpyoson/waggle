@@ -79,6 +79,22 @@ func CheckClaudeCode(homeDir string) ([]HealthIssue, AdapterState) {
 	heartbeatPath := filepath.Join(claudeDir, "hooks", "waggle-heartbeat.sh")
 	pushPath := filepath.Join(claudeDir, "hooks", "waggle-push.js")
 	skillDir := filepath.Join(claudeDir, "skills", "waggle")
+	unsafePaths := make(map[string]bool)
+
+	for _, item := range []struct {
+		path string
+		name string
+	}{
+		{hookPath, "waggle-connect.sh"},
+		{heartbeatPath, "waggle-heartbeat.sh"},
+		{pushPath, "waggle-push.js"},
+		{skillDir, "skills directory"},
+	} {
+		if issue := unsafePathIssue(item.path, homeDir, item.name, repairCmd); issue != nil {
+			issues = append(issues, *issue)
+			unsafePaths[item.path] = true
+		}
+	}
 
 	hookExists := fileExists(hookPath)
 	heartbeatExists := fileExists(heartbeatPath)
@@ -87,23 +103,28 @@ func CheckClaudeCode(homeDir string) ([]HealthIssue, AdapterState) {
 	anyFileExists := hookExists || heartbeatExists || pushExists || skillDirExists
 
 	if settingsErr != nil {
-		return []HealthIssue{{
+		issues = append(issues, HealthIssue{
 			Asset:   settingsPath,
 			Problem: "cannot parse settings.json: " + settingsErr.Error(),
 			Repair:  "fix or remove invalid settings.json, then run " + repairCmd,
-		}}, StateBroken
+		})
+		return issues, StateBroken
 	}
 
 	// Step 3: Derive state from fingerprint × files matrix
 	if !hookRegistered && !anyFileExists {
+		if len(issues) > 0 {
+			return issues, StateBroken
+		}
 		if staleRef != "" {
 			// No canonical fingerprint, no files, but a stale waggle reference
 			// exists in settings.json — surface it with repair guidance
-			return []HealthIssue{{
+			issues = append(issues, HealthIssue{
 				Asset:   settingsPath,
 				Problem: "stale waggle hook reference in settings.json: " + staleRef,
 				Repair:  repairCmd,
-			}}, StateBroken
+			})
+			return issues, StateBroken
 		}
 		return nil, StateNotInstalled
 	}
@@ -126,7 +147,7 @@ func CheckClaudeCode(homeDir string) ([]HealthIssue, AdapterState) {
 		})
 	}
 
-	if !hookExists {
+	if !hookExists && !unsafePaths[hookPath] {
 		issues = append(issues, HealthIssue{
 			Asset:   hookPath,
 			Problem: "waggle-connect.sh missing",
@@ -134,7 +155,7 @@ func CheckClaudeCode(homeDir string) ([]HealthIssue, AdapterState) {
 		})
 	}
 
-	if !heartbeatExists {
+	if !heartbeatExists && !unsafePaths[heartbeatPath] {
 		issues = append(issues, HealthIssue{
 			Asset:   heartbeatPath,
 			Problem: "waggle-heartbeat.sh missing",
@@ -142,7 +163,7 @@ func CheckClaudeCode(homeDir string) ([]HealthIssue, AdapterState) {
 		})
 	}
 
-	if !pushExists {
+	if !pushExists && !unsafePaths[pushPath] {
 		issues = append(issues, HealthIssue{
 			Asset:   pushPath,
 			Problem: "waggle-push.js missing",
@@ -150,7 +171,7 @@ func CheckClaudeCode(homeDir string) ([]HealthIssue, AdapterState) {
 		})
 	}
 
-	if !skillDirExists {
+	if !skillDirExists && !unsafePaths[skillDir] {
 		issues = append(issues, HealthIssue{
 			Asset:   skillDir,
 			Problem: "skills directory missing",
@@ -159,6 +180,10 @@ func CheckClaudeCode(homeDir string) ([]HealthIssue, AdapterState) {
 	} else {
 		for _, skill := range claudeCodeSkillFiles {
 			skillPath := filepath.Join(skillDir, skill)
+			if issue := unsafePathIssue(skillPath, homeDir, "skill file "+skill, repairCmd); issue != nil {
+				issues = append(issues, *issue)
+				break // Report the unsafe path itself; avoid misleading "missing" noise.
+			}
 			if !fileExists(skillPath) {
 				issues = append(issues, HealthIssue{
 					Asset:   skillPath,
@@ -207,7 +232,17 @@ func CheckCodex(homeDir string) ([]HealthIssue, AdapterState) {
 
 	// Step 1: Check for fingerprint (WAGGLE-CODEX-BEGIN marker in AGENTS.md)
 	agentsPath := filepath.Join(codexDir, "AGENTS.md")
+	if issue := unsafePathIssue(agentsPath, homeDir, "AGENTS.md", repairCmd); issue != nil {
+		return []HealthIssue{*issue}, StateBroken
+	}
 	data, err := os.ReadFile(agentsPath)
+	if err != nil && !os.IsNotExist(err) {
+		return []HealthIssue{{
+			Asset:   agentsPath,
+			Problem: "failed to read AGENTS.md: " + err.Error(),
+			Repair:  repairCmd,
+		}}, StateBroken
+	}
 
 	hasBeginMarker := err == nil && strings.Contains(string(data), codexBlockBegin)
 	hasEndMarker := err == nil && strings.Contains(string(data), codexBlockEnd)
@@ -215,6 +250,11 @@ func CheckCodex(homeDir string) ([]HealthIssue, AdapterState) {
 	// Step 2: Check if waggle files are present on disk
 	skillPath := filepath.Join(codexDir, "skills", "waggle-runtime", "SKILL.md")
 	skillExists := fileExists(skillPath)
+	skillUnsafe := false
+	if issue := unsafePathIssue(skillPath, homeDir, "SKILL.md", repairCmd); issue != nil {
+		issues = append(issues, *issue)
+		skillUnsafe = true
+	}
 
 	// Step 3: Validate marker topology before deriving state.
 	// Any marker presence (begin OR end) means the file has waggle artifacts.
@@ -255,13 +295,13 @@ func CheckCodex(homeDir string) ([]HealthIssue, AdapterState) {
 		})
 	}
 
-	if !skillExists {
+	if !skillExists && !skillUnsafe {
 		issues = append(issues, HealthIssue{
 			Asset:   skillPath,
 			Problem: "SKILL.md missing",
 			Repair:  repairCmd,
 		})
-	} else {
+	} else if skillExists && !skillUnsafe {
 		appendEmbeddedFileIssue(&issues, skillPath, codexFiles, "codex/skills/waggle-runtime/SKILL.md", "SKILL.md", repairCmd)
 	}
 
@@ -284,6 +324,9 @@ func CheckGemini(homeDir string) ([]HealthIssue, AdapterState) {
 	var issues []HealthIssue
 	geminiDir := filepath.Join(homeDir, ".gemini")
 	geminiFilePath := filepath.Join(geminiDir, "GEMINI.md")
+	if issue := unsafePathIssue(geminiFilePath, homeDir, "GEMINI.md", repairCmd); issue != nil {
+		return []HealthIssue{*issue}, StateBroken
+	}
 
 	// Step 1: Read file
 	data, err := os.ReadFile(geminiFilePath)
@@ -404,6 +447,9 @@ func CheckAugment(homeDir string) ([]HealthIssue, AdapterState) {
 	const repairCmd = "waggle install augment"
 	var issues []HealthIssue
 	skillPath := filepath.Join(homeDir, ".augment", "skills", "waggle.md")
+	if issue := unsafePathIssue(skillPath, homeDir, "waggle.md", repairCmd); issue != nil {
+		return []HealthIssue{*issue}, StateBroken
+	}
 
 	data, err := os.ReadFile(skillPath)
 	if err != nil {
@@ -455,6 +501,28 @@ func CheckAugment(homeDir string) ([]HealthIssue, AdapterState) {
 	return nil, StateHealthy
 }
 
+func CheckTool(homeDir, tool string) ([]HealthIssue, AdapterState, bool) {
+	switch tool {
+	case "claude-code":
+		issues, state := CheckClaudeCode(homeDir)
+		return issues, state, true
+	case "codex":
+		issues, state := CheckCodex(homeDir)
+		return issues, state, true
+	case "gemini":
+		issues, state := CheckGemini(homeDir)
+		return issues, state, true
+	case "auggie":
+		issues, state := CheckAuggie(homeDir)
+		return issues, state, true
+	case "augment":
+		issues, state := CheckAugment(homeDir)
+		return issues, state, true
+	default:
+		return nil, "", false
+	}
+}
+
 type embeddedFileReader interface {
 	ReadFile(name string) ([]byte, error)
 }
@@ -487,6 +555,35 @@ func appendEmbeddedFileIssue(issues *[]HealthIssue, path string, files embeddedF
 			Repair:  repairCmd,
 		})
 	}
+}
+
+func unsafePathIssue(path, root, assetName, repairCmd string) *HealthIssue {
+	if fsutil.HasAncestorSymlink(path, root) {
+		return &HealthIssue{
+			Asset:   path,
+			Problem: "symlink in ancestor path for " + assetName,
+			Repair:  repairCmd,
+		}
+	}
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return &HealthIssue{
+			Asset:   path,
+			Problem: "cannot inspect " + assetName + ": " + err.Error(),
+			Repair:  repairCmd,
+		}
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return &HealthIssue{
+			Asset:   path,
+			Problem: assetName + " is a symlink; refusing to trust symlinked integration file",
+			Repair:  repairCmd,
+		}
+	}
+	return nil
 }
 
 func appendManagedBlockContentIssue(issues *[]HealthIssue, path, content, begin, end string, files embeddedFileReader, embeddedPath, repairCmd string) {

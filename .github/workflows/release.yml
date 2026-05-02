@@ -1,0 +1,92 @@
+name: release
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/release.yml"
+      - "**.go"
+      - "go.mod"
+      - "go.sum"
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME:-dev}"
+          commit="${GITHUB_SHA:-unknown}"
+          built="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          name="waggle-${GOOS}-${GOARCH}"
+          go build \
+            -trimpath \
+            -ldflags="-s -w -X 'github.com/seungpyoson/waggle/cmd.Version=${version}' -X 'github.com/seungpyoson/waggle/cmd.Commit=${commit}' -X 'github.com/seungpyoson/waggle/cmd.BuildTime=${built}'" \
+            -o "dist/${name}" \
+            .
+          (
+            cd dist
+            sha256sum "${name}" > "${name}.sha256"
+          )
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: waggle-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: publish GitHub release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "$TAG" \
+            --generate-notes

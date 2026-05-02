@@ -3,12 +3,18 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
+	"github.com/seungpyoson/waggle/internal/broker"
 	"github.com/seungpyoson/waggle/internal/config"
+	"github.com/seungpyoson/waggle/internal/install"
 	rt "github.com/seungpyoson/waggle/internal/runtime"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -290,6 +296,474 @@ func TestExecuteRootCommandForTestDoesNotLeakInstallUninstallFlag(t *testing.T) 
 	}
 }
 
+func TestUninstallAllPurgeRemovesIntegrationsAndState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	if stdout, stderr := executeRootCommandForTest(t, "install", "codex"); stderr != "" || !strings.Contains(stdout, `"ok": true`) {
+		t.Fatalf("install codex stdout=%q stderr=%q", stdout, stderr)
+	}
+	if stdout, stderr := executeRootCommandForTest(t, "install", "gemini"); stderr != "" || !strings.Contains(stdout, `"ok": true`) {
+		t.Fatalf("install gemini stdout=%q stderr=%q", stdout, stderr)
+	}
+	if err := os.MkdirAll(filepath.Join(home, ".waggle", "runtime"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".waggle", "runtime", "runtime.db"), []byte("state"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout, stderr := executeRootCommandForTest(t, "uninstall", "--all", "--purge")
+	if stderr != "" {
+		t.Fatalf("uninstall stderr = %q, want empty", stderr)
+	}
+	for _, want := range []string{"claude-code", "codex", "gemini", "auggie", "augment", "shell-hook", ".waggle"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("uninstall stdout = %q, want action for %q", stdout, want)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(home, ".codex", "skills", "waggle-runtime")); !os.IsNotExist(err) {
+		t.Fatalf("Codex skill should be removed, stat err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".waggle")); !os.IsNotExist(err) {
+		t.Fatalf(".waggle should be removed, stat err = %v", err)
+	}
+}
+
+func TestUninstallAllPurgeDryRunDoesNotMutate(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	if stdout, stderr := executeRootCommandForTest(t, "install", "codex"); stderr != "" || !strings.Contains(stdout, `"ok": true`) {
+		t.Fatalf("install codex stdout=%q stderr=%q", stdout, stderr)
+	}
+	if err := os.MkdirAll(filepath.Join(home, ".waggle", "runtime"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout, stderr := executeRootCommandForTest(t, "uninstall", "--all", "--purge", "--dry-run")
+	if stderr != "" {
+		t.Fatalf("uninstall dry-run stderr = %q, want empty", stderr)
+	}
+	if !strings.Contains(stdout, `"dry_run": true`) || !strings.Contains(stdout, "would remove state") {
+		t.Fatalf("uninstall dry-run stdout = %q, want dry-run planned actions", stdout)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".codex", "skills", "waggle-runtime", "SKILL.md")); err != nil {
+		t.Fatalf("Codex skill should remain after dry-run: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".waggle")); err != nil {
+		t.Fatalf(".waggle should remain after dry-run: %v", err)
+	}
+}
+
+func TestRunUninstallAllAttemptsEveryIntegrationBeforeReturningErrors(t *testing.T) {
+	originalTargets := uninstallTargets
+	t.Cleanup(func() {
+		uninstallTargets = originalTargets
+	})
+
+	var called []string
+	uninstallTargets = []struct {
+		name string
+		fn   func() error
+	}{
+		{
+			name: "first",
+			fn: func() error {
+				called = append(called, "first")
+				return fmt.Errorf("first failed")
+			},
+		},
+		{
+			name: "second",
+			fn: func() error {
+				called = append(called, "second")
+				return nil
+			},
+		},
+		{
+			name: "third",
+			fn: func() error {
+				called = append(called, "third")
+				return fmt.Errorf("third failed")
+			},
+		},
+	}
+
+	actions, err := runUninstall(t.TempDir(), true, false, false)
+	if err == nil {
+		t.Fatal("runUninstall error = nil, want joined uninstall errors")
+	}
+	if !strings.Contains(err.Error(), "uninstall first") || !strings.Contains(err.Error(), "uninstall third") {
+		t.Fatalf("runUninstall error = %v, want both uninstall failures", err)
+	}
+	if strings.Join(called, ",") != "first,second,third" {
+		t.Fatalf("called targets = %v, want all targets attempted", called)
+	}
+	if len(actions) != 3 {
+		t.Fatalf("actions len = %d, want 3", len(actions))
+	}
+}
+
+func TestRunUninstallAllPurgeRemovesStateAfterIntegrationErrors(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".waggle", "runtime"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	originalTargets := uninstallTargets
+	originalStopRuntime := uninstallStopRuntime
+	t.Cleanup(func() {
+		uninstallTargets = originalTargets
+		uninstallStopRuntime = originalStopRuntime
+	})
+
+	uninstallTargets = []struct {
+		name string
+		fn   func() error
+	}{
+		{
+			name: "failing",
+			fn: func() error {
+				return fmt.Errorf("integration failed")
+			},
+		},
+	}
+	uninstallStopRuntime = func() error {
+		return nil
+	}
+
+	actions, err := runUninstall(home, true, true, false)
+	if err == nil {
+		t.Fatal("runUninstall error = nil, want integration error")
+	}
+	if !strings.Contains(err.Error(), "uninstall failing") {
+		t.Fatalf("runUninstall error = %v, want uninstall failure", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(home, ".waggle")); !os.IsNotExist(statErr) {
+		t.Fatalf(".waggle stat error = %v, want removed", statErr)
+	}
+	if len(actions) != 3 {
+		t.Fatalf("actions len = %d, want integration, runtime stop, and state removal", len(actions))
+	}
+}
+
+func TestUninstallAllPurgeReportsActionsAfterIntegrationErrors(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, ".waggle", "runtime"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	originalTargets := uninstallTargets
+	originalStopRuntime := uninstallStopRuntime
+	t.Cleanup(func() {
+		uninstallTargets = originalTargets
+		uninstallStopRuntime = originalStopRuntime
+	})
+
+	uninstallTargets = []struct {
+		name string
+		fn   func() error
+	}{
+		{
+			name: "failing",
+			fn: func() error {
+				return fmt.Errorf("integration failed")
+			},
+		},
+	}
+	uninstallStopRuntime = func() error {
+		return nil
+	}
+
+	stdout, stderr, err := executeRootCommandForTestWithError(t, "uninstall", "--all", "--purge")
+	if err == nil {
+		t.Fatal("uninstall error = nil, want integration failure")
+	}
+	if stderr != "" {
+		t.Fatalf("uninstall stderr = %q, want empty", stderr)
+	}
+
+	var resp struct {
+		OK      bool             `json:"ok"`
+		Code    string           `json:"code"`
+		Error   string           `json:"error"`
+		Actions []map[string]any `json:"actions"`
+	}
+	if unmarshalErr := json.Unmarshal([]byte(stdout), &resp); unmarshalErr != nil {
+		t.Fatalf("unmarshal uninstall response: %v\nstdout=%s", unmarshalErr, stdout)
+	}
+	if resp.OK || resp.Code != "UNINSTALL_ERROR" || !strings.Contains(resp.Error, "uninstall failing") {
+		t.Fatalf("uninstall response = %+v, want structured uninstall error", resp)
+	}
+	if len(resp.Actions) != 3 {
+		t.Fatalf("actions len = %d, want integration, runtime stop, and state removal", len(resp.Actions))
+	}
+	if _, statErr := os.Stat(filepath.Join(home, ".waggle")); !os.IsNotExist(statErr) {
+		t.Fatalf(".waggle stat error = %v, want removed", statErr)
+	}
+}
+
+func TestUninstallPurgeStopsRuntimeBeforeRemovingState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	if err := os.MkdirAll(filepath.Join(home, ".waggle", "runtime"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".waggle", "runtime", "runtime.db"), []byte("state"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	originalStopRuntime := uninstallStopRuntime
+	t.Cleanup(func() {
+		uninstallStopRuntime = originalStopRuntime
+	})
+
+	stoppedBeforeRemove := false
+	uninstallStopRuntime = func() error {
+		if _, err := os.Stat(filepath.Join(home, ".waggle")); err != nil {
+			t.Fatalf("runtime stop ran after state removal: %v", err)
+		}
+		stoppedBeforeRemove = true
+		return nil
+	}
+
+	stdout, stderr := executeRootCommandForTest(t, "uninstall", "--purge")
+	if stderr != "" {
+		t.Fatalf("uninstall stderr = %q, want empty", stderr)
+	}
+	if !stoppedBeforeRemove {
+		t.Fatal("runtime stop was not called before purge")
+	}
+	if !strings.Contains(stdout, "runtime-daemon") || !strings.Contains(stdout, "stop if running") {
+		t.Fatalf("uninstall stdout = %q, want runtime stop action", stdout)
+	}
+}
+
+func TestStopRuntimeForUninstallTreatsMissingPIDAfterRunningCheckAsStopped(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	runtimePaths := config.NewPaths("")
+	if err := os.MkdirAll(runtimePaths.RuntimeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := broker.WritePID(runtimePaths.RuntimePID); err != nil {
+		t.Fatal(err)
+	}
+	if err := rt.SaveState(runtimePaths, rt.State{
+		PID:       os.Getpid(),
+		Running:   true,
+		StartedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !rt.IsRunning(runtimePaths) {
+		t.Fatal("test setup expected runtime to report running")
+	}
+
+	originalReadPID := uninstallReadPID
+	t.Cleanup(func() {
+		uninstallReadPID = originalReadPID
+	})
+	uninstallReadPID = func(string) (int, error) {
+		return 0, os.ErrNotExist
+	}
+
+	if err := stopRuntimeForUninstall(); err != nil {
+		t.Fatalf("stopRuntimeForUninstall error = %v, want nil for disappeared pid file", err)
+	}
+}
+
+func TestIsAlreadyExitedProcessError(t *testing.T) {
+	if !isAlreadyExitedProcessError(os.ErrProcessDone) {
+		t.Fatal("os.ErrProcessDone should be treated as already exited")
+	}
+	if !isAlreadyExitedProcessError(fmt.Errorf("wrapped: %w", syscall.ESRCH)) {
+		t.Fatal("wrapped ESRCH should be treated as already exited")
+	}
+	if isAlreadyExitedProcessError(syscall.EPERM) {
+		t.Fatal("EPERM should not be treated as already exited")
+	}
+}
+
+func TestInstallNoArgsInstallsDetectedIntegrations(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", t.TempDir())
+	if err := os.Mkdir(filepath.Join(home, ".codex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout, stderr := executeRootCommandForTest(t, "install")
+	if stderr != "" {
+		t.Fatalf("install stderr = %q, want empty", stderr)
+	}
+	if !strings.Contains(stdout, "Codex integration installed") {
+		t.Fatalf("install stdout = %q, want Codex install message", stdout)
+	}
+	var response struct {
+		OK                bool                    `json:"ok"`
+		InstalledAdapters []string                `json:"installed_adapters"`
+		Results           []install.InstallResult `json:"results"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &response); err != nil {
+		t.Fatalf("install stdout is not a single JSON object: %v\n%s", err, stdout)
+	}
+	if !response.OK || len(response.InstalledAdapters) != 1 || response.InstalledAdapters[0] != install.PlatformCodex {
+		t.Fatalf("install response = %+v, want ok with only Codex installed", response)
+	}
+	for _, unwanted := range []string{"Claude Code integration installed", "Gemini integration installed", "Auggie integration installed", "Augment integration installed"} {
+		if strings.Contains(stdout, unwanted) {
+			t.Fatalf("install stdout = %q, did not expect %q", stdout, unwanted)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(home, ".codex", "skills", "waggle-runtime", "SKILL.md")); err != nil {
+		t.Fatalf("Codex skill not installed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".gemini", "GEMINI.md")); !os.IsNotExist(err) {
+		t.Fatalf("Gemini should not have been installed, stat err = %v", err)
+	}
+}
+
+func TestInstallNoArgsReportsPartialResultsOnError(t *testing.T) {
+	originalInstallDetected := installDetected
+	t.Cleanup(func() {
+		installDetected = originalInstallDetected
+	})
+
+	installDetected = func() ([]install.InstallResult, error) {
+		return []install.InstallResult{{
+			Platform: install.PlatformCodex,
+			Message:  "Codex integration installed. Restart Codex to activate.",
+		}}, errors.New("install gemini: permission denied")
+	}
+
+	stdout, stderr, err := executeRootCommandForTestWithError(t, "install")
+	if err == nil {
+		t.Fatal("install returned nil error, want partial install error")
+	}
+	if stdout != "" {
+		t.Fatalf("install stdout = %q, want empty", stdout)
+	}
+	for _, want := range []string{
+		`"ok": false`,
+		`"code": "INSTALL_ERROR"`,
+		`"error": "install gemini: permission denied"`,
+		`"installed_adapters":`,
+		`"codex"`,
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Fatalf("install stderr = %q, want %q", stderr, want)
+		}
+	}
+}
+
+func TestInstallTooManyArgsReportsCobraError(t *testing.T) {
+	stdout, stderr, err := executeRootCommandForTestWithError(t, "install", "codex", "gemini")
+	if err == nil {
+		t.Fatal("install returned nil error, want too-many-args error")
+	}
+	if stdout != "" {
+		t.Fatalf("install stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, "accepts at most 1 arg") {
+		t.Fatalf("install stderr = %q, want Cobra argument error", stderr)
+	}
+}
+
+func TestStartAutoInstallsDetectedIntegrationsBeforeDaemonStart(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("WAGGLE_PROJECT_ID", "auto-install-start")
+	if err := os.Mkdir(filepath.Join(home, ".codex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	originalAutoInstall := startAutoInstallDetected
+	originalIsRunning := startBrokerIsRunning
+	originalReadPID := startBrokerReadPID
+	originalCleanupStale := startBrokerCleanupStale
+	originalStartDaemon := startBrokerStartDaemon
+	originalWaitForReady := startBrokerWaitForReady
+	t.Cleanup(func() {
+		startAutoInstallDetected = originalAutoInstall
+		startBrokerIsRunning = originalIsRunning
+		startBrokerReadPID = originalReadPID
+		startBrokerCleanupStale = originalCleanupStale
+		startBrokerStartDaemon = originalStartDaemon
+		startBrokerWaitForReady = originalWaitForReady
+	})
+
+	startBrokerIsRunning = func(string) bool { return false }
+	startBrokerReadPID = func(string) (int, error) { return 4242, nil }
+	startBrokerCleanupStale = func(string, string) error { return nil }
+	startBrokerWaitForReady = func(string, time.Duration, time.Duration) error { return nil }
+	startBrokerStartDaemon = func(string, string, string, string, []string) error {
+		if _, err := os.Stat(filepath.Join(home, ".codex", "skills", "waggle-runtime", "SKILL.md")); err != nil {
+			t.Fatalf("Codex integration was not installed before daemon start: %v", err)
+		}
+		return nil
+	}
+
+	stdout, stderr := executeRootCommandForTest(t, "start")
+	if stderr != "" {
+		t.Fatalf("start stderr = %q, want empty", stderr)
+	}
+	if !strings.Contains(stdout, `"auto_installed_adapters":`) || !strings.Contains(stdout, `"codex"`) {
+		t.Fatalf("start stdout = %q, want auto-installed Codex adapter", stdout)
+	}
+}
+
+func TestStartReportsAutoInstallFailureButStillStartsDaemon(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("WAGGLE_PROJECT_ID", "auto-install-start-fail-open")
+
+	originalAutoInstall := startAutoInstallDetected
+	originalIsRunning := startBrokerIsRunning
+	originalReadPID := startBrokerReadPID
+	originalCleanupStale := startBrokerCleanupStale
+	originalStartDaemon := startBrokerStartDaemon
+	originalWaitForReady := startBrokerWaitForReady
+	t.Cleanup(func() {
+		startAutoInstallDetected = originalAutoInstall
+		startBrokerIsRunning = originalIsRunning
+		startBrokerReadPID = originalReadPID
+		startBrokerCleanupStale = originalCleanupStale
+		startBrokerStartDaemon = originalStartDaemon
+		startBrokerWaitForReady = originalWaitForReady
+	})
+
+	daemonStarted := false
+	startAutoInstallDetected = func() ([]install.InstallResult, error) {
+		return nil, errors.New("auto-install unavailable")
+	}
+	startBrokerIsRunning = func(string) bool { return false }
+	startBrokerReadPID = func(string) (int, error) { return 4242, nil }
+	startBrokerCleanupStale = func(string, string) error { return nil }
+	startBrokerWaitForReady = func(string, time.Duration, time.Duration) error { return nil }
+	startBrokerStartDaemon = func(string, string, string, string, []string) error {
+		daemonStarted = true
+		return nil
+	}
+
+	stdout, stderr := executeRootCommandForTest(t, "start")
+	if stderr != "" {
+		t.Fatalf("start stderr = %q, want empty", stderr)
+	}
+	if !daemonStarted {
+		t.Fatal("daemon was not started after auto-install failure")
+	}
+	if !strings.Contains(stdout, `"auto_install_error": "auto-install unavailable"`) {
+		t.Fatalf("start stdout = %q, want auto_install_error", stdout)
+	}
+}
+
 type commandTestState struct {
 	paths config.Paths
 }
@@ -320,10 +794,22 @@ func resetFlagToDefault(flag *pflag.Flag) {
 
 func executeRootCommandForTest(t *testing.T, args ...string) (string, string) {
 	t.Helper()
+	stdout, stderr, err := executeRootCommandForTestWithError(t, args...)
+	if err != nil {
+		t.Fatalf("execute %v: %v", args, err)
+	}
+
+	return stdout, stderr
+}
+
+func executeRootCommandForTestWithError(t *testing.T, args ...string) (string, string, error) {
+	t.Helper()
 
 	originalState := captureCommandTestState()
 	defer func() {
 		originalState.restore()
+		installCmd.SilenceErrors = false
+		installCmd.SilenceUsage = false
 		rootCmd.SetOut(os.Stdout)
 		rootCmd.SetErr(os.Stderr)
 		rootCmd.SetArgs(nil)
@@ -338,11 +824,8 @@ func executeRootCommandForTest(t *testing.T, args ...string) (string, string) {
 	rootCmd.SetErr(&stderr)
 	rootCmd.SetArgs(args)
 
-	if err := rootCmd.Execute(); err != nil {
-		t.Fatalf("execute %v: %v", args, err)
-	}
-
-	return stdout.String(), stderr.String()
+	err := rootCmd.Execute()
+	return stdout.String(), stderr.String(), err
 }
 
 func openRuntimeStoreForTest(t *testing.T) *rt.Store {

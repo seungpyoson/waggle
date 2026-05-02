@@ -13,6 +13,7 @@ import (
 
 	"github.com/seungpyoson/waggle/internal/broker"
 	"github.com/seungpyoson/waggle/internal/config"
+	"github.com/seungpyoson/waggle/internal/install"
 	rt "github.com/seungpyoson/waggle/internal/runtime"
 )
 
@@ -39,6 +40,10 @@ func Bootstrap(input BootstrapInput) (BootstrapResult, error) {
 	tool := sanitizeToken(input.Tool)
 	if tool == "" {
 		return BootstrapResult{}, fmt.Errorf("tool required")
+	}
+
+	if skipReason := uninstalledToolSkipReason(tool); skipReason != "" {
+		return BootstrapResult{Tool: tool, Skipped: true, SkipReason: skipReason}, nil
 	}
 
 	runtimePaths, err := resolveRuntimePaths()
@@ -131,6 +136,21 @@ func WriteTTYMapping(runtimeDir, ttyName, nonce string) error {
 	}
 	ttyPath := filepath.Join(runtimeDir, "agent-tty-"+ttyName)
 	return writeRuntimeFileAtomic(ttyPath, []byte(nonce+"\n"), 0o600)
+}
+
+func uninstalledToolSkipReason(tool string) string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		log.Printf("warning: cannot determine adapter install state: %v", err)
+		return ""
+	}
+	_, state, known := install.CheckTool(home, tool)
+	if known && state == install.StateNotInstalled {
+		return fmt.Sprintf("%s integration is not installed", tool)
+	}
+	// StateBroken still enters bootstrap so existing sessions can surface
+	// diagnostics and receive recovery messages instead of silently going dark.
+	return ""
 }
 
 func skipRuntimeStore(result BootstrapResult, err error) BootstrapResult {

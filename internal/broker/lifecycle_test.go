@@ -74,10 +74,8 @@ func TestLifecycle_StartCleansStalePIDAndSocket(t *testing.T) {
 func TestLifecycle_StopRemovesPIDAndSocket(t *testing.T) {
 	tmpDir := t.TempDir()
 	pidFile := filepath.Join(tmpDir, "broker.pid")
-	// Use /tmp for socket to avoid path length issues
-	sockPath := fmt.Sprintf("/tmp/waggle-lifecycle-test-%d.sock", time.Now().UnixNano())
+	sockPath := shortBrokerSocketPath(t, "waggle-lifecycle-test-*")
 	dbPath := filepath.Join(tmpDir, "state.db")
-	defer os.Remove(sockPath)
 
 	// Create broker
 	b, err := New(Config{SocketPath: sockPath, DBPath: dbPath})
@@ -125,10 +123,8 @@ func TestLifecycle_StopRemovesPIDAndSocket(t *testing.T) {
 // with 0700 permissions (owner-only access).
 func TestLifecycle_SocketPermissions0700(t *testing.T) {
 	tmpDir := t.TempDir()
-	// Use /tmp for socket to avoid path length issues
-	sockPath := fmt.Sprintf("/tmp/waggle-lifecycle-perm-test-%d.sock", time.Now().UnixNano())
+	sockPath := shortBrokerSocketPath(t, "waggle-lifecycle-perm-test-*")
 	dbPath := filepath.Join(tmpDir, "state.db")
-	defer os.Remove(sockPath)
 
 	// Create broker (which creates socket with 0700 permissions)
 	b, err := New(Config{SocketPath: sockPath, DBPath: dbPath})
@@ -263,9 +259,8 @@ func TestWaitForReady_RejectsNegativeInterval(t *testing.T) {
 // the idle timeout when there are no active sessions.
 func TestLifecycle_IdleTimeout(t *testing.T) {
 	tmpDir := t.TempDir()
-	sockPath := fmt.Sprintf("/tmp/waggle-idle-test-%d.sock", time.Now().UnixNano())
+	sockPath := shortBrokerSocketPath(t, "waggle-idle-test-*")
 	dbPath := filepath.Join(tmpDir, "state.db")
-	defer os.Remove(sockPath)
 
 	// Create broker with short idle timeout
 	b, err := New(Config{
@@ -311,12 +306,11 @@ func TestLifecycle_IdleTimeout(t *testing.T) {
 }
 
 func TestIsResponding_ZombieSocket(t *testing.T) {
-	sockPath := fmt.Sprintf("/tmp/waggle-zombie-test-%d.sock", time.Now().UnixNano())
+	sockPath := shortBrokerSocketPath(t, "waggle-zombie-test-*")
 	ln, err := net.Listen("unix", sockPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.Remove(sockPath)
 	defer ln.Close()
 
 	start := time.Now()
@@ -333,9 +327,8 @@ func TestIsResponding_ZombieSocket(t *testing.T) {
 
 func TestIsResponding_HealthyBroker(t *testing.T) {
 	tmpDir := t.TempDir()
-	sockPath := fmt.Sprintf("/tmp/waggle-responding-test-%d.sock", time.Now().UnixNano())
+	sockPath := shortBrokerSocketPath(t, "waggle-responding-test-*")
 	dbPath := filepath.Join(tmpDir, "state.db")
-	defer os.Remove(sockPath)
 
 	b, err := New(Config{SocketPath: sockPath, DBPath: dbPath})
 	if err != nil {
@@ -351,7 +344,7 @@ func TestIsResponding_HealthyBroker(t *testing.T) {
 }
 
 func TestIsResponding_MissingSocket(t *testing.T) {
-	if IsResponding("/tmp/nonexistent-waggle.sock", 500*time.Millisecond) {
+	if IsResponding(shortBrokerSocketPath(t, "nonexistent-waggle-*"), 500*time.Millisecond) {
 		t.Error("expected false for missing socket")
 	}
 }
