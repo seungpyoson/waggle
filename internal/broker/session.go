@@ -8,6 +8,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 
 	"github.com/seungpyoson/waggle/internal/config"
@@ -22,7 +23,7 @@ type Session struct {
 	scan            *bufio.Scanner
 	broker          *Broker
 	ownsPushToken   bool
-	cleanDisconnect bool // Set to true when disconnect command is received
+	cleanDisconnect atomic.Bool // Set to true when disconnect command is received
 	cleanupOnce     sync.Once
 	writeMu         sync.Mutex // protects enc writes
 }
@@ -62,21 +63,21 @@ func (s *Session) readLoop() {
 		s.writeMu.Unlock()
 		if err != nil {
 			// Suppress errors after disconnect — client may have already closed
-			if !s.cleanDisconnect {
+			if !s.cleanDisconnect.Load() {
 				log.Printf("session %s: error encoding response: %v", s.name, err)
 			}
 			return
 		}
 
 		// After clean disconnect, stop reading — client is closing
-		if s.cleanDisconnect {
+		if s.cleanDisconnect.Load() {
 			return
 		}
 	}
 
 	if err := s.scan.Err(); err != nil {
 		// Suppress expected EOF/closed connection errors
-		if !s.cleanDisconnect && !isConnectionClosed(err) {
+		if !s.cleanDisconnect.Load() && !isConnectionClosed(err) {
 			log.Printf("session %s: scan error: %v", s.name, err)
 		}
 	}
@@ -93,8 +94,8 @@ func isConnectionClosed(err error) bool {
 		errors.Is(err, syscall.EPIPE)
 }
 
-// cleanup releases resources on disconnect. Safe to call multiple times —
-// handleDisconnect calls it eagerly, and readLoop defers it as a safety net.
+// cleanup releases resources on disconnect. Safe to call multiple times:
+// readLoop defers it, and paired-session teardown may call it directly.
 func (s *Session) cleanup() {
 	s.cleanupOnce.Do(s.doCleanup)
 }
@@ -108,7 +109,7 @@ func (s *Session) doCleanup() {
 		// Re-queue tasks claimed by this session
 		// Only requeue on unclean disconnect (connection dropped without disconnect command)
 		// Clean disconnect means the client intentionally disconnected and wants to keep tasks claimed
-		if !s.cleanDisconnect {
+		if !s.cleanDisconnect.Load() {
 			count, err := s.broker.store.RequeueByOwner(s.name)
 			if err != nil {
 				log.Printf("session: error requeuing tasks for %s: %v", s.name, err)
@@ -138,7 +139,7 @@ func (s *Session) doCleanup() {
 		// Base agent disconnects should tear down the paired push listener, too.
 		// Close it outside broker.mu so its cleanup can safely mutate broker state.
 		if pushListener != nil {
-			pushListener.cleanDisconnect = true
+			pushListener.cleanDisconnect.Store(true)
 			pushListener.cleanup()
 		}
 

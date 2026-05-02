@@ -210,7 +210,7 @@ func handleConnect(s *Session, req protocol.Request) protocol.Response {
 }
 
 func handleDisconnect(s *Session) protocol.Response {
-	s.cleanDisconnect = true
+	s.cleanDisconnect.Store(true)
 	// Don't call cleanup() here — readLoop will return after encoding
 	// this response (see cleanDisconnect check), triggering deferred cleanup.
 	// Calling cleanup here closes the conn before the OK response is sent.
