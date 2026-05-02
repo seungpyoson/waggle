@@ -12,7 +12,7 @@ on:
       - "v*"
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
@@ -51,10 +51,13 @@ jobs:
           name="waggle-${GOOS}-${GOARCH}"
           go build \
             -trimpath \
-            -ldflags="-s -w -X github.com/seungpyoson/waggle/cmd.Version=${version} -X github.com/seungpyoson/waggle/cmd.Commit=${commit} -X github.com/seungpyoson/waggle/cmd.BuildTime=${built}" \
+            -ldflags="-s -w -X 'github.com/seungpyoson/waggle/cmd.Version=${version}' -X 'github.com/seungpyoson/waggle/cmd.Commit=${commit}' -X 'github.com/seungpyoson/waggle/cmd.BuildTime=${built}'" \
             -o "dist/${name}" \
             .
-          sha256sum "dist/${name}" > "dist/${name}.sha256"
+          (
+            cd dist
+            sha256sum "${name}" > "${name}.sha256"
+          )
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -68,6 +71,8 @@ jobs:
     needs: build
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -82,5 +87,6 @@ jobs:
           set -euo pipefail
           gh release create "$TAG" dist/* \
             --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
             --title "$TAG" \
             --generate-notes
