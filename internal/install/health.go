@@ -207,7 +207,17 @@ func CheckCodex(homeDir string) ([]HealthIssue, AdapterState) {
 
 	// Step 1: Check for fingerprint (WAGGLE-CODEX-BEGIN marker in AGENTS.md)
 	agentsPath := filepath.Join(codexDir, "AGENTS.md")
+	if issue := unsafePathIssue(agentsPath, homeDir, "AGENTS.md", repairCmd); issue != nil {
+		return []HealthIssue{*issue}, StateBroken
+	}
 	data, err := os.ReadFile(agentsPath)
+	if err != nil && !os.IsNotExist(err) {
+		return []HealthIssue{{
+			Asset:   agentsPath,
+			Problem: "failed to read AGENTS.md: " + err.Error(),
+			Repair:  repairCmd,
+		}}, StateBroken
+	}
 
 	hasBeginMarker := err == nil && strings.Contains(string(data), codexBlockBegin)
 	hasEndMarker := err == nil && strings.Contains(string(data), codexBlockEnd)
@@ -215,6 +225,9 @@ func CheckCodex(homeDir string) ([]HealthIssue, AdapterState) {
 	// Step 2: Check if waggle files are present on disk
 	skillPath := filepath.Join(codexDir, "skills", "waggle-runtime", "SKILL.md")
 	skillExists := fileExists(skillPath)
+	if issue := unsafePathIssue(skillPath, homeDir, "SKILL.md", repairCmd); issue != nil {
+		issues = append(issues, *issue)
+	}
 
 	// Step 3: Validate marker topology before deriving state.
 	// Any marker presence (begin OR end) means the file has waggle artifacts.
@@ -284,6 +297,9 @@ func CheckGemini(homeDir string) ([]HealthIssue, AdapterState) {
 	var issues []HealthIssue
 	geminiDir := filepath.Join(homeDir, ".gemini")
 	geminiFilePath := filepath.Join(geminiDir, "GEMINI.md")
+	if issue := unsafePathIssue(geminiFilePath, homeDir, "GEMINI.md", repairCmd); issue != nil {
+		return []HealthIssue{*issue}, StateBroken
+	}
 
 	// Step 1: Read file
 	data, err := os.ReadFile(geminiFilePath)
@@ -404,6 +420,9 @@ func CheckAugment(homeDir string) ([]HealthIssue, AdapterState) {
 	const repairCmd = "waggle install augment"
 	var issues []HealthIssue
 	skillPath := filepath.Join(homeDir, ".augment", "skills", "waggle.md")
+	if issue := unsafePathIssue(skillPath, homeDir, "waggle.md", repairCmd); issue != nil {
+		return []HealthIssue{*issue}, StateBroken
+	}
 
 	data, err := os.ReadFile(skillPath)
 	if err != nil {
@@ -487,6 +506,35 @@ func appendEmbeddedFileIssue(issues *[]HealthIssue, path string, files embeddedF
 			Repair:  repairCmd,
 		})
 	}
+}
+
+func unsafePathIssue(path, root, assetName, repairCmd string) *HealthIssue {
+	if fsutil.HasAncestorSymlink(path, root) {
+		return &HealthIssue{
+			Asset:   path,
+			Problem: "symlink in ancestor path for " + assetName,
+			Repair:  repairCmd,
+		}
+	}
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return &HealthIssue{
+			Asset:   path,
+			Problem: "cannot inspect " + assetName + ": " + err.Error(),
+			Repair:  repairCmd,
+		}
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return &HealthIssue{
+			Asset:   path,
+			Problem: assetName + " is a symlink; refusing to trust symlinked integration file",
+			Repair:  repairCmd,
+		}
+	}
+	return nil
 }
 
 func appendManagedBlockContentIssue(issues *[]HealthIssue, path, content, begin, end string, files embeddedFileReader, embeddedPath, repairCmd string) {

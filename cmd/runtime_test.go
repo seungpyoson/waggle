@@ -290,6 +290,27 @@ func TestExecuteRootCommandForTestDoesNotLeakInstallUninstallFlag(t *testing.T) 
 	}
 }
 
+func TestInstallNoArgsInstallsAllSupportedIntegrations(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	stdout, stderr := executeRootCommandForTest(t, "install")
+	if stderr != "" {
+		t.Fatalf("install stderr = %q, want empty", stderr)
+	}
+	for _, want := range []string{
+		"Claude Code integration installed",
+		"Codex integration installed",
+		"Gemini integration installed",
+		"Auggie integration installed",
+		"Augment integration installed",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("install stdout = %q, want %q", stdout, want)
+		}
+	}
+}
+
 type commandTestState struct {
 	paths config.Paths
 }

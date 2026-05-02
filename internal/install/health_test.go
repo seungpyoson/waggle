@@ -428,6 +428,23 @@ func TestCheckCodex_NotInstalled_NoMarker(t *testing.T) {
 	}
 }
 
+func TestCheckCodex_BrokenUnreadableAgentsFile(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	agentsPath := filepath.Join(tmpHome, ".codex", "AGENTS.md")
+	if err := os.MkdirAll(agentsPath, 0755); err != nil {
+		t.Fatalf("failed to create unreadable AGENTS.md stand-in: %v", err)
+	}
+
+	issues, state := CheckCodex(tmpHome)
+	if state != StateBroken {
+		t.Fatalf("expected StateBroken for unreadable AGENTS.md, got %q", state)
+	}
+	if !hasHealthIssueContaining(issues, "failed to read AGENTS.md") {
+		t.Fatalf("expected AGENTS.md read failure issue, got %+v", issues)
+	}
+}
+
 func TestCheckCodex_Healthy(t *testing.T) {
 	tmpHome := t.TempDir()
 
@@ -443,6 +460,37 @@ func TestCheckCodex_Healthy(t *testing.T) {
 	}
 	if len(issues) != 0 {
 		t.Errorf("expected 0 issues, got %d: %+v", len(issues), issues)
+	}
+}
+
+func TestCheckCodex_BrokenSymlinkedAgentsFile(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	if err := installCodex(tmpHome); err != nil {
+		t.Fatalf("install failed: %v", err)
+	}
+	agentsPath := filepath.Join(tmpHome, ".codex", "AGENTS.md")
+	targetPath := filepath.Join(tmpHome, "target-AGENTS.md")
+	data, err := os.ReadFile(agentsPath)
+	if err != nil {
+		t.Fatalf("read AGENTS.md: %v", err)
+	}
+	if err := os.WriteFile(targetPath, data, 0644); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	if err := os.Remove(agentsPath); err != nil {
+		t.Fatalf("remove AGENTS.md: %v", err)
+	}
+	if err := os.Symlink(targetPath, agentsPath); err != nil {
+		t.Fatalf("symlink AGENTS.md: %v", err)
+	}
+
+	issues, state := CheckCodex(tmpHome)
+	if state != StateBroken {
+		t.Fatalf("expected StateBroken for symlinked AGENTS.md, got %q", state)
+	}
+	if !hasHealthIssueContaining(issues, "symlink") {
+		t.Fatalf("expected symlink issue, got %+v", issues)
 	}
 }
 
