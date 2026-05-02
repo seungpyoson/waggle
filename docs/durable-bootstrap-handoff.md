@@ -34,7 +34,9 @@ which reads a named inbox without connecting as that name.
 
 This PR implements the safe broker-side foundation:
 
-- `CmdReplay` reads a named inbox without session registration.
+- `CmdReplay` reads a named inbox without session registration and without
+  marking messages seen; runtime catch-up ACKs each delivered message after the
+  handler accepts it.
 - runtime CatchUp ACKs each successfully handled replayed broker message, so
   broker inbox replay does not grow without bound for runtime-managed agents.
 - runtime CatchUp uses `CmdReplay`, so it no longer competes with an active

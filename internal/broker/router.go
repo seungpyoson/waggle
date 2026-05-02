@@ -20,9 +20,12 @@ import (
 // Commands that work without a session handshake.
 // Everything else requires connect first.
 var noSessionRequired = map[string]bool{
-	protocol.CmdConnect:     true,
-	protocol.CmdStatus:      true,
-	protocol.CmdStop:        true,
+	protocol.CmdConnect: true,
+	protocol.CmdStatus:  true,
+	protocol.CmdStop:    true,
+	// Replay and ack are local-runtime catch-up commands. They deliberately
+	// avoid session registration so catch-up cannot collide with a live agent
+	// session; the broker socket is the local same-user trust boundary.
 	protocol.CmdReplay:      true,
 	protocol.CmdAck:         true,
 	protocol.CmdPushReserve: true,
@@ -781,7 +784,7 @@ func handleReplay(s *Session, req protocol.Request) protocol.Response {
 	if req.Name == "" {
 		return protocol.ErrResponse(protocol.ErrInvalidRequest, "name required")
 	}
-	messages, err := s.broker.msgStore.Inbox(req.Name)
+	messages, err := s.broker.msgStore.Replay(req.Name)
 	if err != nil {
 		return protocol.ErrResponse(protocol.ErrInternalError, err.Error())
 	}

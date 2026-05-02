@@ -900,23 +900,32 @@ func TestBroker_ReplayReadsNamedInboxWithoutSessionRegistration(t *testing.T) {
 
 	sender := connectClient(t, sockPath)
 	defer sender.Close()
-	resp, _ := sender.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	resp, err := sender.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	if err != nil {
+		t.Fatalf("sender connect request: %v", err)
+	}
 	if !resp.OK {
 		t.Fatalf("sender connect failed: %s", resp.Error)
 	}
 
 	recipient := connectClient(t, sockPath)
 	defer recipient.Close()
-	resp, _ = recipient.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+	resp, err = recipient.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+	if err != nil {
+		t.Fatalf("recipient connect request: %v", err)
+	}
 	if !resp.OK {
 		t.Fatalf("recipient connect failed: %s", resp.Error)
 	}
 
-	resp, _ = sender.Send(protocol.Request{
+	resp, err = sender.Send(protocol.Request{
 		Cmd:     protocol.CmdSend,
 		Name:    "bob",
 		Message: "replay without session collision",
 	})
+	if err != nil {
+		t.Fatalf("send request: %v", err)
+	}
 	if !resp.OK {
 		t.Fatalf("send failed: %s", resp.Error)
 	}
@@ -926,7 +935,10 @@ func TestBroker_ReplayReadsNamedInboxWithoutSessionRegistration(t *testing.T) {
 
 	replay := connectClient(t, sockPath)
 	defer replay.Close()
-	resp, _ = replay.Send(protocol.Request{Cmd: protocol.CmdReplay, Name: "bob"})
+	resp, err = replay.Send(protocol.Request{Cmd: protocol.CmdReplay, Name: "bob"})
+	if err != nil {
+		t.Fatalf("replay request: %v", err)
+	}
 	if !resp.OK {
 		t.Fatalf("replay failed: %s: %s", resp.Code, resp.Error)
 	}
@@ -938,7 +950,10 @@ func TestBroker_ReplayReadsNamedInboxWithoutSessionRegistration(t *testing.T) {
 		t.Fatalf("replay messages = %+v", messages)
 	}
 
-	resp, _ = recipient.Send(protocol.Request{Cmd: protocol.CmdPresence})
+	resp, err = recipient.Send(protocol.Request{Cmd: protocol.CmdPresence})
+	if err != nil {
+		t.Fatalf("recipient presence request: %v", err)
+	}
 	if !resp.OK {
 		t.Fatalf("recipient session was disrupted by replay: %s", resp.Error)
 	}
@@ -950,12 +965,18 @@ func TestBroker_AckCanTargetNamedInboxWithoutSessionRegistration(t *testing.T) {
 
 	sender := connectClient(t, sockPath)
 	defer sender.Close()
-	resp, _ := sender.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	resp, err := sender.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	if err != nil {
+		t.Fatalf("sender connect request: %v", err)
+	}
 	if !resp.OK {
 		t.Fatalf("sender connect failed: %s", resp.Error)
 	}
 
-	resp, _ = sender.Send(protocol.Request{Cmd: protocol.CmdSend, Name: "bob", Message: "ack by name"})
+	resp, err = sender.Send(protocol.Request{Cmd: protocol.CmdSend, Name: "bob", Message: "ack by name"})
+	if err != nil {
+		t.Fatalf("send request: %v", err)
+	}
 	if !resp.OK {
 		t.Fatalf("send failed: %s", resp.Error)
 	}
@@ -968,12 +989,18 @@ func TestBroker_AckCanTargetNamedInboxWithoutSessionRegistration(t *testing.T) {
 
 	ack := connectClient(t, sockPath)
 	defer ack.Close()
-	resp, _ = ack.Send(protocol.Request{Cmd: protocol.CmdAck, Name: "bob", MessageID: msg.ID})
+	resp, err = ack.Send(protocol.Request{Cmd: protocol.CmdAck, Name: "bob", MessageID: msg.ID})
+	if err != nil {
+		t.Fatalf("ack request: %v", err)
+	}
 	if !resp.OK {
 		t.Fatalf("ack failed: %s: %s", resp.Code, resp.Error)
 	}
 
-	resp, _ = ack.Send(protocol.Request{Cmd: protocol.CmdReplay, Name: "bob"})
+	resp, err = ack.Send(protocol.Request{Cmd: protocol.CmdReplay, Name: "bob"})
+	if err != nil {
+		t.Fatalf("replay request: %v", err)
+	}
 	if !resp.OK {
 		t.Fatalf("replay failed: %s: %s", resp.Code, resp.Error)
 	}
