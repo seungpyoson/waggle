@@ -7,11 +7,18 @@ import (
 
 	"github.com/seungpyoson/waggle/internal/broker"
 	"github.com/seungpyoson/waggle/internal/config"
+	"github.com/seungpyoson/waggle/internal/install"
 	"github.com/spf13/cobra"
 )
 
 var (
-	foreground bool
+	foreground               bool
+	startAutoInstallDetected = install.InstallDetected
+	startBrokerIsRunning     = broker.IsRunning
+	startBrokerReadPID       = broker.ReadPID
+	startBrokerCleanupStale  = broker.CleanupStale
+	startBrokerStartDaemon   = broker.StartDaemon
+	startBrokerWaitForReady  = broker.WaitForReady
 )
 
 func init() {
@@ -65,42 +72,52 @@ var startCmd = &cobra.Command{
 			return nil
 		}
 
+		installed, err := startAutoInstallDetected()
+		if err != nil {
+			return fmt.Errorf("auto-installing detected integrations: %w", err)
+		}
+		installedPlatforms := make([]string, 0, len(installed))
+		for _, result := range installed {
+			installedPlatforms = append(installedPlatforms, result.Platform)
+		}
+
 		// Check if already running
-		if broker.IsRunning(paths.PID) {
-			pid, _ := broker.ReadPID(paths.PID)
+		if startBrokerIsRunning(paths.PID) {
+			pid, _ := startBrokerReadPID(paths.PID)
 			printJSON(map[string]any{
-				"ok":      true,
-				"message": fmt.Sprintf("broker already running (PID %d)", pid),
+				"ok":                      true,
+				"message":                 fmt.Sprintf("broker already running (PID %d)", pid),
+				"auto_installed_adapters": installedPlatforms,
 			})
 			return nil
 		}
 
 		// Cleanup stale files
-		if err := broker.CleanupStale(paths.PID, paths.Socket); err != nil {
+		if err := startBrokerCleanupStale(paths.PID, paths.Socket); err != nil {
 			return fmt.Errorf("cleaning up stale files: %w", err)
 		}
 
 		// Start daemon
 		socketDir := filepath.Dir(paths.Socket)
 		daemonArgs := []string{os.Args[0], "start", "--foreground"}
-		if err := broker.StartDaemon(paths.DataDir, socketDir, paths.Log, projectID, daemonArgs); err != nil {
+		if err := startBrokerStartDaemon(paths.DataDir, socketDir, paths.Log, projectID, daemonArgs); err != nil {
 			return fmt.Errorf("starting daemon: %w", err)
 		}
 
 		// Wait for broker to start
-		if err := broker.WaitForReady(paths.PID, config.Defaults.StartupTimeout, config.Defaults.StartupPollInterval); err != nil {
+		if err := startBrokerWaitForReady(paths.PID, config.Defaults.StartupTimeout, config.Defaults.StartupPollInterval); err != nil {
 			return fmt.Errorf("broker failed to start (check %s): %w", paths.Log, err)
 		}
 
-		pid, err := broker.ReadPID(paths.PID)
+		pid, err := startBrokerReadPID(paths.PID)
 		if err != nil {
 			return fmt.Errorf("broker started but cannot read PID: %w", err)
 		}
 		printJSON(map[string]any{
-			"ok":      true,
-			"message": fmt.Sprintf("broker started (PID %d)", pid),
+			"ok":                      true,
+			"message":                 fmt.Sprintf("broker started (PID %d)", pid),
+			"auto_installed_adapters": installedPlatforms,
 		})
 		return nil
 	},
 }
-

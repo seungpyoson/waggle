@@ -24,10 +24,17 @@ var installCmd = &cobra.Command{
 				printErr("INVALID_REQUEST", "install --uninstall requires a platform")
 				return nil
 			}
-			for _, platform := range []string{"claude-code", "codex", "gemini", "auggie", "augment"} {
-				if !installPlatform(platform) {
-					return nil
-				}
+			results, err := install.InstallDetected()
+			if err != nil {
+				printErr("INSTALL_ERROR", err.Error())
+				return nil
+			}
+			if len(results) == 0 {
+				printJSON(map[string]any{"ok": true, "message": "no supported adapters detected"})
+				return nil
+			}
+			for _, result := range results {
+				printJSON(map[string]any{"ok": true, "message": result.Message, "platform": result.Platform})
 			}
 			return nil
 		}

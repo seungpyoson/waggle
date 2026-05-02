@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -290,24 +291,75 @@ func TestExecuteRootCommandForTestDoesNotLeakInstallUninstallFlag(t *testing.T) 
 	}
 }
 
-func TestInstallNoArgsInstallsAllSupportedIntegrations(t *testing.T) {
+func TestInstallNoArgsInstallsDetectedIntegrations(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("PATH", t.TempDir())
+	if err := os.Mkdir(filepath.Join(home, ".codex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 
 	stdout, stderr := executeRootCommandForTest(t, "install")
 	if stderr != "" {
 		t.Fatalf("install stderr = %q, want empty", stderr)
 	}
-	for _, want := range []string{
-		"Claude Code integration installed",
-		"Codex integration installed",
-		"Gemini integration installed",
-		"Auggie integration installed",
-		"Augment integration installed",
-	} {
-		if !strings.Contains(stdout, want) {
-			t.Fatalf("install stdout = %q, want %q", stdout, want)
+	if !strings.Contains(stdout, "Codex integration installed") {
+		t.Fatalf("install stdout = %q, want Codex install message", stdout)
+	}
+	for _, unwanted := range []string{"Claude Code integration installed", "Gemini integration installed", "Auggie integration installed", "Augment integration installed"} {
+		if strings.Contains(stdout, unwanted) {
+			t.Fatalf("install stdout = %q, did not expect %q", stdout, unwanted)
 		}
+	}
+	if _, err := os.Stat(filepath.Join(home, ".codex", "skills", "waggle-runtime", "SKILL.md")); err != nil {
+		t.Fatalf("Codex skill not installed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".gemini", "GEMINI.md")); !os.IsNotExist(err) {
+		t.Fatalf("Gemini should not have been installed, stat err = %v", err)
+	}
+}
+
+func TestStartAutoInstallsDetectedIntegrationsBeforeDaemonStart(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("WAGGLE_PROJECT_ID", "auto-install-start")
+	if err := os.Mkdir(filepath.Join(home, ".codex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	originalAutoInstall := startAutoInstallDetected
+	originalIsRunning := startBrokerIsRunning
+	originalReadPID := startBrokerReadPID
+	originalCleanupStale := startBrokerCleanupStale
+	originalStartDaemon := startBrokerStartDaemon
+	originalWaitForReady := startBrokerWaitForReady
+	t.Cleanup(func() {
+		startAutoInstallDetected = originalAutoInstall
+		startBrokerIsRunning = originalIsRunning
+		startBrokerReadPID = originalReadPID
+		startBrokerCleanupStale = originalCleanupStale
+		startBrokerStartDaemon = originalStartDaemon
+		startBrokerWaitForReady = originalWaitForReady
+	})
+
+	startBrokerIsRunning = func(string) bool { return false }
+	startBrokerReadPID = func(string) (int, error) { return 4242, nil }
+	startBrokerCleanupStale = func(string, string) error { return nil }
+	startBrokerWaitForReady = func(string, time.Duration, time.Duration) error { return nil }
+	startBrokerStartDaemon = func(string, string, string, string, []string) error {
+		if _, err := os.Stat(filepath.Join(home, ".codex", "skills", "waggle-runtime", "SKILL.md")); err != nil {
+			t.Fatalf("Codex integration was not installed before daemon start: %v", err)
+		}
+		return nil
+	}
+
+	stdout, stderr := executeRootCommandForTest(t, "start")
+	if stderr != "" {
+		t.Fatalf("start stderr = %q, want empty", stderr)
+	}
+	if !strings.Contains(stdout, `"auto_installed_adapters":`) || !strings.Contains(stdout, `"codex"`) {
+		t.Fatalf("start stdout = %q, want auto-installed Codex adapter", stdout)
 	}
 }
 
