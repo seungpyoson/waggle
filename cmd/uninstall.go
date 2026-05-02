@@ -72,6 +72,7 @@ var uninstallCmd = &cobra.Command{
 
 func runUninstall(home string, all, purge, dryRun bool) ([]map[string]any, error) {
 	var actions []map[string]any
+	var topErr error
 	record := func(target, action string) {
 		actions = append(actions, map[string]any{"target": target, "action": action})
 	}
@@ -87,7 +88,7 @@ func runUninstall(home string, all, purge, dryRun bool) ([]map[string]any, error
 			}
 		}
 		if err := errors.Join(uninstallErrs...); err != nil {
-			return actions, err
+			topErr = err
 		}
 	}
 
@@ -95,7 +96,7 @@ func runUninstall(home string, all, purge, dryRun bool) ([]map[string]any, error
 		record("runtime-daemon", plannedAction(dryRun, "stop if running"))
 		if !dryRun {
 			if err := uninstallStopRuntime(); err != nil {
-				return actions, err
+				return actions, errors.Join(topErr, err)
 			}
 		}
 
@@ -103,12 +104,12 @@ func runUninstall(home string, all, purge, dryRun bool) ([]map[string]any, error
 		record(waggleDir, plannedAction(dryRun, "remove state"))
 		if !dryRun {
 			if err := removeOwnedTree(waggleDir, home); err != nil {
-				return actions, err
+				topErr = errors.Join(topErr, err)
 			}
 		}
 	}
 
-	return actions, nil
+	return actions, topErr
 }
 
 func plannedAction(dryRun bool, action string) string {

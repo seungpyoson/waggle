@@ -402,6 +402,49 @@ func TestRunUninstallAllAttemptsEveryIntegrationBeforeReturningErrors(t *testing
 	}
 }
 
+func TestRunUninstallAllPurgeRemovesStateAfterIntegrationErrors(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".waggle", "runtime"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	originalTargets := uninstallTargets
+	originalStopRuntime := uninstallStopRuntime
+	t.Cleanup(func() {
+		uninstallTargets = originalTargets
+		uninstallStopRuntime = originalStopRuntime
+	})
+
+	uninstallTargets = []struct {
+		name string
+		fn   func() error
+	}{
+		{
+			name: "failing",
+			fn: func() error {
+				return fmt.Errorf("integration failed")
+			},
+		},
+	}
+	uninstallStopRuntime = func() error {
+		return nil
+	}
+
+	actions, err := runUninstall(home, true, true, false)
+	if err == nil {
+		t.Fatal("runUninstall error = nil, want integration error")
+	}
+	if !strings.Contains(err.Error(), "uninstall failing") {
+		t.Fatalf("runUninstall error = %v, want uninstall failure", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(home, ".waggle")); !os.IsNotExist(statErr) {
+		t.Fatalf(".waggle stat error = %v, want removed", statErr)
+	}
+	if len(actions) != 3 {
+		t.Fatalf("actions len = %d, want integration, runtime stop, and state removal", len(actions))
+	}
+}
+
 func TestUninstallPurgeStopsRuntimeBeforeRemovingState(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

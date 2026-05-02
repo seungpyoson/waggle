@@ -153,6 +153,7 @@ func (m *Manager) StopAll() error {
 	return nil
 }
 
+// ForgetAll clears all agent registrations without stopping underlying processes.
 func (m *Manager) ForgetAll() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
