@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/seungpyoson/waggle/internal/broker"
 	"github.com/seungpyoson/waggle/internal/config"
 	"github.com/seungpyoson/waggle/internal/install"
 	rt "github.com/seungpyoson/waggle/internal/runtime"
@@ -538,6 +539,41 @@ func TestUninstallPurgeStopsRuntimeBeforeRemovingState(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "runtime-daemon") || !strings.Contains(stdout, "stop if running") {
 		t.Fatalf("uninstall stdout = %q, want runtime stop action", stdout)
+	}
+}
+
+func TestStopRuntimeForUninstallTreatsMissingPIDAfterRunningCheckAsStopped(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	runtimePaths := config.NewPaths("")
+	if err := os.MkdirAll(runtimePaths.RuntimeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := broker.WritePID(runtimePaths.RuntimePID); err != nil {
+		t.Fatal(err)
+	}
+	if err := rt.SaveState(runtimePaths, rt.State{
+		PID:       os.Getpid(),
+		Running:   true,
+		StartedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !rt.IsRunning(runtimePaths) {
+		t.Fatal("test setup expected runtime to report running")
+	}
+
+	originalReadPID := uninstallReadPID
+	t.Cleanup(func() {
+		uninstallReadPID = originalReadPID
+	})
+	uninstallReadPID = func(string) (int, error) {
+		return 0, os.ErrNotExist
+	}
+
+	if err := stopRuntimeForUninstall(); err != nil {
+		t.Fatalf("stopRuntimeForUninstall error = %v, want nil for disappeared pid file", err)
 	}
 }
 

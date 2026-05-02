@@ -22,6 +22,7 @@ var (
 	uninstallDryRun bool
 
 	uninstallStopRuntime = stopRuntimeForUninstall
+	uninstallReadPID     = broker.ReadPID
 	uninstallTargets     = []struct {
 		name string
 		fn   func() error
@@ -151,8 +152,11 @@ func stopRuntimeForUninstall() error {
 		return nil
 	}
 
-	pid, err := broker.ReadPID(runtimePaths.RuntimePID)
+	pid, err := uninstallReadPID(runtimePaths.RuntimePID)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
 		return fmt.Errorf("read runtime pid: %w", err)
 	}
 	process, err := os.FindProcess(pid)
