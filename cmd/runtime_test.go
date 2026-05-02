@@ -3,12 +3,15 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/seungpyoson/waggle/internal/config"
+	"github.com/seungpyoson/waggle/internal/install"
 	rt "github.com/seungpyoson/waggle/internal/runtime"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -290,6 +293,181 @@ func TestExecuteRootCommandForTestDoesNotLeakInstallUninstallFlag(t *testing.T) 
 	}
 }
 
+func TestInstallNoArgsInstallsDetectedIntegrations(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", t.TempDir())
+	if err := os.Mkdir(filepath.Join(home, ".codex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout, stderr := executeRootCommandForTest(t, "install")
+	if stderr != "" {
+		t.Fatalf("install stderr = %q, want empty", stderr)
+	}
+	if !strings.Contains(stdout, "Codex integration installed") {
+		t.Fatalf("install stdout = %q, want Codex install message", stdout)
+	}
+	var response struct {
+		OK                bool                    `json:"ok"`
+		InstalledAdapters []string                `json:"installed_adapters"`
+		Results           []install.InstallResult `json:"results"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &response); err != nil {
+		t.Fatalf("install stdout is not a single JSON object: %v\n%s", err, stdout)
+	}
+	if !response.OK || len(response.InstalledAdapters) != 1 || response.InstalledAdapters[0] != install.PlatformCodex {
+		t.Fatalf("install response = %+v, want ok with only Codex installed", response)
+	}
+	for _, unwanted := range []string{"Claude Code integration installed", "Gemini integration installed", "Auggie integration installed", "Augment integration installed"} {
+		if strings.Contains(stdout, unwanted) {
+			t.Fatalf("install stdout = %q, did not expect %q", stdout, unwanted)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(home, ".codex", "skills", "waggle-runtime", "SKILL.md")); err != nil {
+		t.Fatalf("Codex skill not installed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".gemini", "GEMINI.md")); !os.IsNotExist(err) {
+		t.Fatalf("Gemini should not have been installed, stat err = %v", err)
+	}
+}
+
+func TestInstallNoArgsReportsPartialResultsOnError(t *testing.T) {
+	originalInstallDetected := installDetected
+	t.Cleanup(func() {
+		installDetected = originalInstallDetected
+	})
+
+	installDetected = func() ([]install.InstallResult, error) {
+		return []install.InstallResult{{
+			Platform: install.PlatformCodex,
+			Message:  "Codex integration installed. Restart Codex to activate.",
+		}}, errors.New("install gemini: permission denied")
+	}
+
+	stdout, stderr, err := executeRootCommandForTestWithError(t, "install")
+	if err == nil {
+		t.Fatal("install returned nil error, want partial install error")
+	}
+	if stdout != "" {
+		t.Fatalf("install stdout = %q, want empty", stdout)
+	}
+	for _, want := range []string{
+		`"ok": false`,
+		`"code": "INSTALL_ERROR"`,
+		`"error": "install gemini: permission denied"`,
+		`"installed_adapters":`,
+		`"codex"`,
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Fatalf("install stderr = %q, want %q", stderr, want)
+		}
+	}
+}
+
+func TestInstallTooManyArgsReportsCobraError(t *testing.T) {
+	stdout, stderr, err := executeRootCommandForTestWithError(t, "install", "codex", "gemini")
+	if err == nil {
+		t.Fatal("install returned nil error, want too-many-args error")
+	}
+	if stdout != "" {
+		t.Fatalf("install stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, "accepts at most 1 arg") {
+		t.Fatalf("install stderr = %q, want Cobra argument error", stderr)
+	}
+}
+
+func TestStartAutoInstallsDetectedIntegrationsBeforeDaemonStart(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("WAGGLE_PROJECT_ID", "auto-install-start")
+	if err := os.Mkdir(filepath.Join(home, ".codex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	originalAutoInstall := startAutoInstallDetected
+	originalIsRunning := startBrokerIsRunning
+	originalReadPID := startBrokerReadPID
+	originalCleanupStale := startBrokerCleanupStale
+	originalStartDaemon := startBrokerStartDaemon
+	originalWaitForReady := startBrokerWaitForReady
+	t.Cleanup(func() {
+		startAutoInstallDetected = originalAutoInstall
+		startBrokerIsRunning = originalIsRunning
+		startBrokerReadPID = originalReadPID
+		startBrokerCleanupStale = originalCleanupStale
+		startBrokerStartDaemon = originalStartDaemon
+		startBrokerWaitForReady = originalWaitForReady
+	})
+
+	startBrokerIsRunning = func(string) bool { return false }
+	startBrokerReadPID = func(string) (int, error) { return 4242, nil }
+	startBrokerCleanupStale = func(string, string) error { return nil }
+	startBrokerWaitForReady = func(string, time.Duration, time.Duration) error { return nil }
+	startBrokerStartDaemon = func(string, string, string, string, []string) error {
+		if _, err := os.Stat(filepath.Join(home, ".codex", "skills", "waggle-runtime", "SKILL.md")); err != nil {
+			t.Fatalf("Codex integration was not installed before daemon start: %v", err)
+		}
+		return nil
+	}
+
+	stdout, stderr := executeRootCommandForTest(t, "start")
+	if stderr != "" {
+		t.Fatalf("start stderr = %q, want empty", stderr)
+	}
+	if !strings.Contains(stdout, `"auto_installed_adapters":`) || !strings.Contains(stdout, `"codex"`) {
+		t.Fatalf("start stdout = %q, want auto-installed Codex adapter", stdout)
+	}
+}
+
+func TestStartReportsAutoInstallFailureButStillStartsDaemon(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("WAGGLE_PROJECT_ID", "auto-install-start-fail-open")
+
+	originalAutoInstall := startAutoInstallDetected
+	originalIsRunning := startBrokerIsRunning
+	originalReadPID := startBrokerReadPID
+	originalCleanupStale := startBrokerCleanupStale
+	originalStartDaemon := startBrokerStartDaemon
+	originalWaitForReady := startBrokerWaitForReady
+	t.Cleanup(func() {
+		startAutoInstallDetected = originalAutoInstall
+		startBrokerIsRunning = originalIsRunning
+		startBrokerReadPID = originalReadPID
+		startBrokerCleanupStale = originalCleanupStale
+		startBrokerStartDaemon = originalStartDaemon
+		startBrokerWaitForReady = originalWaitForReady
+	})
+
+	daemonStarted := false
+	startAutoInstallDetected = func() ([]install.InstallResult, error) {
+		return nil, errors.New("auto-install unavailable")
+	}
+	startBrokerIsRunning = func(string) bool { return false }
+	startBrokerReadPID = func(string) (int, error) { return 4242, nil }
+	startBrokerCleanupStale = func(string, string) error { return nil }
+	startBrokerWaitForReady = func(string, time.Duration, time.Duration) error { return nil }
+	startBrokerStartDaemon = func(string, string, string, string, []string) error {
+		daemonStarted = true
+		return nil
+	}
+
+	stdout, stderr := executeRootCommandForTest(t, "start")
+	if stderr != "" {
+		t.Fatalf("start stderr = %q, want empty", stderr)
+	}
+	if !daemonStarted {
+		t.Fatal("daemon was not started after auto-install failure")
+	}
+	if !strings.Contains(stdout, `"auto_install_error": "auto-install unavailable"`) {
+		t.Fatalf("start stdout = %q, want auto_install_error", stdout)
+	}
+}
+
 type commandTestState struct {
 	paths config.Paths
 }
@@ -321,9 +499,22 @@ func resetFlagToDefault(flag *pflag.Flag) {
 func executeRootCommandForTest(t *testing.T, args ...string) (string, string) {
 	t.Helper()
 
+	stdout, stderr, err := executeRootCommandForTestWithError(t, args...)
+	if err != nil {
+		t.Fatalf("execute %v: %v", args, err)
+	}
+
+	return stdout, stderr
+}
+
+func executeRootCommandForTestWithError(t *testing.T, args ...string) (string, string, error) {
+	t.Helper()
+
 	originalState := captureCommandTestState()
 	defer func() {
 		originalState.restore()
+		installCmd.SilenceErrors = false
+		installCmd.SilenceUsage = false
 		rootCmd.SetOut(os.Stdout)
 		rootCmd.SetErr(os.Stderr)
 		rootCmd.SetArgs(nil)
@@ -338,11 +529,8 @@ func executeRootCommandForTest(t *testing.T, args ...string) (string, string) {
 	rootCmd.SetErr(&stderr)
 	rootCmd.SetArgs(args)
 
-	if err := rootCmd.Execute(); err != nil {
-		t.Fatalf("execute %v: %v", args, err)
-	}
-
-	return stdout.String(), stderr.String()
+	err := rootCmd.Execute()
+	return stdout.String(), stderr.String(), err
 }
 
 func openRuntimeStoreForTest(t *testing.T) *rt.Store {
