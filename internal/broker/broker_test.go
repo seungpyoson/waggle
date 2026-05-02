@@ -1696,7 +1696,7 @@ func TestBroker_Ack(t *testing.T) {
 	unmarshalResponse(t, resp, &msgData)
 
 	// Bob receives push
-	c2.Receive()
+	receiveResponse(t, c2)
 
 	// Bob acks the message
 	resp = sendRequest(t, c2, protocol.Request{
@@ -1822,7 +1822,7 @@ func TestBroker_FullAckLifecycle(t *testing.T) {
 	}
 
 	// Bob receives push
-	c2.Receive()
+	receiveResponse(t, c2)
 
 	// Bob checks inbox (state: pushed → seen)
 	resp = sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdInbox})
@@ -2394,7 +2394,7 @@ func TestBroker_SendWithPriority(t *testing.T) {
 	}
 
 	// Bob receives push
-	c2.Receive()
+	receiveResponse(t, c2)
 
 	// Bob checks inbox
 	resp = sendRequest(t, c2, protocol.Request{Cmd: protocol.CmdInbox})
@@ -2437,7 +2437,7 @@ func TestBroker_SendWithTTL(t *testing.T) {
 	}
 
 	// Bob receives push
-	c2.Receive()
+	receiveResponse(t, c2)
 
 	// Wait for TTL to expire
 	time.Sleep(2 * time.Second)
@@ -2486,7 +2486,7 @@ func TestBroker_TTLCheckerRuns(t *testing.T) {
 	unmarshalResponse(t, resp, &msgData)
 
 	// Bob receives push
-	c2.Receive()
+	receiveResponse(t, c2)
 
 	// Wait for TTL to expire (1s) and checker to fire (500ms period)
 	time.Sleep(2 * time.Second)
