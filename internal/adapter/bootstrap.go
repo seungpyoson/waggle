@@ -129,6 +129,8 @@ func uninstalledToolSkipReason(tool string) string {
 	if known && state == install.StateNotInstalled {
 		return fmt.Sprintf("%s integration is not installed", tool)
 	}
+	// StateBroken still enters bootstrap so existing sessions can surface
+	// diagnostics and receive recovery messages instead of silently going dark.
 	return ""
 }
 

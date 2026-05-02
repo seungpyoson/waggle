@@ -88,6 +88,7 @@ var Defaults = struct {
 	LeaseCheckPeriod                      time.Duration
 	IdleCheckInterval                     time.Duration
 	StartupPollInterval                   time.Duration
+	ShutdownPollInterval                  time.Duration
 	StartupTimeout                        time.Duration
 	DisconnectTimeout                     time.Duration
 	CatchUpMaxRetries                     int
@@ -155,6 +156,7 @@ var Defaults = struct {
 	LeaseCheckPeriod:                      30 * time.Second,
 	IdleCheckInterval:                     1 * time.Second,
 	StartupPollInterval:                   100 * time.Millisecond,
+	ShutdownPollInterval:                  100 * time.Millisecond,
 	StartupTimeout:                        2 * time.Second,
 	DisconnectTimeout:                     2 * time.Second,
 	CatchUpMaxRetries:                     3,

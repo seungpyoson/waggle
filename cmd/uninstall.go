@@ -159,7 +159,7 @@ func stopRuntimeForUninstall() error {
 		if time.Now().After(deadline) {
 			return fmt.Errorf("runtime still running after SIGTERM")
 		}
-		time.Sleep(config.Defaults.StartupPollInterval)
+		time.Sleep(config.Defaults.ShutdownPollInterval)
 	}
 	return nil
 }
