@@ -227,6 +227,17 @@ func (s *Store) MarkExpired() (int, error) {
 // Inbox returns all queued, pushed, and seen messages for a recipient
 // Excludes expired messages and marks queued/pushed messages as seen
 func (s *Store) Inbox(name string) ([]*Message, error) {
+	return s.inbox(name, true)
+}
+
+// Replay returns all queued, pushed, and seen messages for a recipient without
+// changing message state. Runtime catch-up uses this before explicitly acking
+// delivered messages.
+func (s *Store) Replay(name string) ([]*Message, error) {
+	return s.inbox(name, false)
+}
+
+func (s *Store) inbox(name string, markSeen bool) ([]*Message, error) {
 	rows, err := s.db.Query(
 		`SELECT id, from_name, to_name, body, priority, ttl, state, created_at, pushed_at, seen_at, acked_at
 		 FROM messages
@@ -265,7 +276,7 @@ func (s *Store) Inbox(name string) ([]*Message, error) {
 		}
 
 		// Track messages that need to be marked as seen
-		if m.State == "queued" || m.State == "pushed" {
+		if markSeen && (m.State == "queued" || m.State == "pushed") {
 			idsToMarkSeen = append(idsToMarkSeen, m.ID)
 		}
 
@@ -338,4 +349,3 @@ func (s *Store) GetState(id int64) (string, error) {
 	}
 	return state, nil
 }
-

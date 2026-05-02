@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	ia "github.com/seungpyoson/waggle/internal/adapter"
 	"github.com/seungpyoson/waggle/internal/config"
 	"github.com/seungpyoson/waggle/internal/install"
 	rt "github.com/seungpyoson/waggle/internal/runtime"
@@ -255,6 +256,119 @@ func TestAdapterBootstrapJSONReportsSkippedWhenRuntimeStoreUnavailable(t *testin
 	}
 	if resp.Tool != "codex" {
 		t.Fatalf("tool = %q, want codex", resp.Tool)
+	}
+}
+
+func TestWhoamiReturnsMappedAgentIdentity(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("WAGGLE_AGENT_PPID", "12345")
+
+	runtimeDir := config.NewPaths("").RuntimeDir
+	nonce := "12345-1711843200000000002"
+	if err := ia.WriteSessionMapping(runtimeDir, 12345, nonce, "codex-ttys001", "proj-whoami"); err != nil {
+		t.Fatalf("write session mapping: %v", err)
+	}
+
+	stdout, stderr := executeRootCommandForTest(t, "whoami")
+	if stderr != "" {
+		t.Fatalf("whoami stderr = %q, want empty", stderr)
+	}
+
+	var resp struct {
+		OK         bool   `json:"ok"`
+		AgentName  string `json:"agent_name"`
+		ProjectKey string `json:"project_key"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &resp); err != nil {
+		t.Fatalf("unmarshal whoami response: %v", err)
+	}
+	if !resp.OK || resp.AgentName != "codex-ttys001" || resp.ProjectKey != rt.ProjectPathKey("proj-whoami") {
+		t.Fatalf("whoami response = %+v", resp)
+	}
+}
+
+func TestWhoamiParsesCRLFSessionMapping(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("WAGGLE_AGENT_PPID", "12345")
+
+	runtimeDir := config.NewPaths("").RuntimeDir
+	nonce := "12345-1711843200000000002"
+	if err := ia.WriteSessionMapping(runtimeDir, 12345, nonce, "codex-ttys001", "proj-whoami"); err != nil {
+		t.Fatalf("write session mapping: %v", err)
+	}
+	sessionPath := filepath.Join(runtimeDir, "agent-session-"+nonce)
+	if err := os.WriteFile(sessionPath, []byte("codex-ttys001\r\n"+rt.ProjectPathKey("proj-whoami")+"\r\n"), 0o600); err != nil {
+		t.Fatalf("rewrite CRLF session mapping: %v", err)
+	}
+
+	stdout, stderr := executeRootCommandForTest(t, "whoami")
+	if stderr != "" {
+		t.Fatalf("whoami stderr = %q, want empty", stderr)
+	}
+
+	var resp struct {
+		OK         bool   `json:"ok"`
+		AgentName  string `json:"agent_name"`
+		ProjectKey string `json:"project_key"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &resp); err != nil {
+		t.Fatalf("unmarshal whoami response: %v", err)
+	}
+	if !resp.OK || resp.AgentName != "codex-ttys001" || resp.ProjectKey != rt.ProjectPathKey("proj-whoami") {
+		t.Fatalf("whoami response = %+v", resp)
+	}
+}
+
+func TestWhoamiFallsBackToTTYMapping(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("WAGGLE_AGENT_PPID", "")
+	t.Setenv("TTY", "/dev/tty_U0")
+
+	runtimeDir := config.NewPaths("").RuntimeDir
+	nonce := "12345-1711843200000003"
+	if err := ia.WriteSessionMapping(runtimeDir, 12345, nonce, "codex-tty_u0", "proj-whoami"); err != nil {
+		t.Fatalf("write session mapping: %v", err)
+	}
+	if err := ia.WriteTTYMapping(runtimeDir, "tty_U0", nonce); err != nil {
+		t.Fatalf("write tty mapping: %v", err)
+	}
+
+	stdout, stderr := executeRootCommandForTest(t, "whoami")
+	if stderr != "" {
+		t.Fatalf("whoami stderr = %q, want empty", stderr)
+	}
+
+	var resp struct {
+		OK        bool   `json:"ok"`
+		AgentName string `json:"agent_name"`
+		Source    string `json:"source"`
+		PPID      string `json:"ppid"`
+		TTY       string `json:"tty"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &resp); err != nil {
+		t.Fatalf("unmarshal whoami response: %v", err)
+	}
+	if !resp.OK || resp.AgentName != "codex-tty_u0" || resp.Source != "tty" {
+		t.Fatalf("whoami response = %+v", resp)
+	}
+	if resp.PPID != "" {
+		t.Fatalf("whoami ppid = %q, want empty for tty-sourced lookup", resp.PPID)
+	}
+	if resp.TTY != "tty_u0" {
+		t.Fatalf("whoami tty = %q, want tty_u0", resp.TTY)
+	}
+}
+
+func TestWhoamiRejectsArgs(t *testing.T) {
+	err := whoamiCmd.Args(whoamiCmd, []string{"extra"})
+	if err == nil {
+		t.Fatal("whoami Args accepted unexpected positional argument")
+	}
+	if !strings.Contains(err.Error(), "unknown command") {
+		t.Fatalf("whoami Args error = %v, want no-args error", err)
 	}
 }
 

@@ -20,9 +20,14 @@ import (
 // Commands that work without a session handshake.
 // Everything else requires connect first.
 var noSessionRequired = map[string]bool{
-	protocol.CmdConnect:     true,
-	protocol.CmdStatus:      true,
-	protocol.CmdStop:        true,
+	protocol.CmdConnect: true,
+	protocol.CmdStatus:  true,
+	protocol.CmdStop:    true,
+	// Replay and ack are local-runtime catch-up commands. They deliberately
+	// avoid session registration so catch-up cannot collide with a live agent
+	// session; the broker socket is the local same-user trust boundary.
+	protocol.CmdReplay:      true,
+	protocol.CmdAck:         true,
 	protocol.CmdPushReserve: true,
 	protocol.CmdPushRelease: true,
 }
@@ -75,6 +80,8 @@ func route(s *Session, req protocol.Request) protocol.Response {
 		return handleSend(s, req)
 	case protocol.CmdInbox:
 		return handleInbox(s, req)
+	case protocol.CmdReplay:
+		return handleReplay(s, req)
 	case protocol.CmdAck:
 		return handleAck(s, req)
 	case protocol.CmdPresence:
@@ -773,12 +780,29 @@ func handleInbox(s *Session, req protocol.Request) protocol.Response {
 	return protocol.OKResponse(mustMarshal(messages))
 }
 
+func handleReplay(s *Session, req protocol.Request) protocol.Response {
+	if req.Name == "" {
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, "name required")
+	}
+	messages, err := s.broker.msgStore.Replay(req.Name)
+	if err != nil {
+		return protocol.ErrResponse(protocol.ErrInternalError, err.Error())
+	}
+	return protocol.OKResponse(mustMarshal(messages))
+}
+
 func handleAck(s *Session, req protocol.Request) protocol.Response {
 	if req.MessageID == 0 {
 		return protocol.ErrResponse(protocol.ErrInvalidRequest, "message_id required")
 	}
 
-	caller := strings.TrimSuffix(s.name, "-push")
+	caller := req.Name
+	if caller == "" {
+		caller = strings.TrimSuffix(s.name, "-push")
+	}
+	if caller == "" {
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, "name required")
+	}
 	err := s.broker.msgStore.Ack(req.MessageID, caller)
 	if err != nil {
 		if errors.Is(err, messages.ErrMessageNotFound) {

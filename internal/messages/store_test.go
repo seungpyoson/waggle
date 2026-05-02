@@ -440,6 +440,36 @@ func TestStore_InboxMarksSeen(t *testing.T) {
 	}
 }
 
+func TestStore_ReplayDoesNotMarkSeen(t *testing.T) {
+	s := newTestStore(t)
+
+	msg, _ := s.Send("alice", "bob", "hello", "", nil)
+	if err := s.MarkPushed(msg.ID); err != nil {
+		t.Fatalf("MarkPushed failed: %v", err)
+	}
+
+	messages, err := s.Replay("bob")
+	if err != nil {
+		t.Fatalf("Replay failed: %v", err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("replay len = %d, want 1", len(messages))
+	}
+
+	var state string
+	var seenAt sql.NullString
+	err = s.db.QueryRow("SELECT state, seen_at FROM messages WHERE id = ?", msg.ID).Scan(&state, &seenAt)
+	if err != nil {
+		t.Fatalf("query message: %v", err)
+	}
+	if state != "pushed" {
+		t.Errorf("state = %q, want pushed", state)
+	}
+	if seenAt.Valid {
+		t.Errorf("seen_at = %q, want unset", seenAt.String)
+	}
+}
+
 // TestStore_PriorityStored — Send with priority=critical; inbox shows priority=critical
 func TestStore_PriorityStored(t *testing.T) {
 	s := newTestStore(t)

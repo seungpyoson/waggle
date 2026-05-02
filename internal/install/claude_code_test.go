@@ -307,6 +307,9 @@ func TestInstall_PushHookCreated(t *testing.T) {
 	if !strings.Contains(content, "agent-ppid-") {
 		t.Error("push hook missing agent-ppid- map file reference")
 	}
+	if !strings.Contains(content, "toLowerCase()") {
+		t.Error("push hook missing lowercase TTY fallback normalization")
+	}
 	if !strings.Contains(content, "additionalContext") {
 		t.Error("push hook missing additionalContext output")
 	}

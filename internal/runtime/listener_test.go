@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -243,7 +244,7 @@ func TestBrokerListenerFailedHandshakeDoesNotReleaseActiveListenerToken(t *testi
 	assertPushTokenStillAccepted(t, socketPath, active, "alice-push", token, "failed Listen handshake")
 }
 
-func TestBrokerListenerCatchUpFailedHandshakeDoesNotReleaseActiveListenerToken(t *testing.T) {
+func TestBrokerListenerCatchUpReadsWhileActiveListenerConnected(t *testing.T) {
 	socketPath, cleanup := startRuntimeTestBroker(t, "proj-catchup-duplicate")
 	defer cleanup()
 
@@ -272,17 +273,14 @@ func TestBrokerListenerCatchUpFailedHandshakeDoesNotReleaseActiveListenerToken(t
 		AgentName: "alice",
 		Source:    "hook",
 	}, func(d Delivery) error {
-		t.Fatal("duplicate catch-up unexpectedly received delivery")
+		t.Fatal("empty catch-up unexpectedly received delivery")
 		return nil
 	})
-	if err == nil {
-		t.Fatal("expected duplicate catch-up handshake to fail")
-	}
-	if !strings.Contains(err.Error(), string(protocol.ErrAlreadyConnected)) {
-		t.Fatalf("CatchUp() error = %v, want %s", err, protocol.ErrAlreadyConnected)
+	if err != nil {
+		t.Fatalf("CatchUp() error = %v", err)
 	}
 
-	assertPushTokenStillAccepted(t, socketPath, active, "alice-push", token, "failed CatchUp handshake")
+	assertPushTokenStillAccepted(t, socketPath, active, "alice-push", token, "CatchUp replay")
 }
 
 func TestBrokerListenerCatchUpReadsInboxWithoutBaseConnection(t *testing.T) {
@@ -332,9 +330,210 @@ func TestBrokerListenerCatchUpReadsInboxWithoutBaseConnection(t *testing.T) {
 	if got[0].Body != "catch-up delivery" {
 		t.Fatalf("delivery.Body = %q, want %q", got[0].Body, "catch-up delivery")
 	}
+
+	got = nil
+	if err := NewBrokerListenerFactory().CatchUp(Watch{
+		ProjectID: "proj-catchup",
+		AgentName: "alice",
+		Source:    "hook",
+	}, func(d Delivery) error {
+		got = append(got, d)
+		return nil
+	}); err != nil {
+		t.Fatalf("second CatchUp() error = %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("second CatchUp() deliveries = %d, want 0 after ack", len(got))
+	}
 }
 
-func TestBrokerListenerCatchUpReleasesPushToken(t *testing.T) {
+func TestBrokerListenerCatchUpClearsReplayDeadlineBeforeAck(t *testing.T) {
+	originalTimeout := config.Defaults.ConnectTimeout
+	shortTimeout := 25 * time.Millisecond
+	config.Defaults.ConnectTimeout = shortTimeout
+	t.Cleanup(func() {
+		config.Defaults.ConnectTimeout = originalTimeout
+	})
+
+	socketPath, cleanup := startRuntimeTestBroker(t, "proj-catchup-deadline")
+	defer cleanup()
+
+	sender := connectRuntimeClient(t, socketPath)
+	defer sender.Close()
+	resp, err := sender.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "sender"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.OK {
+		t.Fatalf("sender connect failed: %s", resp.Error)
+	}
+
+	sendResp, err := sender.Send(protocol.Request{
+		Cmd:     protocol.CmdSend,
+		Name:    "alice",
+		Message: "slow catch-up delivery",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sendResp.OK {
+		t.Fatalf("send failed: %s", sendResp.Error)
+	}
+
+	var got []Delivery
+	if err := NewBrokerListenerFactory().CatchUp(Watch{
+		ProjectID: "proj-catchup-deadline",
+		AgentName: "alice",
+		Source:    "hook",
+	}, func(d Delivery) error {
+		time.Sleep(2 * shortTimeout)
+		got = append(got, d)
+		return nil
+	}); err != nil {
+		t.Fatalf("CatchUp() error = %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("CatchUp() deliveries = %d, want 1", len(got))
+	}
+}
+
+func TestBrokerListenerCatchUpAcksPriorMessagesBeforeHandlerError(t *testing.T) {
+	socketPath, cleanup := startRuntimeTestBroker(t, "proj-catchup-handler-error")
+	defer cleanup()
+
+	sender := connectRuntimeClient(t, socketPath)
+	defer sender.Close()
+	resp, err := sender.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "sender"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.OK {
+		t.Fatalf("sender connect failed: %s", resp.Error)
+	}
+	for _, body := range []string{"first", "second"} {
+		sendResp, err := sender.Send(protocol.Request{
+			Cmd:     protocol.CmdSend,
+			Name:    "alice",
+			Message: body,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !sendResp.OK {
+			t.Fatalf("send %q failed: %s", body, sendResp.Error)
+		}
+	}
+
+	var firstAttempt []string
+	err = NewBrokerListenerFactory().CatchUp(Watch{
+		ProjectID: "proj-catchup-handler-error",
+		AgentName: "alice",
+		Source:    "hook",
+	}, func(d Delivery) error {
+		firstAttempt = append(firstAttempt, d.Body)
+		if d.Body == "second" {
+			return context.Canceled
+		}
+		return nil
+	})
+	if err == nil {
+		t.Fatal("CatchUp() error = nil, want handler error")
+	}
+	if strings.Join(firstAttempt, ",") != "first,second" {
+		t.Fatalf("first attempt deliveries = %v, want first, second", firstAttempt)
+	}
+
+	var secondAttempt []string
+	if err := NewBrokerListenerFactory().CatchUp(Watch{
+		ProjectID: "proj-catchup-handler-error",
+		AgentName: "alice",
+		Source:    "hook",
+	}, func(d Delivery) error {
+		secondAttempt = append(secondAttempt, d.Body)
+		return nil
+	}); err != nil {
+		t.Fatalf("second CatchUp() error = %v", err)
+	}
+	if strings.Join(secondAttempt, ",") != "second" {
+		t.Fatalf("second attempt deliveries = %v, want only second", secondAttempt)
+	}
+}
+
+func TestBrokerListenerCatchUpContinuesAfterConcurrentAck(t *testing.T) {
+	socketPath, cleanup := startRuntimeTestBroker(t, "proj-catchup-concurrent-ack")
+	defer cleanup()
+
+	sender := connectRuntimeClient(t, socketPath)
+	defer sender.Close()
+	resp, err := sender.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "sender"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.OK {
+		t.Fatalf("sender connect failed: %s", resp.Error)
+	}
+	for _, body := range []string{"first", "second"} {
+		sendResp, err := sender.Send(protocol.Request{
+			Cmd:     protocol.CmdSend,
+			Name:    "alice",
+			Message: body,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !sendResp.OK {
+			t.Fatalf("send %q failed: %s", body, sendResp.Error)
+		}
+	}
+
+	var got []string
+	err = NewBrokerListenerFactory().CatchUp(Watch{
+		ProjectID: "proj-catchup-concurrent-ack",
+		AgentName: "alice",
+		Source:    "hook",
+	}, func(d Delivery) error {
+		got = append(got, d.Body)
+		if d.Body == "first" {
+			ack := connectRuntimeClient(t, socketPath)
+			defer ack.Close()
+			resp, err := ack.Send(protocol.Request{
+				Cmd:       protocol.CmdAck,
+				Name:      "alice",
+				MessageID: d.MessageID,
+			})
+			if err != nil {
+				return err
+			}
+			if !resp.OK {
+				return fmt.Errorf("concurrent ack failed: %s: %s", resp.Code, resp.Error)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("CatchUp() error = %v", err)
+	}
+	if strings.Join(got, ",") != "first,second" {
+		t.Fatalf("CatchUp() deliveries = %v, want first, second", got)
+	}
+
+	got = nil
+	if err := NewBrokerListenerFactory().CatchUp(Watch{
+		ProjectID: "proj-catchup-concurrent-ack",
+		AgentName: "alice",
+		Source:    "hook",
+	}, func(d Delivery) error {
+		got = append(got, d.Body)
+		return nil
+	}); err != nil {
+		t.Fatalf("second CatchUp() error = %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("second CatchUp() deliveries = %d, want 0 after ack", len(got))
+	}
+}
+
+func TestBrokerListenerCatchUpDoesNotReleaseReservedPushToken(t *testing.T) {
 	socketPath, cleanup := startRuntimeTestBroker(t, "proj-catchup-release")
 	defer cleanup()
 
@@ -380,7 +579,8 @@ func TestBrokerListenerCatchUpReleasesPushToken(t *testing.T) {
 		t.Fatalf("CatchUp() deliveries = %d, want 1", len(got))
 	}
 
-	waitForPushTokenRejected(t, socketPath, "alice-push", token)
+	active := connectRuntimeClient(t, socketPath)
+	assertPushTokenStillAccepted(t, socketPath, active, "alice-push", token, "CatchUp replay")
 }
 
 func TestReleasePushTokenForAgentSuppressesAlreadyRevokedTokenWarning(t *testing.T) {

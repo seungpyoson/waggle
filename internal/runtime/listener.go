@@ -48,56 +48,29 @@ func (f *BrokerListenerFactory) CatchUp(w Watch, handler DeliveryHandler) error 
 		return fmt.Errorf("cannot determine broker socket path")
 	}
 
-	pushToken, err := pushTokenForAgent(paths.Socket, w.AgentName)
-	if err != nil {
-		return err
-	}
-
 	c, err := client.Connect(paths.Socket, config.Defaults.ConnectTimeout)
 	if err != nil {
-		releasePushTokenForAgent(paths.Socket, w.AgentName, pushToken)
 		return err
 	}
-	connected := false
-	releaseOnReturn := true
-	defer func() {
-		// Clean disconnect prevents task requeue and lock release.
-		if connected {
-			sendDisconnect(c, fmt.Sprintf("catch-up %q/%q", w.ProjectID, w.AgentName))
-		}
-		c.Close()
-		if releaseOnReturn {
-			releasePushTokenForAgent(paths.Socket, w.AgentName, pushToken)
-		}
-	}()
+	defer c.Close()
 
-	// Set deadline for the entire catch-up operation (handshake + inbox + disconnect).
+	// Replay is no-session-required: CatchUp reads the named inbox without
+	// registering a competing <agent>-push session.
 	if err := c.SetDeadline(config.Defaults.ConnectTimeout); err != nil {
 		return fmt.Errorf("set deadline: %w", err)
 	}
 	resp, err := c.Send(protocol.Request{
-		Cmd:          protocol.CmdConnect,
-		Name:         w.AgentName + "-push",
-		PushListener: true,
-		PushToken:    pushToken,
+		Cmd:  protocol.CmdReplay,
+		Name: w.AgentName,
 	})
 	if err != nil {
 		return err
 	}
 	if !resp.OK {
-		// protocol.ErrAlreadyConnected is transient during restarts or duplicate workers;
-		// Manager.runWatch treats the returned Listen error as retryable and reconnects.
-		releaseOnReturn = false
-		return fmt.Errorf("%s: %s", resp.Code, resp.Error)
+		return fmt.Errorf("replay: %s: %s", resp.Code, resp.Error)
 	}
-	connected = true
-
-	resp, err = c.Send(protocol.Request{Cmd: protocol.CmdInbox})
-	if err != nil {
-		return err
-	}
-	if !resp.OK {
-		return fmt.Errorf("inbox: %s: %s", resp.Code, resp.Error)
+	if err := c.ClearDeadline(); err != nil {
+		return fmt.Errorf("clear replay deadline: %w", err)
 	}
 
 	var msgs []struct {
@@ -122,10 +95,29 @@ func (f *BrokerListenerFactory) CatchUp(w Watch, handler DeliveryHandler) error 
 			SentAt:     sentAt,
 			ReceivedAt: time.Now().UTC(),
 		}); err != nil {
+			// Leave the message unacked so the next catch-up attempt can replay it.
+			return err
+		}
+		if err := ackReplayedMessage(c, w.AgentName, msg.ID); err != nil {
 			return err
 		}
 	}
 
+	return nil
+}
+
+func ackReplayedMessage(c *client.Client, agentName string, messageID int64) error {
+	resp, err := c.Send(protocol.Request{
+		Cmd:       protocol.CmdAck,
+		Name:      agentName,
+		MessageID: messageID,
+	})
+	if err != nil {
+		return fmt.Errorf("ack replayed message %d: %w", messageID, err)
+	}
+	if !resp.OK {
+		return fmt.Errorf("ack replayed message %d: %s: %s", messageID, resp.Code, resp.Error)
+	}
 	return nil
 }
 

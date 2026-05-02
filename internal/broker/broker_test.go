@@ -950,6 +950,125 @@ func TestBroker_SendMessage(t *testing.T) {
 	}
 }
 
+func TestBroker_ReplayReadsNamedInboxWithoutSessionRegistration(t *testing.T) {
+	sockPath, _, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	sender := connectClient(t, sockPath)
+	defer sender.Close()
+	resp, err := sender.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	if err != nil {
+		t.Fatalf("sender connect request: %v", err)
+	}
+	if !resp.OK {
+		t.Fatalf("sender connect failed: %s", resp.Error)
+	}
+
+	recipient := connectClient(t, sockPath)
+	defer recipient.Close()
+	resp, err = recipient.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "bob"})
+	if err != nil {
+		t.Fatalf("recipient connect request: %v", err)
+	}
+	if !resp.OK {
+		t.Fatalf("recipient connect failed: %s", resp.Error)
+	}
+
+	resp, err = sender.Send(protocol.Request{
+		Cmd:     protocol.CmdSend,
+		Name:    "bob",
+		Message: "replay without session collision",
+	})
+	if err != nil {
+		t.Fatalf("send request: %v", err)
+	}
+	if !resp.OK {
+		t.Fatalf("send failed: %s", resp.Error)
+	}
+	if _, err := recipient.Receive(); err != nil {
+		t.Fatalf("receive push: %v", err)
+	}
+
+	replay := connectClient(t, sockPath)
+	defer replay.Close()
+	resp, err = replay.Send(protocol.Request{Cmd: protocol.CmdReplay, Name: "bob"})
+	if err != nil {
+		t.Fatalf("replay request: %v", err)
+	}
+	if !resp.OK {
+		t.Fatalf("replay failed: %s: %s", resp.Code, resp.Error)
+	}
+	var messages []map[string]interface{}
+	if err := json.Unmarshal(resp.Data, &messages); err != nil {
+		t.Fatalf("unmarshal replay: %v", err)
+	}
+	if len(messages) != 1 || messages[0]["body"] != "replay without session collision" {
+		t.Fatalf("replay messages = %+v", messages)
+	}
+
+	resp, err = recipient.Send(protocol.Request{Cmd: protocol.CmdPresence})
+	if err != nil {
+		t.Fatalf("recipient presence request: %v", err)
+	}
+	if !resp.OK {
+		t.Fatalf("recipient session was disrupted by replay: %s", resp.Error)
+	}
+}
+
+func TestBroker_AckCanTargetNamedInboxWithoutSessionRegistration(t *testing.T) {
+	sockPath, _, cleanup := startTestBroker(t)
+	defer cleanup()
+
+	sender := connectClient(t, sockPath)
+	defer sender.Close()
+	resp, err := sender.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "alice"})
+	if err != nil {
+		t.Fatalf("sender connect request: %v", err)
+	}
+	if !resp.OK {
+		t.Fatalf("sender connect failed: %s", resp.Error)
+	}
+
+	resp, err = sender.Send(protocol.Request{Cmd: protocol.CmdSend, Name: "bob", Message: "ack by name"})
+	if err != nil {
+		t.Fatalf("send request: %v", err)
+	}
+	if !resp.OK {
+		t.Fatalf("send failed: %s", resp.Error)
+	}
+	var msg struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.Unmarshal(resp.Data, &msg); err != nil {
+		t.Fatalf("unmarshal send: %v", err)
+	}
+
+	ack := connectClient(t, sockPath)
+	defer ack.Close()
+	resp, err = ack.Send(protocol.Request{Cmd: protocol.CmdAck, Name: "bob", MessageID: msg.ID})
+	if err != nil {
+		t.Fatalf("ack request: %v", err)
+	}
+	if !resp.OK {
+		t.Fatalf("ack failed: %s: %s", resp.Code, resp.Error)
+	}
+
+	resp, err = ack.Send(protocol.Request{Cmd: protocol.CmdReplay, Name: "bob"})
+	if err != nil {
+		t.Fatalf("replay request: %v", err)
+	}
+	if !resp.OK {
+		t.Fatalf("replay failed: %s: %s", resp.Code, resp.Error)
+	}
+	var messages []map[string]interface{}
+	if err := json.Unmarshal(resp.Data, &messages); err != nil {
+		t.Fatalf("unmarshal replay: %v", err)
+	}
+	if len(messages) != 0 {
+		t.Fatalf("replay after ack returned %d messages, want 0", len(messages))
+	}
+}
+
 // TestBroker_SendPushDelivery — client2 connected, receives push immediately on send
 func TestBroker_SendPushDelivery(t *testing.T) {
 	sockPath, _, cleanup := startTestBroker(t)
