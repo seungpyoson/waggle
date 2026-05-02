@@ -38,7 +38,17 @@ An orchestrator agent sends instructions. Worker agents receive them. Any agent 
 
 ### Pre-built binaries (recommended)
 
-Download from [GitHub Releases](https://github.com/seungpyoson/waggle/releases) — no Go required.
+Download from [GitHub Releases](https://github.com/seungpyoson/waggle/releases) — no Go required. Pick the binary for your OS and CPU:
+
+```bash
+# Choose one: waggle-darwin-arm64, waggle-darwin-amd64,
+# waggle-linux-amd64, or waggle-linux-arm64.
+WAGGLE_ASSET=waggle-darwin-arm64
+
+curl -L "https://github.com/seungpyoson/waggle/releases/latest/download/${WAGGLE_ASSET}" -o waggle
+chmod +x waggle
+./waggle --help
+```
 
 ### From source
 
