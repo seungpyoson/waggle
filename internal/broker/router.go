@@ -24,6 +24,7 @@ var noSessionRequired = map[string]bool{
 	protocol.CmdStatus:      true,
 	protocol.CmdStop:        true,
 	protocol.CmdPushReserve: true,
+	protocol.CmdPushRelease: true,
 }
 
 // route dispatches a request to the appropriate handler.
@@ -80,6 +81,8 @@ func route(s *Session, req protocol.Request) protocol.Response {
 		return handlePresence(s)
 	case protocol.CmdPushReserve:
 		return handlePushReserve(s, req)
+	case protocol.CmdPushRelease:
+		return handlePushRelease(s, req)
 	case protocol.CmdSpawnRegister:
 		return handleSpawnRegister(s, req)
 	case protocol.CmdSpawnUpdatePID:
@@ -112,6 +115,35 @@ func handlePushReserve(s *Session, req protocol.Request) protocol.Response {
 		return protocol.ErrResponse(protocol.ErrInternalError, err.Error())
 	}
 	return protocol.OKResponse(data)
+}
+
+func handlePushRelease(s *Session, req protocol.Request) protocol.Response {
+	if req.Name == "" {
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, "name required")
+	}
+	if len(req.Name) > config.Defaults.MaxFieldLength {
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, fmt.Sprintf("name too long (max %d chars)", config.Defaults.MaxFieldLength))
+	}
+	if strings.HasSuffix(req.Name, "-push") {
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, `push.release requires a base agent name, not a "-push" listener name`)
+	}
+	if req.PushToken == "" {
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, "push token required")
+	}
+
+	s.broker.mu.Lock()
+	expectedToken, exists := s.broker.pushTokens[req.Name]
+	if !exists || subtle.ConstantTimeCompare([]byte(req.PushToken), []byte(expectedToken)) != 1 {
+		s.broker.mu.Unlock()
+		return protocol.ErrResponse(protocol.ErrForbidden, "invalid push listener token")
+	}
+	delete(s.broker.pushTokens, req.Name)
+	if base, ok := s.broker.sessions[req.Name]; ok && !strings.HasSuffix(base.name, "-push") {
+		base.ownsPushToken = false
+	}
+	s.broker.mu.Unlock()
+
+	return protocol.OKResponse(nil)
 }
 
 type connectResponseData struct {
