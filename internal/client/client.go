@@ -157,4 +157,3 @@ func (c *Client) ClearDeadline() error {
 func (c *Client) Close() error {
 	return c.conn.Close()
 }
-

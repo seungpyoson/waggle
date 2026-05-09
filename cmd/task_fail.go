@@ -52,4 +52,3 @@ var taskFailCmd = &cobra.Command{
 		return nil
 	},
 }
-

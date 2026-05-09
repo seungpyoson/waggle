@@ -49,4 +49,3 @@ func StartTaskTTLChecker(store *Store, hub *events.Hub, period time.Duration, st
 		}
 	}
 }
-

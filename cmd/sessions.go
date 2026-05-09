@@ -51,4 +51,3 @@ var sessionsCmd = &cobra.Command{
 		return nil
 	},
 }
-

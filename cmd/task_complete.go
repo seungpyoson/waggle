@@ -54,4 +54,3 @@ var taskCompleteCmd = &cobra.Command{
 		return nil
 	},
 }
-

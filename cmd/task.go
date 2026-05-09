@@ -12,4 +12,3 @@ var taskCmd = &cobra.Command{
 	Use:   "task",
 	Short: "Task management commands",
 }
-

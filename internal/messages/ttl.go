@@ -23,4 +23,3 @@ func StartTTLChecker(store *Store, period time.Duration, stopCh <-chan struct{})
 		}
 	}
 }
-

@@ -16,12 +16,12 @@ func ValidateDeps(s *Store, dependsOn []int64, selfID int64) error {
 			return fmt.Errorf("dependency task %d not found", depID)
 		}
 	}
-	
+
 	// Skip cycle check for new tasks (selfID == 0)
 	if selfID == 0 {
 		return nil
 	}
-	
+
 	// Check for cycles using DFS
 	visited := make(map[int64]bool)
 	for _, depID := range dependsOn {
@@ -29,7 +29,7 @@ func ValidateDeps(s *Store, dependsOn []int64, selfID int64) error {
 			return fmt.Errorf("dependency cycle detected")
 		}
 	}
-	
+
 	return nil
 }
 
@@ -38,24 +38,24 @@ func hasCycle(s *Store, start, target int64, visited map[int64]bool) bool {
 	if start == target {
 		return true
 	}
-	
+
 	if visited[start] {
 		return false
 	}
 	visited[start] = true
-	
+
 	// Get the task and check its dependencies
 	task, err := s.Get(start)
 	if err != nil {
 		return false
 	}
-	
+
 	for _, depID := range task.DependsOn {
 		if hasCycle(s, depID, target, visited) {
 			return true
 		}
 	}
-	
+
 	return false
 }
 
@@ -188,4 +188,3 @@ func FailDependents(s *Store, failedID int64) ([]int64, error) {
 
 	return taskIDs, nil
 }
-

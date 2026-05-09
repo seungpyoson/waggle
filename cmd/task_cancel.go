@@ -43,4 +43,3 @@ var taskCancelCmd = &cobra.Command{
 		return nil
 	},
 }
-

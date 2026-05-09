@@ -43,4 +43,3 @@ var taskGetCmd = &cobra.Command{
 		return nil
 	},
 }
-

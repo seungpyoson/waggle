@@ -77,4 +77,3 @@ func (h *Hub) SubscriberCount() int {
 	}
 	return count
 }
-

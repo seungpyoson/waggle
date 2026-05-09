@@ -50,4 +50,3 @@ var taskHeartbeatCmd = &cobra.Command{
 		return nil
 	},
 }
-

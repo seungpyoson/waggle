@@ -207,4 +207,3 @@ func TestHub_ConcurrentPublishSubscribe(t *testing.T) {
 
 	wg.Wait()
 }
-

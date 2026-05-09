@@ -174,4 +174,3 @@ func TestManager_ConcurrentAccess(t *testing.T) {
 
 	wg.Wait()
 }
-

@@ -49,4 +49,3 @@ func TestDetect_EnvOverride(t *testing.T) {
 		})
 	}
 }
-

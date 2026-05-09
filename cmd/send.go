@@ -9,11 +9,11 @@ import (
 )
 
 var (
-	sendName      string
-	sendPriority  string
-	sendTTL       int
-	sendAwaitAck  bool
-	sendTimeout   int
+	sendName     string
+	sendPriority string
+	sendTTL      int
+	sendAwaitAck bool
+	sendTimeout  int
 )
 
 func init() {
@@ -84,4 +84,3 @@ func resolveAgentName(cmd *cobra.Command) (string, error) {
 	}
 	return name, nil
 }
-

@@ -116,4 +116,3 @@ var publishCmd = &cobra.Command{
 		return nil
 	},
 }
-

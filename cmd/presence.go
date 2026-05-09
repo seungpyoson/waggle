@@ -51,4 +51,3 @@ var presenceCmd = &cobra.Command{
 		return nil
 	},
 }
-
