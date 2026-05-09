@@ -15,7 +15,7 @@ commands:
   # exclude .worktrees/ — this repo keeps git worktrees of other branches
   # there and their files have their own (correct) formatting state for
   # those branches; not relevant to formatting this branch.
-  format: 'test -z "$(gofmt -l . | grep -v ^\.worktrees/)"'
+  format: 'files=$(gofmt -l . 2>&1); rc=$?; if [ "$rc" -ne 0 ]; then printf "%s\n" "$files" >&2; exit "$rc"; fi; files=$(printf "%s\n" "$files" | grep -v "^\.worktrees/" || true); test -z "$files"'
 
 # Paths excluded from agent-driven review/document steps.
 # .worktrees/ contains nested git worktree checkouts (not part of this branch's
