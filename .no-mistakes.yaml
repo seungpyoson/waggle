@@ -1,0 +1,13 @@
+# no-mistakes per-repo configuration
+# https://kunchenguid.github.io/no-mistakes/reference/repo-config/
+#
+# `agent:` omitted — inherits each developer's global ~/.no-mistakes/config.yaml.
+
+commands:
+  # Existing Makefile target → go test ./... -v
+  test: "make test"
+  # go vet ships with the Go toolchain — fast static analysis.
+  lint: "go vet ./..."
+  # gofmt -l prints files that need formatting; empty output = all formatted.
+  # `test -z` returns 0 (pass) if empty, non-zero (fail) if any file listed.
+  format: 'test -z "$(gofmt -l .)"'
