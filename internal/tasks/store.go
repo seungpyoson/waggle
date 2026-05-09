@@ -26,27 +26,27 @@ const (
 
 // Task represents a task in the store
 type Task struct {
-	ID              int64
-	IdempotencyKey  string
-	Type            string
-	Tags            []string
-	Payload         string
-	Priority        int
-	State           string
-	Blocked         bool
-	DependsOn       []int64
-	ClaimToken      string
-	ClaimedBy       string
-	ClaimedAt       string
-	LeaseExpiresAt  string
-	LeaseDuration   int
-	MaxRetries      int
-	RetryCount      int
-	TTL             int    `json:"ttl,omitempty"` // seconds, 0 = no expiry
-	Result          string
-	FailureReason   string
-	CreatedAt       string
-	UpdatedAt       string
+	ID             int64
+	IdempotencyKey string
+	Type           string
+	Tags           []string
+	Payload        string
+	Priority       int
+	State          string
+	Blocked        bool
+	DependsOn      []int64
+	ClaimToken     string
+	ClaimedBy      string
+	ClaimedAt      string
+	LeaseExpiresAt string
+	LeaseDuration  int
+	MaxRetries     int
+	RetryCount     int
+	TTL            int `json:"ttl,omitempty"` // seconds, 0 = no expiry
+	Result         string
+	FailureReason  string
+	CreatedAt      string
+	UpdatedAt      string
 }
 
 // CreateParams holds parameters for creating a task
@@ -876,4 +876,3 @@ func (s *Store) RequeueExpiredLeases() (int, error) {
 
 	return totalCount, nil
 }
-

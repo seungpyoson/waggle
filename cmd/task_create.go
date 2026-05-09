@@ -10,14 +10,14 @@ import (
 )
 
 var (
-	taskType          string
-	taskTags          string
-	taskDependsOn     string
-	taskLease         int
-	taskMaxRetries    int
-	taskPriority      int
+	taskType           string
+	taskTags           string
+	taskDependsOn      string
+	taskLease          int
+	taskMaxRetries     int
+	taskPriority       int
 	taskIdempotencyKey string
-	taskCreateTTL     string
+	taskCreateTTL      string
 )
 
 func init() {
@@ -90,4 +90,3 @@ var taskCreateCmd = &cobra.Command{
 		return nil
 	},
 }
-

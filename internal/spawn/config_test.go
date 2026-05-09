@@ -148,4 +148,3 @@ func TestGetAgent_Unknown(t *testing.T) {
 		t.Error("GetAgent(\"unknown\") should return error")
 	}
 }
-

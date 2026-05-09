@@ -25,4 +25,3 @@ func StartLeaseChecker(store *Store, interval time.Duration, stop <-chan struct{
 		}
 	}
 }
-

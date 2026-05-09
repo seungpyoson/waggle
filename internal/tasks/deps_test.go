@@ -5,13 +5,13 @@ import "testing"
 // TestDeps_AddDependency verifies that tasks with dependencies start blocked
 func TestDeps_AddDependency(t *testing.T) {
 	s := newTestStore(t)
-	
+
 	// Create a dependency task
 	dep, err := s.Create(CreateParams{Payload: `{"dep":true}`})
 	if err != nil {
 		t.Fatal(err)
 	}
-	
+
 	// Create a task that depends on it
 	child, err := s.Create(CreateParams{
 		Payload:   `{"child":true}`,
@@ -20,7 +20,7 @@ func TestDeps_AddDependency(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	
+
 	// Verify child is blocked
 	if !child.Blocked {
 		t.Error("child should be blocked when it has dependencies")
@@ -36,12 +36,12 @@ func TestDeps_AddDependency(t *testing.T) {
 // TestDeps_DirectCycle verifies that direct cycles are detected
 func TestDeps_DirectCycle(t *testing.T) {
 	s := newTestStore(t)
-	
+
 	a, err := s.Create(CreateParams{Payload: `{}`})
 	if err != nil {
 		t.Fatal(err)
 	}
-	
+
 	// B depends on A — fine
 	b, err := s.Create(CreateParams{
 		Payload:   `{}`,
@@ -50,7 +50,7 @@ func TestDeps_DirectCycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	
+
 	// Try to make A depend on B — should fail (cycle: A -> B -> A)
 	err = ValidateDeps(s, []int64{b.ID}, a.ID)
 	if err == nil {
@@ -61,12 +61,12 @@ func TestDeps_DirectCycle(t *testing.T) {
 // TestDeps_IndirectCycle verifies that indirect cycles are detected
 func TestDeps_IndirectCycle(t *testing.T) {
 	s := newTestStore(t)
-	
+
 	a, err := s.Create(CreateParams{Payload: `{}`})
 	if err != nil {
 		t.Fatal(err)
 	}
-	
+
 	b, err := s.Create(CreateParams{
 		Payload:   `{}`,
 		DependsOn: []int64{a.ID},
@@ -74,7 +74,7 @@ func TestDeps_IndirectCycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	
+
 	c, err := s.Create(CreateParams{
 		Payload:   `{}`,
 		DependsOn: []int64{b.ID},
@@ -82,7 +82,7 @@ func TestDeps_IndirectCycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	
+
 	// Try to make A depend on C — should fail (cycle: A -> B -> C -> A)
 	err = ValidateDeps(s, []int64{c.ID}, a.ID)
 	if err == nil {
@@ -93,12 +93,12 @@ func TestDeps_IndirectCycle(t *testing.T) {
 // TestDeps_BlockedTaskNotClaimed verifies that blocked tasks cannot be claimed
 func TestDeps_BlockedTaskNotClaimed(t *testing.T) {
 	s := newTestStore(t)
-	
+
 	dep, err := s.Create(CreateParams{Payload: `{}`})
 	if err != nil {
 		t.Fatal(err)
 	}
-	
+
 	child, err := s.Create(CreateParams{
 		Payload:   `{}`,
 		DependsOn: []int64{dep.ID},
@@ -106,18 +106,18 @@ func TestDeps_BlockedTaskNotClaimed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	
+
 	// Verify child is blocked
 	if !child.Blocked {
 		t.Fatal("child should be blocked")
 	}
-	
+
 	// Try to claim — should get the dep, not the child
 	claimed, err := s.Claim("worker", ClaimFilter{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	
+
 	if claimed.ID == child.ID {
 		t.Error("blocked task should not be claimable")
 	}
@@ -129,12 +129,12 @@ func TestDeps_BlockedTaskNotClaimed(t *testing.T) {
 // TestDeps_UnblockOnComplete verifies that completing a dependency unblocks waiting tasks
 func TestDeps_UnblockOnComplete(t *testing.T) {
 	s := newTestStore(t)
-	
+
 	dep, err := s.Create(CreateParams{Payload: `{"dep":true}`})
 	if err != nil {
 		t.Fatal(err)
 	}
-	
+
 	child, err := s.Create(CreateParams{
 		Payload:   `{"child":true}`,
 		DependsOn: []int64{dep.ID},
@@ -142,7 +142,7 @@ func TestDeps_UnblockOnComplete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	
+
 	// Verify child is blocked
 	got, err := s.Get(child.ID)
 	if err != nil {
@@ -151,7 +151,7 @@ func TestDeps_UnblockOnComplete(t *testing.T) {
 	if !got.Blocked {
 		t.Fatal("child should be blocked")
 	}
-	
+
 	// Claim and complete the dependency
 	claimed, err := s.Claim("worker", ClaimFilter{})
 	if err != nil {
@@ -279,4 +279,3 @@ func TestDeps_UnblockOnCancel(t *testing.T) {
 		t.Errorf("failure_reason = %q, want %q", got.FailureReason, "dependency_failed")
 	}
 }
-

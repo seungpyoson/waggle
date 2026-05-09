@@ -153,4 +153,3 @@ func findSpawnedPID(name string, timeout time.Duration) (int, error) {
 
 	return 0, fmt.Errorf("could not find spawned process for %s within %v", name, timeout)
 }
-

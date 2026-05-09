@@ -38,4 +38,3 @@ var stopCmd = &cobra.Command{
 		return nil
 	},
 }
-

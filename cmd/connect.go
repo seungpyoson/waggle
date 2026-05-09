@@ -29,4 +29,3 @@ var connectCmd = &cobra.Command{
 		return nil
 	},
 }
-

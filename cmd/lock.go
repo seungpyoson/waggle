@@ -111,4 +111,3 @@ var locksCmd = &cobra.Command{
 		return nil
 	},
 }
-

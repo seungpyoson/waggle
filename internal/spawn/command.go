@@ -61,7 +61,7 @@ func BuildPgrepPattern(name string) string {
 }
 
 // shellQuote wraps a value in single quotes with proper escaping.
-// Single-quote escape: replace ' with '\'' (end quote, escaped quote, start quote)
+// Single-quote escape: replace ' with '\” (end quote, escaped quote, start quote)
 func shellQuote(s string) string {
 	// Replace each single quote with '\''
 	escaped := strings.ReplaceAll(s, "'", `'\''`)
@@ -90,4 +90,3 @@ func validateEnvKey(key string) error {
 	}
 	return nil
 }
-

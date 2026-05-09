@@ -62,4 +62,3 @@ var ackCmd = &cobra.Command{
 		return nil
 	},
 }
-

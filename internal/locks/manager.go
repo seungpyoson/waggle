@@ -67,4 +67,3 @@ func (m *Manager) Count() int {
 	defer m.mu.RUnlock()
 	return len(m.locks)
 }
-

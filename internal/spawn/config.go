@@ -10,8 +10,8 @@ import (
 )
 
 type AgentConfig struct {
-	Default string                `json:"default"`
-	Agents  map[string]AgentDef  `json:"agents"`
+	Default string              `json:"default"`
+	Agents  map[string]AgentDef `json:"agents"`
 }
 
 type AgentDef struct {
@@ -91,4 +91,3 @@ func (c *AgentConfig) GetAgent(agentType string) (*AgentDef, error) {
 
 	return &agent, nil
 }
-

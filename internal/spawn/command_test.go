@@ -158,8 +158,6 @@ func TestBuildAppleScript_Backslash(t *testing.T) {
 	}
 }
 
-
-
 // TestBuildAppleScript_Both tests both quotes and backslashes in same string
 func TestBuildAppleScript_Both(t *testing.T) {
 	got := BuildAppleScript(TerminalApp, `echo "path\to"`)

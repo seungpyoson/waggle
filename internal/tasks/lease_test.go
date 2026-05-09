@@ -176,4 +176,3 @@ func TestLeaseChecker_Goroutine(t *testing.T) {
 		t.Errorf("state = %q, want %q", task.State, StatePending)
 	}
 }
-

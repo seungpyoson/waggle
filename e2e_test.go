@@ -208,7 +208,6 @@ func TestE2E_TaskRoundTrip(t *testing.T) {
 	}
 }
 
-
 // TestE2E_DirectMessaging — full flow: alice and bob exchange messages
 func TestE2E_DirectMessaging(t *testing.T) {
 	if testing.Short() {
@@ -566,4 +565,3 @@ func TestE2E_AckLifecycle(t *testing.T) {
 		t.Error("presence should include alice and bob")
 	}
 }
-

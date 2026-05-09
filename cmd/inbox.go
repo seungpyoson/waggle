@@ -51,4 +51,3 @@ var inboxCmd = &cobra.Command{
 		return nil
 	},
 }
-

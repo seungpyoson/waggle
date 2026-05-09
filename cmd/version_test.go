@@ -117,4 +117,3 @@ func TestVersionCommand_BrokerIndependent(t *testing.T) {
 	}
 	t.Error("version command not found in root commands")
 }
-
