@@ -5,9 +5,20 @@
 
 commands:
   # Existing Makefile target → go test ./... -v
+  # `./...` only matches the current module so nested worktrees are skipped.
   test: "make test"
   # go vet ships with the Go toolchain — fast static analysis.
+  # `./...` scopes to current module, so .worktrees/ is excluded.
   lint: "go vet ./..."
   # gofmt -l prints files that need formatting; empty output = all formatted.
-  # `test -z` returns 0 (pass) if empty, non-zero (fail) if any file listed.
-  format: 'test -z "$(gofmt -l .)"'
+  # gofmt walks the filesystem (no module awareness), so we explicitly
+  # exclude .worktrees/ — this repo keeps git worktrees of other branches
+  # there and their files have their own (correct) formatting state for
+  # those branches; not relevant to formatting this branch.
+  format: 'test -z "$(gofmt -l . | grep -v ^\.worktrees/)"'
+
+# Paths excluded from agent-driven review/document steps.
+# .worktrees/ contains nested git worktree checkouts (not part of this branch's
+# tree). Reviewing/documenting them would burn quota on irrelevant code.
+ignore_patterns:
+  - ".worktrees/**"
