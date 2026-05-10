@@ -22,9 +22,10 @@ import (
 // code explicitly exposed D5: parse errors confined to .worktrees/ also
 // failed the gate, because parse errors go to stderr with rc=2 regardless
 // of which file produced them, and post-hoc stdout filtering on gofmt -l's
-// file list cannot reach them. The current command filters at the file-
-// enumeration level (find -not -path) so .worktrees/ is pruned before gofmt
-// runs.
+// file list cannot reach them. The current command excludes .worktrees/ at
+// the file-enumeration level (find -prune) so find never descends into the
+// directory and gofmt is never invoked on its contents — neither parse
+// errors nor unformatted files inside .worktrees/ can reach the gate.
 //
 // This test reads the live `format:` command from .no-mistakes.yaml so it
 // guards the *current* gate, not a frozen historical snapshot. The four
