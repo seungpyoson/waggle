@@ -16,13 +16,17 @@ commands:
   # there and their files have their own (correct) formatting state for
   # those branches; not relevant to formatting this branch.
   #
-  # Filter at the file-enumeration level (find -not -path) rather than
+  # Filter at the file-enumeration level (find -prune) rather than
   # post-hoc on gofmt's stdout. Post-hoc filtering misses parse errors,
   # which gofmt emits to stderr with a non-zero exit code regardless of
   # which file caused them — including files under .worktrees/. Pruning
   # before gofmt runs ensures parse errors confined to .worktrees/ do not
   # fail this branch's gate.
-  format: 'out=$(find . -name "*.go" -not -path "./.worktrees/*" -exec gofmt -l {} + 2>&1); rc=$?; if [ "$rc" -ne 0 ] || [ -n "$out" ]; then printf "%s\n" "$out" >&2; exit 1; fi'
+  #
+  # -prune (not -not -path) so find never descends into .worktrees/ at all.
+  # -type f so a directory accidentally named *.go is not passed to gofmt
+  # (gofmt recurses into directory arguments, causing duplicate work).
+  format: 'out=$(find . -path "./.worktrees" -prune -o -type f -name "*.go" -exec gofmt -l {} + 2>&1); rc=$?; if [ "$rc" -ne 0 ] || [ -n "$out" ]; then printf "%s\n" "$out" >&2; exit 1; fi'
 
 # Paths excluded from agent-driven review/document steps.
 # .worktrees/ contains nested git worktree checkouts (not part of this branch's
