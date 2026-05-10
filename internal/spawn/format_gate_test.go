@@ -1,6 +1,7 @@
 package spawn
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -132,6 +133,14 @@ func readFormatCommand(t *testing.T) string {
 // extractFormatCommand pulls the value of `format:` out of .no-mistakes.yaml
 // without pulling in a YAML dependency. The YAML uses single-quoted strings
 // for `format:` because the command itself contains double quotes.
+//
+// Constraint: the regex below only matches single-line YAML scalars (the
+// `[^']*` / `[^"]*` classes do not span newlines). If `format:` is ever
+// converted to a YAML block scalar (`|` or `>`), this function will fail
+// with the "unsupported YAML style" message below — it will NOT silently
+// pass an empty or partial command. The single-line form is sufficient
+// for the foreseeable use of .no-mistakes.yaml, so the dependency-free
+// regex is preferred over importing a YAML parser.
 func extractFormatCommand(t *testing.T, path string) string {
 	t.Helper()
 
@@ -147,7 +156,10 @@ func extractFormatCommand(t *testing.T, path string) string {
 	re := regexp.MustCompile(`(?m)^\s*format:\s*'([^']*)'\s*$|^\s*format:\s*"([^"]*)"\s*$`)
 	m := re.FindStringSubmatch(string(data))
 	if m == nil {
-		t.Fatalf("could not find `format:` command in %s", path)
+		t.Fatalf("could not find single-line quoted `format:` command in %s — "+
+			"this test does not support YAML block scalars (| or >); convert "+
+			"the value back to a single-line single- or double-quoted string, "+
+			"or extend this regex to handle the new style.", path)
 	}
 	for _, g := range m[1:] {
 		if g != "" {
@@ -166,24 +178,18 @@ func runShell(t *testing.T, dir, command string) int {
 	c.Dir = dir
 	output, err := c.CombinedOutput()
 	if err != nil {
+		// errors.As walks the wrapping chain, so this stays correct even
+		// if a future stdlib change wraps the *exec.ExitError. A direct
+		// type assertion would silently fall through to the t.Fatalf below
+		// in that case, hiding the real exit code.
 		var ee *exec.ExitError
-		if asExitError(err, &ee) {
+		if errors.As(err, &ee) {
 			t.Logf("shell stderr/stdout: %s", strings.TrimSpace(string(output)))
 			return ee.ExitCode()
 		}
 		t.Fatalf("shell run error: %v (output: %s)", err, output)
 	}
 	return 0
-}
-
-// asExitError unwraps to *exec.ExitError without pulling in errors.As's
-// generic machinery (keeps the test minimal).
-func asExitError(err error, out **exec.ExitError) bool {
-	if ee, ok := err.(*exec.ExitError); ok {
-		*out = ee
-		return true
-	}
-	return false
 }
 
 // writeFiles writes a map of relative-path → contents under root.
