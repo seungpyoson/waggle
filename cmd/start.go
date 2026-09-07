@@ -13,7 +13,6 @@ import (
 	"github.com/seungpyoson/waggle/internal/broker"
 	"github.com/seungpyoson/waggle/internal/brokerstate"
 	"github.com/seungpyoson/waggle/internal/config"
-	"github.com/seungpyoson/waggle/internal/native"
 	"github.com/seungpyoson/waggle/internal/protocol"
 	"github.com/spf13/cobra"
 )
@@ -34,7 +33,7 @@ func init() {
 var startCmd = &cobra.Command{
 	Use:   "start",
 	Short: "Start the independently owned project broker",
-	RunE: func(cmd *cobra.Command, args []string) (result error) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		var startup *os.File
 		if startupFD != 0 {
 			if !foreground || startupFD != config.StartupPipeFD {
@@ -54,8 +53,8 @@ var startCmd = &cobra.Command{
 			}
 			return nil
 		}
-		connector, err := native.New(config.ProviderConfig{CodexEndpoint: codexAppServer, ClientVersion: Version, Transport: config.NewNativeConfig()})
-		if err != nil {
+		provider := config.ProviderConfig{CodexEndpoint: codexAppServer, ClientVersion: Version, Transport: config.NewNativeConfig()}
+		if err := provider.Validate(); err != nil {
 			return errors.Join(err, report(err))
 		}
 		projectID, err := config.ResolveProjectID(cmd.Context())
@@ -90,29 +89,28 @@ var startCmd = &cobra.Command{
 		if err != nil {
 			return errors.Join(err, report(err))
 		}
-		defer func() { result = errors.Join(result, owner.Shutdown(context.Background())) }()
+		// Startup failures before service release ownership under the same bounded wait.
+		fail := func(err error) error {
+			owner.BeginShutdown(err)
+			waitCtx, cancel := context.WithTimeout(context.Background(), config.Defaults.ShutdownTimeout)
+			defer cancel()
+			return errors.Join(err, owner.Wait(waitCtx), report(err))
+		}
 		if initialize {
 			if err := broker.Initialize(cmd.Context(), owner); err != nil {
-				return errors.Join(err, report(err))
+				return fail(err)
 			}
 		}
-		b, err := broker.New(cmd.Context(), owner, config.NewBrokerConfig(config.BrokerEndpoints{Socket: paths.Socket, PID: paths.PID}), connector)
+		b, err := broker.New(cmd.Context(), owner, config.NewBrokerConfig(config.BrokerEndpoints{Socket: paths.Socket, PID: paths.PID}), provider)
 		if err != nil {
-			return errors.Join(err, report(err))
+			return fail(err)
 		}
 		if err := report(nil); err != nil {
-			return err
+			return fail(err)
 		}
-		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
-		defer cancel()
-		stopped := make(chan error, 1)
-		go func() {
-			<-ctx.Done()
-			stopped <- b.Shutdown()
-		}()
-
-		serveErr := b.Serve()
-		cancel()
-		return errors.Join(serveErr, <-stopped)
+		signals := make(chan os.Signal, 2)
+		signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+		defer signal.Stop(signals)
+		return supervise(cmd.Context(), signals, b.Serve, owner, config.Defaults.ShutdownTimeout, cmd.ErrOrStderr())
 	},
 }
