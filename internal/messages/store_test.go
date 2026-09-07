@@ -460,7 +460,7 @@ func (f *fixture) expirable() (out bool) {
 
 func TestExpirableHintTracksExpire(t *testing.T) {
 	f := newFixture(t)
-	e := f.must(Enroll{Provider: "codex", Conversation: "pending", Endpoint: "/registered/daemon.sock", Label: "pending"})
+	f.must(Enroll{Provider: "codex", Conversation: "pending", Endpoint: "/registered/daemon.sock", Label: "pending"})
 	if f.expirable() {
 		t.Fatal("live readiness deadline hinted expiry")
 	}
@@ -473,7 +473,7 @@ func TestExpirableHintTracksExpire(t *testing.T) {
 		t.Fatal("expiry left an expirable enrollment behind")
 	}
 	if got := f.must(Enroll{Provider: "codex", Conversation: "reenrolled", Endpoint: "/registered/daemon.sock", Label: "reenrolled"}); got.Enrollment.State != "pending" {
-		t.Fatalf("expiry did not free the failed enrollment: %s", e.Enrollment.State)
+		t.Fatalf("expiry did not free the failed enrollment: %s", got.Enrollment.State)
 	}
 	a := f.enrolled("a")
 	b := f.enrolled("b")

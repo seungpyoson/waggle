@@ -91,3 +91,46 @@ func TestReadSnapshotIsFencedReadOnlyAndExpires(t *testing.T) {
 		t.Fatalf("Stats() = %+v, want %+v", o.Stats(), got)
 	}
 }
+
+// failAfterApplying turns a statement into one SQLite applies and then reports
+// as failed: the first statement takes effect, the second cannot be prepared.
+// It is the deterministic stand-in for the driver behaviour these regressions
+// guard against, where a context that finishes after the step converts an
+// applied statement into a returned error.
+const failAfterApplying = "; SELECT * FROM statement_that_cannot_prepare"
+
+// TestFailedRestrictionLeavesTheConnectionWritable holds the canonical
+// connection's hygiene when the read restriction applies but is reported as
+// failed. The store owns exactly one connection, so a restriction left on it
+// would fail every later write, ownership release included.
+func TestFailedRestrictionLeavesTheConnectionWritable(t *testing.T) {
+	o, _ := newOwner(t)
+	if err := write(o, func(tx *WriteTx) error { _, err := tx.Exec("CREATE TABLE undo_probe (value TEXT)"); return err }); err != nil {
+		t.Fatal(err)
+	}
+	mode := readAccess
+	mode.restrict += failAfterApplying
+	called := false
+	if err := reserved(t.Context(), o.state.db, mode, func(*sql.Conn) error { called = true; return nil }); err == nil || called {
+		t.Fatalf("restricted admission = %v, callback ran = %v", err, called)
+	}
+	if err := write(o, func(tx *WriteTx) error { _, err := tx.Exec("INSERT INTO undo_probe VALUES ('after')"); return err }); err != nil {
+		t.Fatalf("a failed read restriction left the canonical connection read-only: %v", err)
+	}
+}
+
+// TestFailedBeginLeavesNoOpenTransaction holds the same hygiene for a BEGIN
+// that applies but is reported as failed: an open transaction returned to the
+// pool would hold the write lock, or pin a read snapshot, for nobody.
+func TestFailedBeginLeavesNoOpenTransaction(t *testing.T) {
+	o, _ := newOwner(t)
+	mode := writeAccess
+	mode.begin += failAfterApplying
+	called := false
+	if err := reserved(t.Context(), o.state.db, mode, func(*sql.Conn) error { called = true; return nil }); err == nil || called {
+		t.Fatalf("failed begin = %v, callback ran = %v", err, called)
+	}
+	if err := write(o, func(tx *WriteTx) error { _, err := tx.Exec("CREATE TABLE begin_probe (value TEXT)"); return err }); err != nil {
+		t.Fatalf("a failed begin left an open transaction on the canonical connection: %v", err)
+	}
+}

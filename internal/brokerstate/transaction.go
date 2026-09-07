@@ -108,55 +108,82 @@ func (s *ownerState) fence(ctx context.Context, conn *sql.Conn) error {
 	return nil
 }
 
-// access is how one reserved connection is opened. A deferred BEGIN on WAL is a
-// read snapshot that takes no write lock; queryOnly makes SQLite itself, not
-// convention, refuse every change attempted through it.
+// access is the statements that open and release one reserved connection. A
+// deferred BEGIN on WAL is a read snapshot that takes no write lock; restrict
+// makes SQLite itself, not convention, refuse every change attempted through
+// it, and release lifts that restriction before the connection is pooled again.
 type access struct {
-	begin     string
-	queryOnly bool
+	begin    string
+	restrict string
+	release  string
 }
 
 var (
 	writeAccess = access{begin: "BEGIN IMMEDIATE"}
-	readAccess  = access{begin: "BEGIN", queryOnly: true}
+	readAccess  = access{begin: "BEGIN", restrict: "PRAGMA query_only=1", release: "PRAGMA query_only=0"}
 )
 
 // reserved reserves one connection for BEGIN, all statements, and COMMIT.
-// A failed rollback or a failed restoration of write capability discards that
-// connection instead of returning a possibly open or restricted transaction to
-// the pool. It never retries the caller's operation.
+//
+// Every undo is registered before the statement it undoes, and runs whether or
+// not that statement reported success: a driver returns an error for a
+// statement it has already applied whenever the context finishes after the step
+// but before the call returns. The canonical store owns exactly one connection,
+// so an open transaction or a surviving read restriction on it would fail every
+// later transaction, ownership release included. An undo that itself fails
+// discards the connection instead of pooling one whose state is unknown, and
+// nothing is retried on the caller's behalf.
 func reserved(ctx context.Context, db *sql.DB, mode access, change func(*sql.Conn) error) (err error) {
 	conn, err := db.Conn(ctx)
 	if err != nil {
 		return fmt.Errorf("reserve canonical connection: %w", err)
 	}
-	defer func() { err = errors.Join(err, conn.Close()) }()
-	if mode.queryOnly {
-		if _, err = conn.ExecContext(ctx, "PRAGMA query_only=1"); err != nil {
-			return fmt.Errorf("restrict canonical connection to reads: %w", err)
+	// discarded is set by whichever undo removed the connection from the pool.
+	// The undos after it must not run on a closed connection: they would report
+	// only their own ErrConnDone and bury the failure that actually happened.
+	discarded := false
+	defer func() {
+		if discarded {
+			return
 		}
+		err = errors.Join(err, conn.Close())
+	}()
+	if mode.restrict != "" {
 		defer func() {
 			// The restriction belongs to this snapshot, not to the pooled
-			// connection, and cancellation must not prevent its removal.
-			if _, resetErr := conn.ExecContext(context.WithoutCancel(ctx), "PRAGMA query_only=0"); resetErr != nil {
+			// connection. Lifting one that was never applied is a no-op, and
+			// cancellation must not prevent the removal of one that was.
+			if discarded {
+				return
+			}
+			if _, resetErr := conn.ExecContext(context.WithoutCancel(ctx), mode.release); resetErr != nil {
+				// database/sql discards a connection on driver.ErrBadConn.
 				err = errors.Join(err, fmt.Errorf("restore canonical connection writes: %w", resetErr), discard(conn))
+				discarded = true
 			}
 		}()
-	}
-	if _, err = conn.ExecContext(ctx, mode.begin); err != nil {
-		return fmt.Errorf("begin canonical transaction: %w", err)
+		if _, err = conn.ExecContext(ctx, mode.restrict); err != nil {
+			return fmt.Errorf("restrict canonical connection to reads: %w", err)
+		}
 	}
 	committed := false
 	defer func() {
-		if !committed {
-			// Cancellation must not prevent rollback of an admitted transaction.
-			if _, rollbackErr := conn.ExecContext(context.WithoutCancel(ctx), "ROLLBACK"); rollbackErr != nil {
-				err = errors.Join(err, fmt.Errorf("rollback canonical transaction: %w", rollbackErr))
-				// database/sql discards a connection on driver.ErrBadConn.
-				err = errors.Join(err, discard(conn))
-			}
+		// Rolling back is what makes an applied-but-failed BEGIN safe, so it
+		// cannot be conditional on BEGIN having reported success. When no
+		// transaction was opened the rollback fails, and discarding the
+		// connection is the correct outcome: it leaves nothing ambiguous in
+		// the pool.
+		if committed || discarded {
+			return
+		}
+		if _, rollbackErr := conn.ExecContext(context.WithoutCancel(ctx), "ROLLBACK"); rollbackErr != nil {
+			err = errors.Join(err, fmt.Errorf("rollback canonical transaction: %w", rollbackErr), discard(conn))
+			discarded = true
 		}
 	}()
+	if _, err = conn.ExecContext(ctx, mode.begin); err != nil {
+		return fmt.Errorf("begin canonical transaction: %w", err)
+	}
 	if err = change(conn); err != nil {
 		return err
 	}
