@@ -196,8 +196,31 @@ func TestE2E_SigtermShutdownReleasesOwnership(t *testing.T) {
 
 	// The successor opens the released store; only a real release lets it serve.
 	second := env.launch(t, "second.log")
-	secondExit := second.terminate(t)
-	t.Logf("orderly shutdown took %s then %s", firstExit, secondExit)
+	ctx, cancel := context.WithTimeout(t.Context(), config.Defaults.ShutdownTimeout+config.Defaults.StartupTimeout)
+	defer cancel()
+	stop := exec.CommandContext(ctx, env.binary, "stop")
+	stop.Dir, stop.Env = env.project, second.cmd.Env
+	out, err := stop.CombinedOutput()
+	if err != nil || !strings.Contains(string(out), `"message": "broker stopped"`) {
+		t.Fatalf("stop: %v\n%s", err, out)
+	}
+	// Success is checked at command return, before waiting for process exit.
+	for _, path := range []string{env.socket, config.NewPaths(e2eProjectID).PID} {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Fatalf("stop claimed success before endpoint removal: %s %v", path, err)
+		}
+	}
+	select {
+	case <-second.exited:
+	case <-ctx.Done():
+		t.Fatal("stopped broker did not exit")
+	}
+	if second.err != nil {
+		t.Fatalf("stopped broker exited with %v", second.err)
+	}
+	third := env.launch(t, "third.log")
+	thirdExit := third.terminate(t)
+	t.Logf("SIGTERM shutdown took %s and %s; stop returned after endpoint removal", firstExit, thirdExit)
 }
 
 // e2eEnv is a built entrypoint plus an isolated HOME whose canonical socket
