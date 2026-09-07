@@ -67,9 +67,9 @@ type ownerState struct {
 	failed         chan struct{}
 	failOnce       sync.Once
 	endpoint       *ownedEndpoint
+	binding        bool   // reserves the sole endpoint constructor, never filesystem ownership
 	beforePublish  func() // test seam: pauses Bind at its publication point
 	serviceStarted bool
-	predecessor    *ProcessIdentity
 	inspector      ProcessInspector
 }
 
@@ -325,6 +325,9 @@ func (s *ownerState) finalize() {
 		// can touch a successor's files, not merely when releasing the row.
 		if err := s.removeEndpoints(); err != nil {
 			return fmt.Errorf("cleanup broker: %w", err)
+		}
+		if err := s.deleteBinding(tx); err != nil {
+			return err
 		}
 		res, err := tx.Exec(`UPDATE broker_owner SET released_at = ? WHERE singleton = 1
 			AND instance_id = ? AND generation = ? AND released_at IS NULL`,

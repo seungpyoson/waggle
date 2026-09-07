@@ -2,6 +2,7 @@ package brokerstate
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"net"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/seungpyoson/waggle/internal/config"
 )
@@ -35,19 +37,43 @@ func (o *Owner) Bind(ctx context.Context, paths config.BrokerEndpoints) error {
 	return o.Do(ctx, func(op *Operation) error {
 		s := o.state
 		s.mu.Lock()
-		bound := s.endpoint != nil
-		s.mu.Unlock()
-		if bound {
+		if s.endpoint != nil || s.binding {
+			s.mu.Unlock()
 			return fmt.Errorf("broker endpoints already bound")
 		}
-		if err := op.Write(ctx, func(tx *WriteTx) error { return tx.RequireActive() }); err != nil {
+		s.binding = true
+		s.mu.Unlock()
+		defer func() { s.mu.Lock(); s.binding = false; s.mu.Unlock() }()
+		if err := op.Write(ctx, func(tx *WriteTx) error {
+			if err := tx.RequireActive(); err != nil {
+				return err
+			}
+			if err := s.reclaimEndpoints(ctx, tx, paths); err != nil {
+				return err
+			}
+			// Record provenance durably before any new endpoint file exists.
+			// Identity comes from the fenced canonical owner, not the PID file.
+			_, err := tx.Exec(`INSERT INTO endpoint_binding
+				(singleton, instance_id, generation, boot_id, pid, process_start, bound_at)
+				SELECT singleton, instance_id, generation, boot_id, pid, process_start, ?
+				FROM broker_owner WHERE singleton = 1
+				ON CONFLICT(singleton) DO UPDATE SET instance_id=excluded.instance_id,
+				generation=excluded.generation, boot_id=excluded.boot_id, pid=excluded.pid,
+				process_start=excluded.process_start, bound_at=excluded.bound_at`, time.Now().UTC().Format(time.RFC3339Nano))
 			return err
-		}
-		if err := s.reclaimEndpoints(ctx, paths); err != nil {
+		}); err != nil {
 			return err
 		}
 		ep, err := createEndpoint(paths)
 		if err != nil {
+			if ep != nil {
+				// Failed construction could not join/discard its resources. Keep
+				// their cleanup progress and binding provenance under this owner.
+				s.mu.Lock()
+				s.endpoint = ep
+				s.mu.Unlock()
+				s.reportFatal(err)
+			}
 			return err
 		}
 		if s.beforePublish != nil {
@@ -58,12 +84,13 @@ func (o *Owner) Bind(ctx context.Context, paths config.BrokerEndpoints) error {
 			s.mu.Unlock()
 			derr := ep.discard()
 			if derr == nil {
+				if err := op.Write(context.WithoutCancel(ctx), s.deleteBinding); err != nil {
+					s.recordFatal(err)
+					return errors.Join(ErrAdmissionClosed, err)
+				}
 				return ErrAdmissionClosed
 			}
-			// Files this Bind created are still on disk. Releasing the row would
-			// leave a successor refusing to start, because leftovers after an
-			// orderly release have no recorded predecessor. Retaining ownership
-			// lets the successor reclaim them by process-exit evidence instead.
+			// An unresolved discard retains ownership and its binding record.
 			s.recordFatal(derr)
 			return errors.Join(ErrAdmissionClosed, derr)
 		}
@@ -73,7 +100,7 @@ func (o *Owner) Bind(ctx context.Context, paths config.BrokerEndpoints) error {
 	})
 }
 
-func createEndpoint(paths config.BrokerEndpoints) (_ *ownedEndpoint, err error) {
+func createEndpoint(paths config.BrokerEndpoints) (unresolved *ownedEndpoint, err error) {
 	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: paths.Socket, Net: "unix"})
 	if err != nil {
 		return nil, fmt.Errorf("bind broker socket: %w", err)
@@ -82,7 +109,10 @@ func createEndpoint(paths config.BrokerEndpoints) (_ *ownedEndpoint, err error) 
 	ep := &ownedEndpoint{listener: listener}
 	defer func() {
 		if err != nil {
-			err = errors.Join(err, ep.discard())
+			if closeErr := ep.discard(); closeErr != nil {
+				unresolved = ep
+				err = errors.Join(err, fmt.Errorf("discard failed broker endpoint: %w", closeErr))
+			}
 		}
 	}()
 	info, err := os.Lstat(paths.Socket)
@@ -138,7 +168,7 @@ func (ep *ownedEndpoint) remove() error {
 	return nil
 }
 
-func (s *ownerState) reclaimEndpoints(ctx context.Context, paths config.BrokerEndpoints) error {
+func (s *ownerState) reclaimEndpoints(ctx context.Context, tx *WriteTx, paths config.BrokerEndpoints) error {
 	var leftovers []ownedFile
 	for _, path := range []string{paths.Socket, paths.PID} {
 		info, err := os.Lstat(path)
@@ -160,15 +190,23 @@ func (s *ownerState) reclaimEndpoints(ctx context.Context, paths config.BrokerEn
 	if len(leftovers) == 0 {
 		return nil
 	}
-	if s.predecessor == nil {
-		return fmt.Errorf("leftover broker endpoints have no recorded predecessor")
+	var binding ProcessIdentity
+	if err := tx.Scan(`SELECT boot_id, pid, process_start FROM endpoint_binding WHERE singleton = 1`, nil,
+		&binding.BootID, &binding.PID, &binding.Start); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("leftover broker endpoints have no recorded binding owner")
+		}
+		return fmt.Errorf("read endpoint binding owner: %w", err)
 	}
-	status, err := s.inspector.Inspect(ctx, *s.predecessor)
+	if err := binding.validate(); err != nil {
+		return err
+	}
+	status, err := s.inspector.Inspect(ctx, binding)
 	if err != nil {
-		return fmt.Errorf("verify endpoint predecessor exit: %w", err)
+		return fmt.Errorf("verify endpoint binding owner exit: %w", err)
 	}
 	if status != ProcessExited {
-		return fmt.Errorf("cannot reclaim endpoints without verified predecessor exit")
+		return fmt.Errorf("cannot reclaim endpoints without verified binding owner exit")
 	}
 	for _, file := range leftovers {
 		if file.path == paths.PID {
@@ -177,8 +215,8 @@ func (s *ownerState) reclaimEndpoints(ctx context.Context, paths config.BrokerEn
 				return err
 			}
 			pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
-			if err != nil || pid != s.predecessor.PID {
-				return fmt.Errorf("leftover PID file does not match recorded predecessor")
+			if err != nil || pid != binding.PID {
+				return fmt.Errorf("leftover PID file does not match recorded binding owner")
 			}
 		}
 	}
@@ -187,7 +225,14 @@ func (s *ownerState) reclaimEndpoints(ctx context.Context, paths config.BrokerEn
 			return err
 		}
 	}
-	return nil
+	_, err = tx.Exec("DELETE FROM endpoint_binding WHERE singleton = 1")
+	return err
+}
+
+// Maintenance generations must never erase another process's file provenance.
+func (s *ownerState) deleteBinding(tx *WriteTx) error {
+	_, err := tx.Exec("DELETE FROM endpoint_binding WHERE singleton = 1 AND instance_id = ? AND generation = ?", s.identity, s.generation)
+	return err
 }
 
 func removeOwnedFile(file ownedFile) error {

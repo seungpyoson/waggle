@@ -32,6 +32,15 @@ CREATE TABLE cutover (
     state TEXT NOT NULL CHECK (state IN ('prepared', 'active'))
 );
 INSERT INTO cutover(singleton, state) VALUES (1, 'prepared');
+CREATE TABLE endpoint_binding (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    instance_id TEXT NOT NULL,
+    generation INTEGER NOT NULL,
+    boot_id TEXT NOT NULL,
+    pid INTEGER NOT NULL,
+    process_start TEXT NOT NULL,
+    bound_at TEXT NOT NULL
+);
 `
 
 // Acquire is the only owner constructor. CreateStore is explicit fresh-store
@@ -101,7 +110,6 @@ func Acquire(ctx context.Context, cfg config.OwnershipConfig, inspector ProcessI
 	}
 	instance := rand.Text()
 	var generation int64
-	var predecessor *ProcessIdentity
 	err = reserved(ctx, db, writeAccess, func(conn *sql.Conn) error {
 		var journal string
 		if err := conn.QueryRowContext(ctx, "PRAGMA journal_mode").Scan(&journal); err != nil {
@@ -141,7 +149,6 @@ func Acquire(ctx context.Context, cfg config.OwnershipConfig, inspector ProcessI
 		if err := old.validate(); err != nil {
 			return err
 		}
-		predecessor = &old
 		if oldID == "" || generation <= 0 || generation == math.MaxInt64 {
 			return fmt.Errorf("invalid or exhausted canonical ownership generation")
 		}
@@ -185,7 +192,7 @@ func Acquire(ctx context.Context, cfg config.OwnershipConfig, inspector ProcessI
 		workers: make(map[string]struct{}),
 		drained: make(chan struct{}), idle: make(chan struct{}), stop: make(chan struct{}), finalDone: make(chan struct{}), failed: make(chan struct{}),
 		interrupt: interrupt, cancel: interruptCancel,
-		predecessor: predecessor, inspector: inspector,
+		inspector: inspector,
 	}}, nil
 }
 
