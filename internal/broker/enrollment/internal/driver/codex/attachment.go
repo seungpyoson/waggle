@@ -7,9 +7,8 @@ import (
 	"fmt"
 	"net"
 
-	"github.com/seungpyoson/waggle/internal/brokerstate"
+	"github.com/seungpyoson/waggle/internal/broker/enrollment/internal/driver"
 	"github.com/seungpyoson/waggle/internal/config"
-	"github.com/seungpyoson/waggle/internal/driver"
 	"github.com/seungpyoson/waggle/internal/messages"
 )
 
@@ -23,13 +22,7 @@ type thread struct {
 
 // Attach subscribes without loading history or starting a turn. A failed
 // subscription closes and joins its transport; there is no resume alternative.
-func Attach(ctx context.Context, lifetime *brokerstate.Operation, target messages.Enrollment, version string, cfg config.NativeConfig, dial func(context.Context, string, string) (net.Conn, error), observe func(context.Context, Event) error) (*driver.Handle, error) {
-	return driver.Open(ctx, lifetime, func() (driver.Driver, error) {
-		return attach(ctx, target, version, cfg, dial, observe)
-	})
-}
-
-func attach(ctx context.Context, target messages.Enrollment, version string, cfg config.NativeConfig, dial func(context.Context, string, string) (net.Conn, error), observe func(context.Context, Event) error) (driver.Driver, error) {
+func Attach(ctx context.Context, target messages.Enrollment, version string, cfg config.NativeConfig, dial func(context.Context, string, string) (net.Conn, error), observe func(context.Context, Event) error) (driver.Driver, error) {
 	if target.ID == "" || target.Provider != "codex" || target.Conversation == "" {
 		return nil, fmt.Errorf("Codex attachment requires an enrolled incarnation and exact thread")
 	}

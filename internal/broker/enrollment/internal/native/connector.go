@@ -8,10 +8,9 @@ import (
 	"fmt"
 	"net"
 
-	"github.com/seungpyoson/waggle/internal/brokerstate"
+	"github.com/seungpyoson/waggle/internal/broker/enrollment/internal/driver"
+	"github.com/seungpyoson/waggle/internal/broker/enrollment/internal/driver/codex"
 	"github.com/seungpyoson/waggle/internal/config"
-	"github.com/seungpyoson/waggle/internal/driver"
-	"github.com/seungpyoson/waggle/internal/driver/codex"
 	"github.com/seungpyoson/waggle/internal/messages"
 )
 
@@ -37,7 +36,7 @@ func (c *Connector) Check(e messages.Enrollment) error {
 	return nil
 }
 
-func (c *Connector) Open(ctx context.Context, lifetime *brokerstate.Operation, e messages.Enrollment) (*driver.Handle, error) {
+func (c *Connector) Open(ctx context.Context, e messages.Enrollment) (driver.Driver, error) {
 	if err := c.Check(e); err != nil {
 		return nil, err
 	}
@@ -56,7 +55,7 @@ func (c *Connector) Open(ctx context.Context, lifetime *brokerstate.Operation, e
 		}
 		return conn, nil
 	}
-	return codex.Attach(ctx, lifetime, e, c.config.ClientVersion, c.config.Transport, connect, func(ctx context.Context, event codex.Event) error {
+	return codex.Attach(ctx, e, c.config.ClientVersion, c.config.Transport, connect, func(ctx context.Context, event codex.Event) error {
 		// Waggle cannot approve native requests or turn notifications into
 		// receipts. Multi-client approval delivery remains an M1 conformance
 		// obligation; this connection sends no approval response.

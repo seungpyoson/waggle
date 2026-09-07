@@ -14,8 +14,8 @@ import (
 	"sync"
 
 	"github.com/coder/websocket"
+	"github.com/seungpyoson/waggle/internal/broker/enrollment/internal/driver"
 	"github.com/seungpyoson/waggle/internal/config"
-	"github.com/seungpyoson/waggle/internal/driver"
 )
 
 var ErrProtocol = errors.New("invalid App Server framing or request correlation")

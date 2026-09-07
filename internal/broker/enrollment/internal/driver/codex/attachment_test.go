@@ -9,10 +9,8 @@ import (
 	"testing"
 
 	"github.com/coder/websocket"
-	"github.com/seungpyoson/waggle/internal/brokerstate"
-	"github.com/seungpyoson/waggle/internal/brokerstate/statetest"
+	"github.com/seungpyoson/waggle/internal/broker/enrollment/internal/driver"
 	"github.com/seungpyoson/waggle/internal/config"
-	"github.com/seungpyoson/waggle/internal/driver"
 	"github.com/seungpyoson/waggle/internal/messages"
 )
 
@@ -36,10 +34,9 @@ func answerSubscription(t *testing.T, ws *websocket.Conn, threadID string) {
 	peerWrite(t, ws, wireMessage{ID: request.ID, Result: result})
 }
 
-func attachPeer(t *testing.T, target messages.Enrollment, dial func(context.Context, string, string) (net.Conn, error)) (*driver.Handle, *brokerstate.Operation) {
+func attachPeer(t *testing.T, target messages.Enrollment, dial func(context.Context, string, string) (net.Conn, error)) driver.Driver {
 	t.Helper()
-	op := statetest.Operation(t, statetest.New(t, "SELECT 1"))
-	c, err := Attach(t.Context(), op, target, "test-build", config.NewNativeConfig(), dial, func(context.Context, Event) error { return nil })
+	c, err := Attach(t.Context(), target, "test-build", config.NewNativeConfig(), dial, func(context.Context, Event) error { return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,25 +45,7 @@ func attachPeer(t *testing.T, target messages.Enrollment, dial func(context.Cont
 			t.Error(err)
 		}
 	})
-	return c, op
-}
-
-func TestAttachmentRequiresOwnershipBeforeDial(t *testing.T) {
-	target, _ := fixtureEnvelope()
-	owner := statetest.New(t, "SELECT 1")
-	var expired brokerstate.Operation
-	if err := owner.Do(t.Context(), func(op *brokerstate.Operation) error { expired = *op; return nil }); err != nil {
-		t.Fatal(err)
-	}
-	for _, op := range []*brokerstate.Operation{new(brokerstate.Operation), &expired} {
-		handle, err := Attach(t.Context(), op, target, "test-build", config.NewNativeConfig(), func(context.Context, string, string) (net.Conn, error) {
-			t.Error("native dial ran without ownership")
-			return nil, errors.New("unexpected dial")
-		}, func(context.Context, Event) error { return nil })
-		if handle != nil || !errors.Is(err, brokerstate.ErrExpiredCapability) {
-			t.Fatalf("invalid ownership reached native attachment: %v", err)
-		}
-	}
+	return c
 }
 
 func TestAttachmentFailureClosesWithoutAlternateRequestOrRedial(t *testing.T) {
@@ -96,8 +75,7 @@ func TestAttachmentFailureClosesWithoutAlternateRequestOrRedial(t *testing.T) {
 				dials.Add(1)
 				return dial(ctx, network, address)
 			}
-			op := statetest.Operation(t, statetest.New(t, "SELECT 1"))
-			c, err := Attach(t.Context(), op, target, "test-build", config.NewNativeConfig(), counted, func(context.Context, Event) error { return nil })
+			c, err := Attach(t.Context(), target, "test-build", config.NewNativeConfig(), counted, func(context.Context, Event) error { return nil })
 			if c != nil {
 				c.Close()
 				t.Fatal("failed subscription returned a usable driver")
@@ -123,9 +101,8 @@ func TestAttachmentCancellationJoinsObserverWithoutRetry(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	done := make(chan error, 1)
-	op := statetest.Operation(t, statetest.New(t, "SELECT 1"))
 	go func() {
-		c, err := Attach(ctx, op, target, "test-build", config.NewNativeConfig(), dial, func(ctx context.Context, _ Event) error {
+		c, err := Attach(ctx, target, "test-build", config.NewNativeConfig(), dial, func(ctx context.Context, _ Event) error {
 			close(entered)
 			<-ctx.Done()
 			close(finished)
@@ -158,15 +135,15 @@ func TestAttachmentKeepsIdentityAndRejectsAnotherIncarnation(t *testing.T) {
 			t.Error("another incarnation reached the native transport")
 		}
 	})
-	c, op := attachPeer(t, target, dial)
+	c := attachPeer(t, target, dial)
 	target.Conversation = "another-thread"
 	target.ID = "another-incarnation"
-	view, err := c.Probe(t.Context(), op)
+	view, err := c.Probe(t.Context())
 	if err != nil || view.Conversation != "thread" || view.Availability != driver.Idle {
 		t.Fatalf("caller changed attached identity: %+v %v", view, err)
 	}
 	envelope.Message.Recipient = target.ID
-	if outcome, err := c.Submit(t.Context(), op, envelope); err != nil || outcome.Possession != driver.NotSubmitted {
+	if outcome := c.Submit(t.Context(), envelope); outcome.Possession != driver.NotSubmitted {
 		t.Fatalf("another incarnation was submitted: %+v", outcome)
 	}
 }

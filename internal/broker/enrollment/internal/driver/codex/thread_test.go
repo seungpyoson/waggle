@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/coder/websocket"
-	"github.com/seungpyoson/waggle/internal/driver"
+	"github.com/seungpyoson/waggle/internal/broker/enrollment/internal/driver"
 	"github.com/seungpyoson/waggle/internal/messages"
 )
 
@@ -62,11 +62,8 @@ func TestIdleSubmitPreservesEnvelopeWithoutNativePermissionOverrides(t *testing.
 		peerWrite(t, ws, wireMessage{ID: request.ID, Result: json.RawMessage(`{"turn":{"id":"turn"}}`)})
 		_, _, _ = ws.Read(t.Context())
 	})
-	c, op := attachPeer(t, target, dial)
-	got, err := c.Submit(t.Context(), op, envelope)
-	if err != nil {
-		t.Fatal(err)
-	}
+	c := attachPeer(t, target, dial)
+	got := c.Submit(t.Context(), envelope)
 	if got.Possession != driver.Accepted || got.ProviderRef != "turn" {
 		t.Fatalf("correlated native response lost: %+v", got)
 	}
@@ -104,11 +101,8 @@ func TestBusyPreconditionFailureNeverStartsAnotherTurn(t *testing.T) {
 			t.Error("failed steer submitted again")
 		}
 	})
-	c, op := attachPeer(t, target, dial)
-	got, err := c.Submit(t.Context(), op, envelope)
-	if err != nil {
-		t.Fatal(err)
-	}
+	c := attachPeer(t, target, dial)
+	got := c.Submit(t.Context(), envelope)
 	if got.Possession != driver.Uncertain || submits.Load() != 1 {
 		t.Fatalf("native rejection manufactured non-retention or retried: %+v", got)
 	}
@@ -127,8 +121,8 @@ func TestProbeCannotPromoteStoredOrUnverifiedThread(t *testing.T) {
 				answerThread(t, ws, body)
 				_, _, _ = ws.Read(t.Context())
 			})
-			c, op := attachPeer(t, target, dial)
-			got, err := c.Probe(t.Context(), op)
+			c := attachPeer(t, target, dial)
+			got, err := c.Probe(t.Context())
 			if err != nil || got.Availability != driver.Unavailable {
 				t.Fatalf("unverified thread became ready: %+v %v", got, err)
 			}
@@ -143,8 +137,8 @@ func TestProbeRejectsAnotherNativeConversation(t *testing.T) {
 		answerThread(t, ws, `{"thread":{"id":"another-thread","canAcceptDirectInput":true,"status":{"type":"idle"}}}`)
 		_, _, _ = ws.Read(t.Context())
 	})
-	c, op := attachPeer(t, target, dial)
-	if _, err := c.Probe(t.Context(), op); err == nil {
+	c := attachPeer(t, target, dial)
+	if _, err := c.Probe(t.Context()); err == nil {
 		t.Fatal("native thread substitution accepted")
 	}
 }

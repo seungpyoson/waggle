@@ -68,16 +68,6 @@ func TestOwnershipHasNoAlternateDatabaseOrProviderConstructors(t *testing.T) {
 					if ok && imports[alias.Name] == "database/sql" && selector.Sel.Name == "DB" && !owned {
 						t.Errorf("raw database capability escaped ownership: %s", files.Position(n.Pos()))
 					}
-				case *ast.FuncDecl:
-					if !n.Name.IsExported() || !strings.HasPrefix(path, "internal/driver/") || n.Type.Results == nil {
-						return true
-					}
-					for _, result := range n.Type.Results.List {
-						selector, ok := result.Type.(*ast.SelectorExpr)
-						if ok && selector.Sel.Name == "Driver" {
-							t.Errorf("exported unowned provider constructor: %s", files.Position(n.Pos()))
-						}
-					}
 				}
 				return true
 			})

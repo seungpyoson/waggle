@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/seungpyoson/waggle/internal/broker/enrollment/internal/driver"
 	"github.com/seungpyoson/waggle/internal/config"
-	"github.com/seungpyoson/waggle/internal/driver"
 	"github.com/seungpyoson/waggle/internal/messages"
 )
 
