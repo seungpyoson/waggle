@@ -52,7 +52,7 @@ func TestDeps_DirectCycle(t *testing.T) {
 	}
 
 	// Try to make A depend on B — should fail (cycle: A -> B -> A)
-	err = ValidateDeps(s, []int64{b.ID}, a.ID)
+	err = s.ValidateDeps([]int64{b.ID}, a.ID)
 	if err == nil {
 		t.Fatal("expected cycle detection error")
 	}
@@ -84,7 +84,7 @@ func TestDeps_IndirectCycle(t *testing.T) {
 	}
 
 	// Try to make A depend on C — should fail (cycle: A -> B -> C -> A)
-	err = ValidateDeps(s, []int64{c.ID}, a.ID)
+	err = s.ValidateDeps([]int64{c.ID}, a.ID)
 	if err == nil {
 		t.Fatal("expected cycle detection error for indirect cycle")
 	}
@@ -164,7 +164,7 @@ func TestDeps_UnblockOnComplete(t *testing.T) {
 	}
 
 	// Resolve dependencies
-	unblocked, err := ResolveDeps(s, dep.ID)
+	unblocked, err := s.ResolveDeps(dep.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,7 +212,7 @@ func TestDeps_UnblockOnFail(t *testing.T) {
 	}
 
 	// Fail dependents
-	failed, err := FailDependents(s, dep.ID)
+	failed, err := s.FailDependents(dep.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -258,7 +258,7 @@ func TestDeps_UnblockOnCancel(t *testing.T) {
 	}
 
 	// Fail dependents
-	failed, err := FailDependents(s, dep.ID)
+	failed, err := s.FailDependents(dep.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

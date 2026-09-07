@@ -1,0 +1,747 @@
+{
+  "date": "2026-09-07",
+  "status": "startup_hooks_implemented_native_runtime_verification_pending",
+  "milestone": "M1",
+  "milestone_approved": false,
+  "checkout": "/Users/spson/Projects/Claude/waggle/.worktrees/codex-native",
+  "branch": "feat/native-session-enrollment",
+  "upstream_tag": "rust-v0.153.4",
+  "base_commit": "3d2ee51ca2d5db578f328aa75e20aa22c0197c9a",
+  "patch": "docs/reviews/native-messaging/codex-provider-prerequisites-2026-09-07.patch",
+  "patch_sha256": "294aee782192af808d6ebeca61228fbb90074b63e3c211aa863e1b6eaf5d0725",
+  "files": [
+    {
+      "path": "codex-rs/Cargo.lock",
+      "sha256": "a2cb91dfb2e8112bc81d05158fa00b9698e2df8cc1ae0547b5dc5606a44904d3"
+    },
+    {
+      "path": "codex-rs/analytics/src/analytics_client_tests.rs",
+      "sha256": "1c39b9138847d385792cb17526878f7a198b1d6f27d02671848f3b3213135d8f"
+    },
+    {
+      "path": "codex-rs/analytics/src/client.rs",
+      "sha256": "f830086c7213561ad611e3294c93fa6d09ccbb007efe2206e029c77143deeffc"
+    },
+    {
+      "path": "codex-rs/analytics/src/events.rs",
+      "sha256": "626654f61ff2e0d798cfffb58cb150e17060ac1af1b397e02b7a342cd38924a9"
+    },
+    {
+      "path": "codex-rs/analytics/src/facts.rs",
+      "sha256": "2ff216363b324d06ffe8dfd51678e2036dddf75fc02b63e98587bcad4a10be55"
+    },
+    {
+      "path": "codex-rs/analytics/src/hook_run_tests.rs",
+      "sha256": "e6dd3cf66e48a02ab6621a5d5a9219243429fa9b866a2dd813ee95baa29bdecc"
+    },
+    {
+      "path": "codex-rs/analytics/src/lib.rs",
+      "sha256": "414c403e2c5237b835b5f8f7e372c54df8027e3a3adcefab66daf196f2baaf2c"
+    },
+    {
+      "path": "codex-rs/app-server-protocol/schema/precomputed/app-server-exports-experimental.json.zst",
+      "sha256": "193e86af8f12cde15436c5547ea8a8676ed657c5dcaf3b2067076b48aaac9a1a"
+    },
+    {
+      "path": "codex-rs/app-server-protocol/scripts/write_schema_fixtures.py",
+      "sha256": "c19d95bdfc3d48f5e5b1c5543888a3a4e3a07c55db9b5b5c3ab46b2deb0823f7"
+    },
+    {
+      "path": "codex-rs/app-server-protocol/src/protocol/common.rs",
+      "sha256": "c3a194de167cf9105b319734b247434d57f708148110e0b3821ae26f623e6afb"
+    },
+    {
+      "path": "codex-rs/app-server-protocol/src/protocol/v2/thread.rs",
+      "sha256": "8b53a29d1ab5c86df5aebb5230d8e2f4310563d38424401a62190d87069993e3"
+    },
+    {
+      "path": "codex-rs/app-server/README.md",
+      "sha256": "a56c47bc90cae882d326197788f9b84fa93389385d2c23d82ab70cb0664ed778"
+    },
+    {
+      "path": "codex-rs/app-server/src/message_processor.rs",
+      "sha256": "84331550159ab8163b17409268b3e8e56304e47fb34681f060a6ceed86c39eba"
+    },
+    {
+      "path": "codex-rs/app-server/src/request_processors.rs",
+      "sha256": "cda7e8fdd048b7f5e5c89d58f155b3907bf1421b8fe08e5951e015f37552dc50"
+    },
+    {
+      "path": "codex-rs/app-server/src/request_processors/thread_lifecycle.rs",
+      "sha256": "31d52622ac7d9264b437996a9b36bb12f0eac1e06868091a562bd41bf5513175"
+    },
+    {
+      "path": "codex-rs/app-server/src/request_processors/thread_processor.rs",
+      "sha256": "0ebfac2899eee541b4434a70bf2842882a7735b49d7d813f815dd3cc1e0ad108"
+    },
+    {
+      "path": "codex-rs/app-server/src/request_processors/thread_subscription.rs",
+      "sha256": "9e5913bc065acab8730b114eb0dba59b02f80cfcf12a25b698c52dff60c628cc"
+    },
+    {
+      "path": "codex-rs/app-server/tests/suite/v2/mod.rs",
+      "sha256": "30de8374c20acd426fb7a121d09d568f3b23717f3ba70c6276e655a63a189e5a"
+    },
+    {
+      "path": "codex-rs/app-server/tests/suite/v2/session_start.rs",
+      "sha256": "58cebadb9a5f31c683312f21d72e451d23bfb0ca20e0586f5d38a7f96406df22"
+    },
+    {
+      "path": "codex-rs/app-server/tests/suite/v2/thread_subscribe.rs",
+      "sha256": "92745c83c38bca94b805b131ed876adbfb77e1765e4edc3cb1e5ed3859691e96"
+    },
+    {
+      "path": "codex-rs/core/src/hook_runtime.rs",
+      "sha256": "850a85c6c8a060b32822dd94c4328accb138b2f70c09790470deeda84ceb2efb"
+    },
+    {
+      "path": "codex-rs/core/src/hook_runtime/scope.rs",
+      "sha256": "cdd8a4a855c7f9ad6d0b5427c0234826585d014d144c94af350f06aa13c54a8b"
+    },
+    {
+      "path": "codex-rs/core/src/session/mod.rs",
+      "sha256": "e6189294045938b7653b4a3241d913a95e82e26c289e94d0d2d4f3c27d2d1a02"
+    },
+    {
+      "path": "codex-rs/core/src/session/session.rs",
+      "sha256": "5742d0ba19cbf92c75a4dea4b946532ce94f54954ea9241ccb585bcb866b9eb0"
+    },
+    {
+      "path": "codex-rs/core/src/session/start_hooks.rs",
+      "sha256": "46633816a946f6bff5ad672efc59ffced841b50891734e621ae801686871fcf1"
+    },
+    {
+      "path": "codex-rs/core/src/session/tests.rs",
+      "sha256": "9db216f301ae55693e36dda9a096af6c966226980e048e25c4d5164707a739d7"
+    },
+    {
+      "path": "codex-rs/core/src/state/session.rs",
+      "sha256": "b79ef52737a4b68ea2760f46eb189f481bd27014592f60f91034850431a62077"
+    },
+    {
+      "path": "codex-rs/hooks/schema/generated/session-start.command.input.schema.json",
+      "sha256": "57e837de1ece83cbc6a93873f9b0f1955359c372a1fbb4cf81015a2b65b766e9"
+    },
+    {
+      "path": "codex-rs/hooks/schema/generated/subagent-start.command.input.schema.json",
+      "sha256": "b029f1a9faa8c85034b7aff2e92f4286f5cfa51b7246af95794bf1141d93cace"
+    },
+    {
+      "path": "codex-rs/hooks/src/engine/command_runner.rs",
+      "sha256": "fda86619ebbd966bcab950efacbb29588a605c0d2aa95d56daca6b44e81a0787"
+    },
+    {
+      "path": "codex-rs/hooks/src/engine/command_runner_tests.rs",
+      "sha256": "8cf05d949819fb69b4f1b63078ae5df533b156f60911bb572d49b44be9f4a695"
+    },
+    {
+      "path": "codex-rs/hooks/src/engine/mod.rs",
+      "sha256": "02d22347f001e8061f089e86cec242fb5fa55a900ce53dbc1dd8029914acd920"
+    },
+    {
+      "path": "codex-rs/hooks/src/engine/mod_tests.rs",
+      "sha256": "28da6ce6c8b682afe532b6b9f93439baa720e78467554f09c7a744624269c925"
+    },
+    {
+      "path": "codex-rs/hooks/src/engine/session_start_identity_tests.rs",
+      "sha256": "46d49408055680ca605b0ee3ce6f06f2210315de003e82042bd107baa2c58a22"
+    },
+    {
+      "path": "codex-rs/hooks/src/engine/thread_environment_tests.rs",
+      "sha256": "37442e13b7a151a1c7be14970f82ce978b7fbd916075286352ddd291d3358248"
+    },
+    {
+      "path": "codex-rs/hooks/src/events/session_start.rs",
+      "sha256": "3590f7bb874f78c735bef00ead47290ba686316bc0fa12c49ce5316a1b832f64"
+    },
+    {
+      "path": "codex-rs/hooks/src/registry.rs",
+      "sha256": "8cb63e5e8030a57d1c2f1ff6f29042e40ea24d16522ee7b789e28ed02574db78"
+    },
+    {
+      "path": "codex-rs/hooks/src/schema.rs",
+      "sha256": "ab8f0a3d9dd693513062e943ac9929a0f2bb5aad1b6dfbaff13ef0d7c36f8570"
+    },
+    {
+      "path": "justfile",
+      "sha256": "0c98e2ee744139c3254870a0ed6150d8fd2aa37d0283f40b4fb99f22e52e36a7"
+    }
+  ],
+  "validation": {
+    "git_diff_check": {
+      "exit_code": 0
+    },
+    "rust_format_check": {
+      "command": "cargo fmt -- --config imports_granularity=Item --check",
+      "exit_code": 0,
+      "warning": "Stable rustfmt cannot enable the nightly imports_granularity option"
+    },
+    "repository_format": {
+      "command": "just fmt",
+      "exit_code": 1,
+      "rust_and_just_groups": "passed",
+      "blocked_groups": [
+        "Bazel/Starlark: dotslash missing",
+        "Python SDK and scripts: default uv cache write denied"
+      ],
+      "final_run": "After schema generator edits and all compiled tests"
+    },
+    "baseline_protocol_tests": {
+      "command": "CARGO_TARGET_DIR=\"$PWD/target\" just test --cargo-profile dev-small -p codex-app-server-protocol --lib",
+      "attempts": 2,
+      "terminal_exit_codes": [
+        102,
+        102
+      ],
+      "second_attempt_escalation": "approved",
+      "failure": "Cargo metadata could not resolve futures: proxy CONNECT 403 fetching https://index.crates.io/config.json",
+      "compiled": false,
+      "tests_executed": false
+    },
+    "schema_generation": {
+      "commands": [
+        "CARGO_TARGET_DIR=\"$PWD/target\" CARGO_NET_OFFLINE=true CARGO_BUILD_JOBS=2 just write-app-server-schema",
+        "CARGO_TARGET_DIR=\"$PWD/target\" CARGO_NET_OFFLINE=true CARGO_BUILD_JOBS=2 just write-app-server-schema --experimental"
+      ],
+      "exit_codes": [
+        0,
+        0
+      ],
+      "generator_tests_passed_per_run": 1,
+      "stable_artifact_changed": false,
+      "experimental_artifact_sha256": "193e86af8f12cde15436c5547ea8a8676ed657c5dcaf3b2067076b48aaac9a1a"
+    },
+    "clippy": {
+      "command": "CARGO_TARGET_DIR=\"$PWD/target\" just clippy -p codex-app-server --profile dev-small --offline --locked -j 2",
+      "exit_code": 0,
+      "tests_compiled": true,
+      "elapsed": "5m 43s"
+    },
+    "new_subscription_tests": {
+      "command": "CARGO_TARGET_DIR=\"$PWD/target\" just test --cargo-profile dev-small --offline --locked -j 2 -p codex-app-server --test all -E 'test(thread_subscribe)'",
+      "second_command_extra_args": [
+        "--retries",
+        "0"
+      ],
+      "attempts": 2,
+      "terminal_exit_codes": [
+        100,
+        100
+      ],
+      "second_attempt_escalation": "approved",
+      "compiled": true,
+      "passed_per_attempt": 0,
+      "failed_per_attempt": 3,
+      "filtered_per_attempt": 1144,
+      "failure": "All three fail at Wiremock mock-server OS port bind with PermissionDenied (os error 1)",
+      "subscription_assertions_reached": false,
+      "behavior": "not confirmed"
+    },
+    "native_unix_tui_conformance": "not confirmed",
+    "locked_offline_metadata": {
+      "command": "cargo metadata --offline --locked --format-version 1",
+      "exit_code": 0
+    },
+    "schema_entrypoint_correction": {
+      "trigger": "just write-app-server-schema --experimental exited 101 because the recipe named a nonexistent binary",
+      "change": "Invoke the existing Python generator and its existing ignored Rust generator test through just test",
+      "generated_files_hand_edited": false
+    },
+    "initial_compiled_protocol_tests": {
+      "command": "CARGO_TARGET_DIR=\"$PWD/target\" just test --cargo-profile dev-small --offline --locked -j 2 -p codex-app-server-protocol --lib",
+      "exit_code": 100,
+      "passed": 297,
+      "failed": 1,
+      "ignored": 1,
+      "failure": "schema_fixtures_tests::experimental_precomputed_exports_match_generated",
+      "resolution": "Regenerated schemas through repaired documented entrypoint"
+    },
+    "protocol_tests": {
+      "command": "CARGO_TARGET_DIR=\"$PWD/target\" just test --offline --locked -j 2 -p codex-app-server-protocol --lib",
+      "exit_code": 0,
+      "passed": 298,
+      "failed": 0,
+      "ignored": 1,
+      "ignored_reason": "Generator test is invoked explicitly by the separate schema-generation commands"
+    },
+    "clippy_fix": {
+      "command": "CARGO_TARGET_DIR=\"$PWD/target\" just fix -p codex-app-server --profile dev-small --offline --locked -j 2",
+      "exit_code": 101,
+      "failure": "failed to bind TCP listener to manage locking: Operation not permitted",
+      "fix_gate_completed": false
+    },
+    "python_generator_format": {
+      "command": "ruff format --check codex-rs/app-server-protocol/scripts/write_schema_fixtures.py",
+      "version": "0.15.18",
+      "exit_code": 0,
+      "repository_pinned_python_gate_completed": false
+    },
+    "patch_reverse_apply_check": {
+      "exit_code": 0
+    },
+    "full_rust_suite": "not run; targeted server execution blocked",
+    "user_subscription_run": {
+      "provenance": "user_supplied_terminal_transcript",
+      "run_id": "04daf0eb-6da8-4fc1-805d-62ca3aaca909",
+      "command": "CARGO_TARGET_DIR=\"$PWD/target\" just test --cargo-profile dev-small --offline --locked -j 2 -p codex-app-server --test all -E 'test(thread_subscribe)' --retries 0",
+      "runner_exit_code": 100,
+      "passed": 2,
+      "failed": 1,
+      "filtered": 1144,
+      "passed_tests": [
+        "thread_subscribe_rejects_saved_history_without_loading_it",
+        "thread_subscribe_survives_original_client_disconnect_and_observes_archive"
+      ],
+      "failed_test": "thread_subscribe_attaches_without_starting_a_turn",
+      "observed_subscription_response": "Exact requested threadId returned successfully before the failing history read",
+      "failed_request": "thread/read with includeTurns=true",
+      "error_code": -32601,
+      "error_message": "list_turns is not supported yet",
+      "source_digest_supplied": false,
+      "independently_executed": false,
+      "prior_checkpoint_patch": "docs/reviews/native-messaging/codex-provider-subscription-before-test-correction-2026-09-07.patch",
+      "prior_checkpoint_patch_sha256": "67f360a39914ff5417bbd1feab91fdb1bad27a0f8819388ea3bda187190b79cb"
+    },
+    "subscription_test_correction": {
+      "file": "codex-rs/app-server/tests/suite/v2/thread_subscribe.rs",
+      "previous_file_sha256": "83829deb522825f528b0c6f7ec16f7b27a3ad79d3e9d1139b7f73b1e105e1bb9",
+      "root_cause": "The test assumed fresh default-thread turn history could be listed; that read invokes an unsupported store operation",
+      "assertions": [
+        "Exact thread ID, Idle status and Some(true) direct-input availability",
+        "Subscription can be removed",
+        "Server exits cleanly through existing graceful shutdown",
+        "Zero Responses endpoint requests through shutdown"
+      ],
+      "production_changed": false,
+      "warm_up_turn_added": false,
+      "current_execution": "not confirmed",
+      "build": {
+        "command": "CARGO_TARGET_DIR=\"$PWD/target\" cargo build --profile dev-small --offline --locked -j 2 -p codex-app-server --test all",
+        "exit_code": 0,
+        "elapsed": "35.23s"
+      },
+      "initial_build": {
+        "exit_code": 101,
+        "failure": "Expected tuple required Option<bool>; corrected literal expectation to Some(true)"
+      },
+      "compile_only_runner_attempt": {
+        "command": "just test --cargo-profile dev-small --offline --locked --build-jobs 2 -p codex-app-server --test all -E 'test(thread_subscribe)' --no-run",
+        "exit_code": 2,
+        "failure": "Repository --no-fail-fast conflicts with --no-run; used cargo build for compilation only"
+      },
+      "clippy": {
+        "command": "CARGO_TARGET_DIR=\"$PWD/target\" just clippy -p codex-app-server --profile dev-small --offline --locked -j 2",
+        "exit_code": 0,
+        "elapsed": "15.93s"
+      },
+      "format": {
+        "command": "cargo fmt -- --config imports_granularity=Item",
+        "exit_code": 0,
+        "full_repository_gate": "Still blocked as previously recorded; identical just fmt attempts were not repeated"
+      },
+      "current_file_sha256": "92745c83c38bca94b805b131ed876adbfb77e1765e4edc3cb1e5ed3859691e96"
+    }
+  },
+  "remaining": [
+    "Execute corrected fresh-idle subscription test; verify unload and interruption behavior",
+    "Complete repository fix/format and Bazel lock gates in an environment with their required capabilities",
+    "Execute startup-before-first-turn, one-time context/stop, resume, clear, and preserved subagent/compaction integration cases",
+    "Complete per-thread credential issuance and verify hook-to-ordinary-shell handoff through native remote TUI, including fork/resume/switch",
+    "Retain Waggle subscriptions through the single broker-owned connection lifecycle",
+    "Claude conformance, cutover, full verification and milestone reviews"
+  ],
+  "release_lockfile_correction": {
+    "trigger": "User cargo fetch --locked and independent cargo metadata --offline --locked rejected the unmodified upstream release lockfile",
+    "manifest_workspace_version": "0.153.4",
+    "old_local_package_versions": "0.0.0",
+    "local_entries_updated_by_cargo": 149,
+    "command": "cargo metadata --offline --format-version 1",
+    "command_exit_code": 101,
+    "command_terminal_error": "Inflector v0.11.4 missing from cache; offline mode prohibits download",
+    "comparison": "Complete parsed lockfile equals upstream after changing only those 149 local package version fields",
+    "external_packages_and_all_other_values_unchanged": true,
+    "upstream_lockfile_sha256": "3494b8a78d0f643556a83a9cc184e912bcab9f4c5640288952f4223452ba5dc8",
+    "current_lockfile_sha256": "a2cb91dfb2e8112bc81d05158fa00b9698e2df8cc1ae0547b5dc5606a44904d3",
+    "subsequent_locked_resolver": {
+      "command": "cargo metadata --offline --locked --format-version 1",
+      "exit_code": 101,
+      "lock_mismatch": false,
+      "terminal_error": "Inflector v0.11.4 missing from cache; offline mode prohibits download"
+    },
+    "bazel_lock_update": {
+      "command": "just bazel-lock-update",
+      "exit_code": 127,
+      "terminal_error": "bazel: command not found",
+      "module_bazel_lock_changed": false
+    },
+    "compilation": "Protocol, App Server, and new integration tests compiled after successful user dependency fetch",
+    "post_user_fetch_locked_resolver": {
+      "command": "cargo metadata --offline --locked --format-version 1",
+      "exit_code": 0
+    }
+  },
+  "logs": [
+    {
+      "path": "docs/reviews/native-messaging/codex-provider-schema-stable-2026-09-07.log",
+      "sha256": "e7bd85a53fbc4372e228e147cbd1cc47f31fc18355e59377043dc5cd4c0afb1c"
+    },
+    {
+      "path": "docs/reviews/native-messaging/codex-provider-schema-experimental-2026-09-07.log",
+      "sha256": "3e8190f43d8a5fccb14b1d49e390f47a58ad993de49395a610e9457e095a7ba8"
+    },
+    {
+      "path": "docs/reviews/native-messaging/codex-provider-protocol-tests-2026-09-07.log",
+      "sha256": "9dfc57cad5264f10369b1fe8d4453a500952caf87367b09b18a698102ebe4725"
+    },
+    {
+      "path": "docs/reviews/native-messaging/codex-provider-subscription-tests-blocked-2026-09-07.log",
+      "sha256": "cc5921f4eb09e8159721d82d0a696057914f58bf78c1430f31aef35f1704cb17"
+    },
+    {
+      "path": "docs/reviews/native-messaging/codex-provider-clippy-2026-09-07.log",
+      "sha256": "f9550440bdaf45f752d00a1e6c7eca337a69121278b13c978fe72727ce066219"
+    },
+    {
+      "path": "docs/reviews/native-messaging/codex-provider-fix-blocked-2026-09-07.log",
+      "sha256": "6bb10e993781fcfafa03cdc3bb9385d58a4125ed406243f1ca86f8aa893f5afd"
+    },
+    {
+      "path": "docs/reviews/native-messaging/codex-provider-format-blocked-2026-09-07.log",
+      "sha256": "d8c073743da2a9ba5a85ec8070e10353eba404db3af672948d1c5cc625d72718"
+    },
+    {
+      "path": "docs/reviews/native-messaging/codex-provider-test-correction-build-2026-09-07.log",
+      "sha256": "5ccc77a0279d76cf275a76aa148b884f17c104c50bbf1c0221f7c4585f766423"
+    },
+    {
+      "path": "docs/reviews/native-messaging/codex-provider-test-correction-clippy-2026-09-07.log",
+      "sha256": "4f67b5dc127739f50dd6749cc2a27c0bf9fc5456ceba77e26a5238ddc061cd01"
+    },
+    {
+      "path": "docs/reviews/native-messaging/codex-provider-test-correction-format-2026-09-07.log",
+      "sha256": "2aca95a47e772e603b04e820b23b51421ff9e7fbf3cfaa98cae60b3389502470"
+    },
+    {
+      "path": "docs/reviews/native-messaging/codex-provider-start-identity-red-2026-09-07.log",
+      "sha256": "1d2c826578e42bc49b76cada1f18624ef951653d2e39b10241021e7d1001e797"
+    },
+    {
+      "path": "docs/reviews/native-messaging/codex-provider-start-identity-green-2026-09-07.log",
+      "sha256": "db0c2fe8c1591243154f47eaaf83651d21b2da28437a540204d90732953319ac"
+    },
+    {
+      "path": "docs/reviews/native-messaging/codex-provider-start-identity-schema-2026-09-07.log",
+      "sha256": "183e38819b5bc1968cee5acc2235255812b07d9088e41650e6bbacd9b6add8e1"
+    },
+    {
+      "path": "docs/reviews/native-messaging/codex-provider-start-identity-hooks-tests-2026-09-07.log",
+      "sha256": "3c73cc502030460ea73696f454c6ce54d223c2eb3c7dfef91b638347b6d26fa5"
+    },
+    {
+      "path": "docs/reviews/native-messaging/codex-provider-start-identity-clippy-2026-09-07.log",
+      "sha256": "b24d94784399df58f9473fb7e761e5064ac10f8592987ae9be2e5cc97cd10e9a"
+    },
+    {
+      "path": "docs/reviews/native-messaging/codex-provider-start-identity-format-2026-09-07.log",
+      "sha256": "2aca95a47e772e603b04e820b23b51421ff9e7fbf3cfaa98cae60b3389502470"
+    },
+    {
+      "path": "docs/reviews/native-messaging/codex-provider-thread-environment-red-2026-09-07.log",
+      "sha256": "10e20bd07b82f76640ff251e8e141f9ddbec0eedaf74d73c15b8ade6eadd790d"
+    },
+    {
+      "path": "docs/reviews/native-messaging/codex-provider-thread-environment-red-compiled-2026-09-07.log",
+      "sha256": "4b0826aecfdf2800c139e48d65aba59e1147c0b18e64a84c8434015cf4c50058"
+    },
+    {
+      "path": "docs/reviews/native-messaging/codex-provider-thread-environment-tests-2026-09-07.log",
+      "sha256": "ef8adf114516cf42e1ec55b45ce2ba064925db13446e9b7d9966b1a34756af99"
+    },
+    {
+      "path": "docs/reviews/native-messaging/codex-provider-thread-environment-tests-final-2026-09-07.log",
+      "sha256": "6019c447c4e27cb3b5e58755e93ae379ba6b071c87a13dd6a29101e6c3950444"
+    },
+    {
+      "path": "docs/reviews/native-messaging/codex-provider-thread-environment-clippy-2026-09-07.log",
+      "sha256": "4ec2fbee2e9dc95b160a280131a818f71191fc205a6f6a981fa98b843aa88031"
+    },
+    {
+      "path": "docs/reviews/native-messaging/codex-provider-thread-environment-hooks-clippy-final-2026-09-07.log",
+      "sha256": "811f1a32c89b306da7277553a71ba6078bdeae9064f581d4dbbbb4abd350021d"
+    },
+    {
+      "path": "docs/reviews/native-messaging/codex-provider-thread-environment-format-2026-09-07.log",
+      "sha256": "2aca95a47e772e603b04e820b23b51421ff9e7fbf3cfaa98cae60b3389502470"
+    },
+    {
+      "path": "docs/reviews/native-messaging/codex-provider-thread-environment-shell-red-2026-09-07.log",
+      "sha256": "f985aa12b608dd6b0f5e83db7d7d9f5f3c7901f4fe4952586078a3b15623bcc8"
+    },
+    {
+      "path": "docs/reviews/native-messaging/codex-provider-startup-analytics-test-2026-09-07.log",
+      "sha256": "80bd1cb84c1fc4cea1e5ac0d6a34b2b93a931ccedac2fd639510824b204eea57"
+    },
+    {
+      "path": "docs/reviews/native-messaging/codex-provider-startup-analytics-suite-2026-09-07.log",
+      "sha256": "84cf39935d460b0663a4ca456e152836dbf4e88524d812dd89faf73e71222d45"
+    },
+    {
+      "path": "docs/reviews/native-messaging/codex-provider-startup-app-server-build-2026-09-07.log",
+      "sha256": "df1479d8b8530a90c4f4cca8edd12e9ca839f31e4445d696df65d37881f776b5"
+    },
+    {
+      "path": "docs/reviews/native-messaging/codex-provider-startup-format-2026-09-07.log",
+      "sha256": "2aca95a47e772e603b04e820b23b51421ff9e7fbf3cfaa98cae60b3389502470"
+    },
+    {
+      "path": "docs/reviews/native-messaging/codex-provider-startup-final-clippy-2026-09-07.log",
+      "sha256": "55eb97523df8fcedbabe2bb6473fd0095f497776f10bd3c6ef53775904a296f9"
+    }
+  ],
+  "subscription_checkpoint_patch": {
+    "path": "docs/reviews/native-messaging/codex-provider-subscription-2026-09-07.patch",
+    "sha256": "2d6b5ee6c2e1436193a64b9d48b611b82a6fc6c0d33c25c2c10273b642988f22",
+    "scope": "Subscription checkpoint before start-hook identity extension"
+  },
+  "installed_binary_changed": false,
+  "live_sessions_changed": false,
+  "start_hook_identity": {
+    "invariant": "A native start-hook payload distinguishes the exact thread from the shared family session",
+    "source_observation": "Session::session_id returns the family identity; existing start-hook payloads had no separate thread_id",
+    "producer": "core/src/hook_runtime.rs: SessionStartRequest.thread_id is assigned sess.thread_id()",
+    "public_payloads": [
+      "SessionStart",
+      "SubagentStart"
+    ],
+    "field": "thread_id",
+    "required": true,
+    "session_id_preserved": true,
+    "new_enrollment_or_execution_path": false,
+    "source_config_credentials_changed": false,
+    "startup_timing_changed": false,
+    "validation": {
+      "red": {
+        "command": "CARGO_TARGET_DIR=\"$PWD/target\" just test --cargo-profile dev-small --offline --locked --build-jobs 2 -p codex-hooks --lib -E 'test(start_hook_payload_preserves_session_and_exact_thread_identity)' --retries 0",
+        "exit_code": 100,
+        "passed": 0,
+        "failed": 1,
+        "filtered": 175,
+        "run_id": "2a107569-f4bc-4596-a5af-267eb47dbad0",
+        "failure": "hook input placeholder ${thread_id} was not found"
+      },
+      "green": {
+        "same_command_as_red": true,
+        "exit_code": 0,
+        "passed": 1,
+        "failed": 0,
+        "filtered": 175,
+        "run_id": "25fcd540-f0ea-4f6b-aaf3-a6cee66ca196"
+      },
+      "schema_generation": {
+        "command": "CARGO_TARGET_DIR=\"$PWD/target\" CARGO_NET_OFFLINE=true CARGO_BUILD_JOBS=2 just write-hooks-schema",
+        "exit_code": 0,
+        "hand_edited": false,
+        "changed_schemas": [
+          "hooks/schema/generated/session-start.command.input.schema.json",
+          "hooks/schema/generated/subagent-start.command.input.schema.json"
+        ]
+      },
+      "all_hooks_tests": {
+        "command": "CARGO_TARGET_DIR=\"$PWD/target\" just test --cargo-profile dev-small --offline --locked --build-jobs 2 -p codex-hooks --lib --retries 0",
+        "exit_code": 0,
+        "passed": 176,
+        "failed": 0,
+        "skipped": 0
+      },
+      "core_hooks_clippy": {
+        "command": "CARGO_TARGET_DIR=\"$PWD/target\" just clippy -p codex-core -p codex-hooks --profile dev-small --offline --locked -j 2",
+        "exit_code": 0,
+        "elapsed": "4m 17s",
+        "warning": "Unused import wiremock::matchers::body_json in unchanged core/tests/suite/openai_file_mcp.rs:47"
+      },
+      "rust_format": {
+        "command": "cargo fmt -- --config imports_granularity=Item",
+        "exit_code": 0,
+        "full_repository_formatter": "Previously blocked tooling/cache gates remain open"
+      },
+      "scope": "Dispatcher input regression uses a fake MCP hook executor and checks both event types; this is not ordinary-entrypoint enrollment or transport conformance",
+      "native_timing_and_credential_conformance": "not confirmed"
+    }
+  },
+  "identity_checkpoint_patch": {
+    "path": "docs/reviews/native-messaging/codex-provider-before-thread-environment-2026-09-07.patch",
+    "sha256": "81ccb78b2331ac7546e4b65f6d07ad10d281fc1f8736e4eec618a4c414fd9a88"
+  },
+  "thread_hook_environment": {
+    "source": "core/src/session/mod.rs::build_hooks_config copies selected local environment shell_environment_policy.set, or thread config when no local environment exists",
+    "runtime": "Hooks::from_config projects explicit overrides over the original captured environment; reconfiguration preserves shared async ownership and captured environments of admitted work",
+    "permission_policy_changed": false,
+    "startup_timing_changed": false,
+    "scope": "Actual hook command processes, two thread identities sharing a directory, rotation/removal, protected-variable scrub and in-flight reconfiguration. Ordinary shell-tool send/ack and remote-TUI enrollment are not confirmed.",
+    "validation": {
+      "initial_test_compile": {
+        "exit_code": 101,
+        "log": {
+          "path": "docs/reviews/native-messaging/codex-provider-thread-environment-red-2026-09-07.log",
+          "sha256": "10e20bd07b82f76640ff251e8e141f9ddbec0eedaf74d73c15b8ade6eadd790d"
+        },
+        "cause": "test module visibility, unavailable toml crate name and two explicit fixture constructors; corrected before behavioral red run"
+      },
+      "red": {
+        "command": "CARGO_TARGET_DIR=\"$PWD/target\" just test --cargo-profile dev-small --offline --locked --build-jobs 2 -p codex-hooks --lib -E 'test(thread_hook_environment_is_isolated_and_refresh_removes_old_overrides)' --retries 0",
+        "exit_code": 100,
+        "run_id": "0891d3ac-f52b-4210-a39e-1ff46f858942",
+        "failure": "missing thread override in executed hook environment",
+        "log": {
+          "path": "docs/reviews/native-messaging/codex-provider-thread-environment-red-compiled-2026-09-07.log",
+          "sha256": "4b0826aecfdf2800c139e48d65aba59e1147c0b18e64a84c8434015cf4c50058"
+        }
+      },
+      "shell_red": {
+        "command": "CARGO_TARGET_DIR=\"$PWD/target\" just test --cargo-profile dev-small --offline --locked --build-jobs 2 -p codex-hooks --lib -E 'test(default_shell_uses_last_snapshot_value)' --retries 0",
+        "exit_code": 100,
+        "run_id": "659bbb68-c2d6-4147-bb4b-674251d383f1",
+        "failure": "inherited shell selected instead of final configured value",
+        "log": {
+          "path": "docs/reviews/native-messaging/codex-provider-thread-environment-shell-red-2026-09-07.log",
+          "sha256": "f985aa12b608dd6b0f5e83db7d7d9f5f3c7901f4fe4952586078a3b15623bcc8"
+        }
+      },
+      "all_hooks_tests": {
+        "command": "CARGO_TARGET_DIR=\"$PWD/target\" just test --cargo-profile dev-small --offline --locked --build-jobs 2 -p codex-hooks --lib --retries 0",
+        "exit_code": 0,
+        "passed": 177,
+        "failed": 0,
+        "skipped": 0,
+        "run_id": "21f21f7e-9bbe-4871-b552-a5c135fbf7a7",
+        "log": {
+          "path": "docs/reviews/native-messaging/codex-provider-thread-environment-tests-final-2026-09-07.log",
+          "sha256": "6019c447c4e27cb3b5e58755e93ae379ba6b071c87a13dd6a29101e6c3950444"
+        }
+      },
+      "core_hooks_clippy": {
+        "command": "CARGO_TARGET_DIR=\"$PWD/target\" just clippy -p codex-core -p codex-hooks --profile dev-small --offline --locked -j 2",
+        "exit_code": 0,
+        "elapsed": "1m 50s",
+        "warning": "unused wiremock::matchers::body_json in unchanged core/tests/suite/openai_file_mcp.rs:47",
+        "log": {
+          "path": "docs/reviews/native-messaging/codex-provider-thread-environment-clippy-2026-09-07.log",
+          "sha256": "4ec2fbee2e9dc95b160a280131a818f71191fc205a6f6a981fa98b843aa88031"
+        }
+      },
+      "final_hooks_clippy": {
+        "command": "CARGO_TARGET_DIR=\"$PWD/target\" just clippy -p codex-hooks --profile dev-small --offline --locked -j 2",
+        "exit_code": 0,
+        "elapsed": "1m 39s",
+        "log": {
+          "path": "docs/reviews/native-messaging/codex-provider-thread-environment-hooks-clippy-final-2026-09-07.log",
+          "sha256": "811f1a32c89b306da7277553a71ba6078bdeae9064f581d4dbbbb4abd350021d"
+        }
+      },
+      "rust_format": {
+        "command": "cargo fmt -- --config imports_granularity=Item",
+        "exit_code": 0,
+        "full_repository_gate": "previously blocked; not rerun unchanged",
+        "log": {
+          "path": "docs/reviews/native-messaging/codex-provider-thread-environment-format-2026-09-07.log",
+          "sha256": "2aca95a47e772e603b04e820b23b51421ff9e7fbf3cfaa98cae60b3389502470"
+        }
+      },
+      "full_suite": "not run; IPC-dependent integration tests and full quality gates remain open"
+    }
+  },
+  "environment_checkpoint_patch": {
+    "path": "docs/reviews/native-messaging/codex-provider-before-startup-hooks-2026-09-07.patch",
+    "sha256": "fc13400ee76063f39156903a445f07e135a7f1b647dfb9dc10781d6f48a7dac5"
+  },
+  "startup_hooks": {
+    "status": "source_implemented_public_rpc_execution_not_confirmed",
+    "scope": [
+      "Root SessionStart startup/resume/clear executes during native initialization",
+      "Existing pending start queue carries completed effects until the first turn",
+      "SubagentStart and compact retain their turn-scoped execution",
+      "Session-scoped reporting uses no fabricated turn ID",
+      "No matching hook preserves lazy transcript creation"
+    ],
+    "native_permission_policy_changed": false,
+    "waggle_credential_handoff_implemented": false,
+    "real_fresh_idle_delivery_confirmed": false,
+    "tests_added": [
+      "startup_hook_analytics_has_no_fabricated_turn",
+      "session_start_precedes_first_turn_and_preserves_stop_and_context"
+    ],
+    "validation": {
+      "focused_analytics": {
+        "command": "CARGO_TARGET_DIR=\"$PWD/target\" just test --cargo-profile dev-small --offline --locked --build-jobs 2 -p codex-analytics --lib -E 'test(startup_hook_analytics_has_no_fabricated_turn)' --retries 0",
+        "exit_code": 0,
+        "run_id": "91420c23-eeb5-4dfb-b081-96c2afbb9d2a",
+        "passed": 1,
+        "filtered": 103,
+        "log": {
+          "path": "docs/reviews/native-messaging/codex-provider-startup-analytics-test-2026-09-07.log",
+          "sha256": "80bd1cb84c1fc4cea1e5ac0d6a34b2b93a931ccedac2fd639510824b204eea57"
+        }
+      },
+      "analytics_suite": {
+        "command": "CARGO_TARGET_DIR=\"$PWD/target\" just test --cargo-profile dev-small --offline --locked --build-jobs 2 -p codex-analytics --lib --retries 0",
+        "exit_code": 0,
+        "run_id": "51c7ead2-7a23-42a6-86c1-48d243970e0b",
+        "passed": 104,
+        "skipped": 0,
+        "log": {
+          "path": "docs/reviews/native-messaging/codex-provider-startup-analytics-suite-2026-09-07.log",
+          "sha256": "84cf39935d460b0663a4ca456e152836dbf4e88524d812dd89faf73e71222d45"
+        }
+      },
+      "app_server_test_build": {
+        "command": "CARGO_TARGET_DIR=\"$PWD/target\" cargo build --profile dev-small --offline --locked -j 2 -p codex-app-server --test all",
+        "exit_code": 0,
+        "tests_executed": false,
+        "log": {
+          "path": "docs/reviews/native-messaging/codex-provider-startup-app-server-build-2026-09-07.log",
+          "sha256": "df1479d8b8530a90c4f4cca8edd12e9ca839f31e4445d696df65d37881f776b5"
+        }
+      },
+      "rust_format": {
+        "command": "cargo fmt -- --config imports_granularity=Item",
+        "exit_code": 0,
+        "warning": "Stable rustfmt ignores the nightly-only imports_granularity option",
+        "full_repository_gate": "Previous missing tooling and uv cache restrictions remain unresolved",
+        "log": {
+          "path": "docs/reviews/native-messaging/codex-provider-startup-format-2026-09-07.log",
+          "sha256": "2aca95a47e772e603b04e820b23b51421ff9e7fbf3cfaa98cae60b3389502470"
+        }
+      },
+      "final_clippy": {
+        "command": "CARGO_TARGET_DIR=\"$PWD/target\" just clippy -p codex-app-server -p codex-core -p codex-hooks -p codex-analytics --profile dev-small --offline --locked -j 2",
+        "exit_code": 0,
+        "log": {
+          "path": "docs/reviews/native-messaging/codex-provider-startup-final-clippy-2026-09-07.log",
+          "sha256": "55eb97523df8fcedbabe2bb6473fd0095f497776f10bd3c6ef53775904a296f9"
+        },
+        "warning": "Unchanged upstream unused wiremock::matchers::body_json import at core/tests/suite/openai_file_mcp.rs:47",
+        "source_scope": "Final formatted source including new startup test; initial in-progress lint is not used as final evidence"
+      },
+      "public_rpc_execution": {
+        "status": "not_confirmed",
+        "attempted_here": false,
+        "reason": "Two prior fixture executions failed binding test sockets, including approved escalation; identical blocked attempts were not repeated",
+        "runner": "docs/reviews/native-messaging/run-codex-startup-checks.txt",
+        "scope": "Three thread/subscribe tests plus startup context/stop test",
+        "fixture_limit": "Explicit hook trust is supplied by the existing test config mechanism; this is not native permission conformance",
+        "runner_sha256": "2a278efff5d4b9de1c7a5652b4848056d37d4a9dbc9ccb9745d342450d347e1c",
+        "runner_syntax_check_exit_code": 0,
+        "runner_source_verifier_exit_code": 0
+      },
+      "full_core_suite": "not_run; native fixture execution remains blocked",
+      "whitespace": {
+        "exit_code": 0
+      },
+      "verification_order": "Analytics tests and integration-test compilation preceded formatting; final Clippy checked formatted source. No runtime tests were rerun solely for formatting.",
+      "patch_reverse_apply_check": {
+        "exit_code": 0
+      }
+    },
+    "verified_at_utc": "2026-09-07T02:36:47.157820+00:00"
+  }
+}

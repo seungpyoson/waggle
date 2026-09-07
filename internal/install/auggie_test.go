@@ -60,8 +60,8 @@ func TestInstallAuggie_CorrectContent(t *testing.T) {
 	if !strings.HasSuffix(string(data), "\n") {
 		t.Fatal("file does not end with trailing newline")
 	}
-	if !strings.Contains(string(data), "waggle adapter bootstrap auggie --format markdown") {
-		t.Fatalf("expected waggle adapter bootstrap command in content:\n%s", string(data))
+	if !strings.Contains(string(data), "Native messaging is unsupported") || strings.Contains(string(data), "adapter bootstrap") {
+		t.Fatalf("unsupported provider instructions still imply enrollment:\n%s", string(data))
 	}
 }
 

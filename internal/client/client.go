@@ -2,7 +2,9 @@ package client
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"time"
@@ -17,6 +19,44 @@ type Client struct {
 	scanner *bufio.Scanner
 }
 
+// Query performs one bounded anonymous request. A rejected response is an
+// error; reaching the socket alone is never a successful observation.
+func Query(ctx context.Context, socket string, timeout time.Duration, req protocol.Request) (data json.RawMessage, err error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	conn, err := (&net.Dialer{}).DialContext(ctx, "unix", socket)
+	if err != nil {
+		return nil, fmt.Errorf("connect to broker: %w", err)
+	}
+	defer func() { err = errors.Join(err, conn.Close()) }()
+	deadline, _ := ctx.Deadline()
+	if err := conn.SetDeadline(deadline); err != nil {
+		return nil, err
+	}
+	interrupted := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() { defer close(interrupted); conn.SetDeadline(time.Now()) })
+	defer func() {
+		if !stop() {
+			<-interrupted
+		}
+	}()
+	return query(newClient(conn), req)
+}
+
+func query(c *Client, req protocol.Request) (json.RawMessage, error) {
+	resp, err := c.Send(req)
+	if err != nil {
+		return nil, err
+	}
+	if !resp.OK {
+		return nil, fmt.Errorf("broker rejected %s: %s: %s", req.Cmd, resp.Code, resp.Error)
+	}
+	if len(resp.Data) == 0 || string(resp.Data) == "null" {
+		return nil, fmt.Errorf("broker returned no %s observation", req.Cmd)
+	}
+	return resp.Data, nil
+}
+
 // Connect establishes a connection to the broker socket with a timeout.
 func Connect(socketPath string, timeout time.Duration) (*Client, error) {
 	conn, err := net.DialTimeout("unix", socketPath, timeout)
@@ -24,16 +64,21 @@ func Connect(socketPath string, timeout time.Duration) (*Client, error) {
 		return nil, fmt.Errorf("connect to broker: %w", err)
 	}
 
+	return newClient(conn), nil
+}
+
+func newClient(conn net.Conn) *Client {
 	scanner := bufio.NewScanner(conn)
 	// Use configurable buffer size for large payloads (default 1MB, vs 64KB default)
 	bufSize := int(config.Defaults.MaxMessageSize)
 	scanner.Buffer(make([]byte, bufSize), bufSize)
 
-	return &Client{conn: conn, scanner: scanner}, nil
+	return &Client{conn: conn, scanner: scanner}
 }
 
 // Send sends a request and reads one response.
 func (c *Client) Send(req protocol.Request) (*protocol.Response, error) {
+	req.Version = config.ProtocolVersion
 	data, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
@@ -92,53 +137,6 @@ func (c *Client) ReadStream() (<-chan protocol.Event, error) {
 	}()
 
 	return eventChan, nil
-}
-
-// PushedMessage represents a message pushed from the broker.
-type PushedMessage struct {
-	ID     int64  `json:"id"`
-	From   string `json:"from"`
-	Body   string `json:"body"`
-	SentAt string `json:"sent_at"`
-}
-
-// ReadMessages returns a channel that receives pushed messages from the broker.
-// Filters out non-message responses (connect responses, etc).
-//
-// IMPORTANT: This method takes exclusive ownership of the connection's read stream.
-// After calling ReadMessages, do NOT call Send, Receive, or ReadStream on the same client.
-// The goroutine exits when the connection is closed.
-func (c *Client) ReadMessages() (<-chan PushedMessage, error) {
-	ch := make(chan PushedMessage, 64) // buffered to prevent goroutine leak if reader is slow
-	go func() {
-		defer close(ch)
-		for c.scanner.Scan() {
-			var resp protocol.Response
-			if err := json.Unmarshal(c.scanner.Bytes(), &resp); err != nil {
-				continue
-			}
-			if !resp.OK || len(resp.Data) == 0 {
-				continue
-			}
-			var msg struct {
-				Type   string `json:"type"`
-				ID     int64  `json:"id"`
-				From   string `json:"from"`
-				Body   string `json:"body"`
-				SentAt string `json:"sent_at"`
-			}
-			if err := json.Unmarshal(resp.Data, &msg); err != nil || msg.Type != "message" {
-				continue
-			}
-			ch <- PushedMessage{
-				ID:     msg.ID,
-				From:   msg.From,
-				Body:   msg.Body,
-				SentAt: msg.SentAt,
-			}
-		}
-	}()
-	return ch, nil
 }
 
 // SetDeadline sets a deadline on the underlying connection for all future I/O.

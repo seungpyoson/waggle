@@ -2,14 +2,10 @@ package cmd
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
-	"net"
 	"os"
-	"path/filepath"
 	"strconv"
 
-	"github.com/seungpyoson/waggle/internal/broker"
 	"github.com/seungpyoson/waggle/internal/client"
 	"github.com/seungpyoson/waggle/internal/config"
 	"github.com/seungpyoson/waggle/internal/protocol"
@@ -17,9 +13,8 @@ import (
 )
 
 var (
-	noAutoStart bool
-	paths       config.Paths
-	rootCmd     = &cobra.Command{
+	paths   config.Paths
+	rootCmd = &cobra.Command{
 		Use:   "waggle",
 		Short: "Agent session coordination broker",
 		Long:  "Waggle coordinates work between independent AI coding agent sessions through task distribution, file locks, and event streaming.",
@@ -28,7 +23,7 @@ var (
 				return nil
 			}
 
-			projectID, err := config.ResolveProjectID()
+			projectID, err := config.ResolveProjectID(cmd.Context())
 			if err != nil {
 				return err
 			}
@@ -39,44 +34,10 @@ var (
 				return fmt.Errorf("cannot determine data paths: HOME not set")
 			}
 
-			if noAutoStart {
-				return nil
-			}
-
-			needsStart := false
-			if broker.IsRunning(paths.PID) {
-				if !broker.IsResponding(paths.Socket, config.Defaults.HealthCheckTimeout) {
-					if pid, err := broker.ReadPID(paths.PID); err == nil {
-						_, _ = fmt.Fprintf(os.Stderr, "waggle: unresponsive broker (PID %d) detected, starting fresh instance\n", pid) // best-effort: warning emission must not block recovery.
-					} else {
-						_, _ = fmt.Fprintf(os.Stderr, "waggle: unresponsive broker detected, starting fresh instance\n") // best-effort: warning emission must not block recovery.
-					}
-					if err := os.Remove(paths.Socket); err != nil && !os.IsNotExist(err) {
-						return fmt.Errorf("removing stale socket: %w", err)
-					}
-					if err := os.Remove(paths.PID); err != nil && !os.IsNotExist(err) {
-						return fmt.Errorf("removing stale PID file: %w", err)
-					}
-					needsStart = true
-				}
-			} else {
-				needsStart = true
-			}
-
-			if needsStart {
-				if err := autoStartBroker(); err != nil {
-					return err
-				}
-			}
-
 			return nil
 		},
 	}
 )
-
-func init() {
-	rootCmd.PersistentFlags().BoolVar(&noAutoStart, "no-auto-start", false, "Don't auto-start broker")
-}
 
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
@@ -107,7 +68,7 @@ func printErr(code, message string) {
 func isBrokerIndependentCommand(cmd *cobra.Command) bool {
 	for current := cmd; current != nil; current = current.Parent() {
 		switch current.Name() {
-		case "start", "install", "uninstall", "help", "version", "runtime", "adapter", "status", "whoami":
+		case "start", "install", "uninstall", "help", "version", "status", "enroll":
 			return true
 		}
 	}
@@ -121,7 +82,7 @@ func connectToBroker(name string) (*client.Client, error) {
 
 	c, err := client.Connect(paths.Socket, config.Defaults.ConnectTimeout)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("broker unavailable; run waggle start: %w", err)
 	}
 
 	if err := c.SetDeadline(config.Defaults.ConnectTimeout); err != nil {
@@ -135,9 +96,6 @@ func connectToBroker(name string) (*client.Client, error) {
 	})
 	if err != nil {
 		c.Close()
-		if isTimeoutError(err) {
-			cleanupStaleFiles()
-		}
 		return nil, err
 	}
 
@@ -152,42 +110,6 @@ func connectToBroker(name string) (*client.Client, error) {
 	}
 
 	return c, nil
-}
-
-func isTimeoutError(err error) bool {
-	var netErr net.Error
-	return errors.As(err, &netErr) && netErr.Timeout()
-}
-
-func cleanupStaleFiles() {
-	if err := os.Remove(paths.Socket); err != nil && !os.IsNotExist(err) {
-		_, _ = fmt.Fprintf(os.Stderr, "waggle: warning: failed to remove stale socket: %v\n", err) // best-effort: timeout recovery can continue.
-	}
-	if err := os.Remove(paths.PID); err != nil && !os.IsNotExist(err) {
-		_, _ = fmt.Fprintf(os.Stderr, "waggle: warning: failed to remove stale PID file: %v\n", err) // best-effort: timeout recovery can continue.
-	}
-}
-
-func autoStartBroker() error {
-	if err := broker.CleanupStale(paths.PID, paths.Socket); err != nil {
-		return fmt.Errorf("cleaning up stale files: %w", err)
-	}
-
-	socketDir := filepath.Dir(paths.Socket)
-	if err := broker.EnsureDirs(paths.DataDir, socketDir); err != nil {
-		return fmt.Errorf("creating directories: %w", err)
-	}
-
-	args := []string{os.Args[0], "start", "--foreground"}
-	if err := broker.StartDaemon(paths.DataDir, socketDir, paths.Log, paths.ProjectID, args); err != nil {
-		return fmt.Errorf("starting broker daemon: %w", err)
-	}
-
-	if err := broker.WaitForReady(paths.PID, config.Defaults.StartupTimeout, config.Defaults.StartupPollInterval); err != nil {
-		return fmt.Errorf("auto-start broker: %w", err)
-	}
-
-	return nil
 }
 
 func disconnectAndClose(c *client.Client) {

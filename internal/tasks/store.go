@@ -7,10 +7,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
-	_ "modernc.org/sqlite"
+	"github.com/seungpyoson/waggle/internal/brokerstate"
 
 	"github.com/seungpyoson/waggle/internal/config"
 )
@@ -75,59 +74,16 @@ type ListFilter struct {
 	Owner string
 }
 
-// Store manages task persistence
-type Store struct {
-	db      *sql.DB
-	claimMu sync.Mutex // Serializes claim operations
-}
+// Store is a task-domain view of one fenced transaction. It cannot open,
+// commit, migrate, or close canonical storage.
+type Store struct{ tx *brokerstate.WriteTx }
 
-// NewStore creates a new task store from an existing database connection
-func NewStore(db *sql.DB) (*Store, error) {
-	if err := config.ValidateDefaults(); err != nil {
-		return nil, fmt.Errorf("invalid config: %w", err)
-	}
+func NewStore(tx *brokerstate.WriteTx) *Store { return &Store{tx: tx} }
 
-	s := &Store{db: db}
-	if err := s.migrate(); err != nil {
-		return nil, err
-	}
-	if err := s.migrateTaskSchema(); err != nil {
-		return nil, err
-	}
-
-	return s, nil
-}
-
-// Close closes the database
-func (s *Store) Close() error {
-	return s.db.Close()
-}
-
-// migrate creates the schema
-func (s *Store) migrate() error {
-	// Check schema version
-	var version int
-	err := s.db.QueryRow("SELECT version FROM schema_version LIMIT 1").Scan(&version)
-	if err == nil {
-		// Schema exists, check version
-		if version != 1 {
-			return fmt.Errorf("unsupported schema version %d", version)
-		}
-		return nil
-	}
-	if err != sql.ErrNoRows {
-		// Error other than "no rows" means table might not exist
-		// Try to create it
-	}
-
-	// Create schema
-	// DEFAULTs are safety nets — Go Create() always provides explicit values for
-	// lease_duration and max_retries. These defaults exist only to protect against
-	// a future INSERT path that omits these columns.
-	schema := fmt.Sprintf(`
-	CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
-
-	CREATE TABLE IF NOT EXISTS tasks (
+// Schema is used only by explicit canonical initialization or offline conversion.
+func Schema() string {
+	return fmt.Sprintf(`
+	CREATE TABLE tasks (
 		id              INTEGER PRIMARY KEY AUTOINCREMENT,
 		idempotency_key TEXT UNIQUE,
 		type            TEXT,
@@ -144,33 +100,16 @@ func (s *Store) migrate() error {
 		lease_duration  INTEGER DEFAULT %d,
 		max_retries     INTEGER DEFAULT %d,
 		retry_count     INTEGER DEFAULT 0,
+		ttl             INTEGER,
 		result          TEXT,
 		failure_reason  TEXT,
 		created_at      TEXT NOT NULL DEFAULT (strftime('%%Y-%%m-%%dT%%H:%%M:%%SZ', 'now')),
 		updated_at      TEXT NOT NULL DEFAULT (strftime('%%Y-%%m-%%dT%%H:%%M:%%SZ', 'now'))
 	);
 
-	CREATE INDEX IF NOT EXISTS idx_tasks_claimable ON tasks (state, blocked, priority DESC, created_at ASC);
-	CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_idempotency ON tasks (idempotency_key) WHERE idempotency_key IS NOT NULL;
+	CREATE INDEX idx_tasks_claimable ON tasks (state, blocked, priority DESC, created_at ASC);
+	CREATE UNIQUE INDEX idx_tasks_idempotency ON tasks (idempotency_key) WHERE idempotency_key IS NOT NULL;
 	`, int(config.Defaults.LeaseDuration.Seconds()), config.Defaults.MaxRetries)
-
-	if _, err := s.db.Exec(schema); err != nil {
-		return fmt.Errorf("creating schema: %w", err)
-	}
-
-	// Insert schema version if not exists
-	var count int
-	err = s.db.QueryRow("SELECT COUNT(*) FROM schema_version").Scan(&count)
-	if err != nil {
-		return fmt.Errorf("checking schema_version: %w", err)
-	}
-	if count == 0 {
-		if _, err := s.db.Exec("INSERT INTO schema_version (version) VALUES (1)"); err != nil {
-			return fmt.Errorf("inserting schema version: %w", err)
-		}
-	}
-
-	return nil
 }
 
 // nullableInt converts 0 to SQL NULL
@@ -181,28 +120,12 @@ func nullableInt(v int) interface{} {
 	return v
 }
 
-// migrateTaskSchema adds the ttl column if it doesn't exist
-func (s *Store) migrateTaskSchema() error {
-	var colCount int
-	if err := s.db.QueryRow(
-		`SELECT COUNT(*) FROM pragma_table_info('tasks') WHERE name = 'ttl'`,
-	).Scan(&colCount); err != nil {
-		return fmt.Errorf("checking ttl column: %w", err)
-	}
-	if colCount == 0 {
-		if _, err := s.db.Exec("ALTER TABLE tasks ADD COLUMN ttl INTEGER"); err != nil {
-			return fmt.Errorf("adding ttl column: %w", err)
-		}
-	}
-	return nil
-}
-
 // Create creates a new task
 func (s *Store) Create(params CreateParams) (*Task, error) {
 	// Check for existing task with same idempotency key
 	if params.IdempotencyKey != "" {
 		var existingID int64
-		err := s.db.QueryRow("SELECT id FROM tasks WHERE idempotency_key = ?", params.IdempotencyKey).Scan(&existingID)
+		err := s.tx.Scan("SELECT id FROM tasks WHERE idempotency_key = ?", []any{params.IdempotencyKey}, &existingID)
 		if err == nil {
 			return s.Get(existingID)
 		}
@@ -256,7 +179,7 @@ func (s *Store) Create(params CreateParams) (*Task, error) {
 		idempotencyKey = params.IdempotencyKey
 	}
 
-	result, err := s.db.Exec(`
+	result, err := s.tx.Exec(`
 		INSERT INTO tasks (idempotency_key, type, tags, payload, priority, blocked, depends_on, lease_duration, max_retries, ttl)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, idempotencyKey, params.Type, tagsJSON, params.Payload, params.Priority, blocked, dependsOnJSON, leaseDuration, maxRetries, nullableInt(params.TTL))
@@ -274,25 +197,25 @@ func (s *Store) Create(params CreateParams) (*Task, error) {
 
 // Get retrieves a task by ID
 func (s *Store) Get(id int64) (*Task, error) {
-	row := s.db.QueryRow(`
+	return scanTask(func(dest ...any) error {
+		return s.tx.Scan(`
 		SELECT id, idempotency_key, type, tags, payload, priority, state, blocked, depends_on,
 		       claim_token, claimed_by, claimed_at, lease_expires_at, lease_duration, max_retries,
 		       retry_count, ttl, result, failure_reason, created_at, updated_at
 		FROM tasks WHERE id = ?
-	`, id)
-
-	return scanTask(row)
+	`, []any{id}, dest...)
+	})
 }
 
 // scanTask scans a task from a row
-func scanTask(row *sql.Row) (*Task, error) {
+func scanTask(scan func(...any) error) (*Task, error) {
 	var t Task
 	var idempotencyKey, taskType, tagsJSON, dependsOnJSON sql.NullString
 	var claimToken, claimedBy, claimedAt, leaseExpiresAt sql.NullString
 	var result, failureReason sql.NullString
 	var ttl sql.NullInt64
 
-	err := row.Scan(
+	err := scan(
 		&t.ID, &idempotencyKey, &taskType, &tagsJSON, &t.Payload, &t.Priority, &t.State, &t.Blocked, &dependsOnJSON,
 		&claimToken, &claimedBy, &claimedAt, &leaseExpiresAt, &t.LeaseDuration, &t.MaxRetries,
 		&t.RetryCount, &ttl, &result, &failureReason, &t.CreatedAt, &t.UpdatedAt,
@@ -347,10 +270,6 @@ func scanTask(row *sql.Row) (*Task, error) {
 
 // Claim atomically claims the next eligible task
 func (s *Store) Claim(worker string, filter ClaimFilter) (*Task, error) {
-	// Serialize claim operations to avoid transaction conflicts
-	s.claimMu.Lock()
-	defer s.claimMu.Unlock()
-
 	// Generate claim token
 	tokenBytes := make([]byte, 16)
 	if _, err := rand.Read(tokenBytes); err != nil {
@@ -360,13 +279,6 @@ func (s *Store) Claim(worker string, filter ClaimFilter) (*Task, error) {
 
 	// Calculate lease expiry
 	leaseExpiresAt := time.Now().Add(config.Defaults.LeaseDuration).UTC().Format(time.RFC3339)
-
-	// Use immediate transaction mode via pragma
-	// SQLite's BEGIN IMMEDIATE must be the first statement in the transaction
-	_, err := s.db.Exec("BEGIN IMMEDIATE")
-	if err != nil {
-		return nil, err
-	}
 
 	// Build query with optional type and tags filters
 	query := `
@@ -389,19 +301,17 @@ func (s *Store) Claim(worker string, filter ClaimFilter) (*Task, error) {
 	query += " ORDER BY priority DESC, created_at ASC LIMIT 1"
 
 	var taskID int64
-	err = s.db.QueryRow(query, args...).Scan(&taskID)
+	err := s.tx.Scan(query, args, &taskID)
 	if err == sql.ErrNoRows {
-		s.db.Exec("ROLLBACK")
 		return nil, fmt.Errorf("no eligible tasks")
 	}
 	if err != nil {
-		s.db.Exec("ROLLBACK")
 		return nil, err
 	}
 
 	// Update task to claimed
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, err = s.db.Exec(`
+	_, err = s.tx.Exec(`
 		UPDATE tasks
 		SET state = 'claimed',
 		    claim_token = ?,
@@ -412,12 +322,6 @@ func (s *Store) Claim(worker string, filter ClaimFilter) (*Task, error) {
 		WHERE id = ?
 	`, claimToken, worker, now, leaseExpiresAt, now, taskID)
 	if err != nil {
-		s.db.Exec("ROLLBACK")
-		return nil, err
-	}
-
-	if _, err := s.db.Exec("COMMIT"); err != nil {
-		s.db.Exec("ROLLBACK")
 		return nil, err
 	}
 
@@ -427,7 +331,7 @@ func (s *Store) Claim(worker string, filter ClaimFilter) (*Task, error) {
 // Complete marks a task as completed
 func (s *Store) Complete(id int64, claimToken, result string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
-	res, err := s.db.Exec(`
+	res, err := s.tx.Exec(`
 		UPDATE tasks
 		SET state = 'completed',
 		    result = ?,
@@ -452,7 +356,7 @@ func (s *Store) Complete(id int64, claimToken, result string) error {
 // Fail marks a task as failed
 func (s *Store) Fail(id int64, claimToken, reason string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
-	res, err := s.db.Exec(`
+	res, err := s.tx.Exec(`
 		UPDATE tasks
 		SET state = 'failed',
 		    failure_reason = ?,
@@ -477,7 +381,7 @@ func (s *Store) Fail(id int64, claimToken, reason string) error {
 // Cancel marks a task as canceled
 func (s *Store) Cancel(id int64) error {
 	now := time.Now().UTC().Format(time.RFC3339)
-	res, err := s.db.Exec(`
+	res, err := s.tx.Exec(`
 		UPDATE tasks
 		SET state = 'canceled',
 		    updated_at = ?
@@ -503,7 +407,7 @@ func (s *Store) Heartbeat(id int64, claimToken string) error {
 	leaseExpiresAt := time.Now().Add(config.Defaults.LeaseDuration).UTC().Format(time.RFC3339)
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	res, err := s.db.Exec(`
+	res, err := s.tx.Exec(`
 		UPDATE tasks
 		SET lease_expires_at = ?,
 		    updated_at = ?
@@ -550,81 +454,25 @@ func (s *Store) List(filter ListFilter) ([]*Task, error) {
 
 	query += " ORDER BY created_at ASC"
 
-	rows, err := s.db.Query(query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var tasks []*Task
-	for rows.Next() {
-		var t Task
-		var idempotencyKey, taskType, tagsJSON, dependsOnJSON sql.NullString
-		var claimToken, claimedBy, claimedAt, leaseExpiresAt sql.NullString
-		var result, failureReason sql.NullString
-		var ttl sql.NullInt64
-
-		err := rows.Scan(
-			&t.ID, &idempotencyKey, &taskType, &tagsJSON, &t.Payload, &t.Priority, &t.State, &t.Blocked, &dependsOnJSON,
-			&claimToken, &claimedBy, &claimedAt, &leaseExpiresAt, &t.LeaseDuration, &t.MaxRetries,
-			&t.RetryCount, &ttl, &result, &failureReason, &t.CreatedAt, &t.UpdatedAt,
-		)
-		if err != nil {
-			return nil, err
-		}
-
-		// Handle nullable fields
-		if idempotencyKey.Valid {
-			t.IdempotencyKey = idempotencyKey.String
-		}
-		if taskType.Valid {
-			t.Type = taskType.String
-		}
-		if claimToken.Valid {
-			t.ClaimToken = claimToken.String
-		}
-		if claimedBy.Valid {
-			t.ClaimedBy = claimedBy.String
-		}
-		if claimedAt.Valid {
-			t.ClaimedAt = claimedAt.String
-		}
-		if leaseExpiresAt.Valid {
-			t.LeaseExpiresAt = leaseExpiresAt.String
-		}
-		if ttl.Valid {
-			t.TTL = int(ttl.Int64)
-		}
-		if result.Valid {
-			t.Result = result.String
-		}
-		if failureReason.Valid {
-			t.FailureReason = failureReason.String
-		}
-
-		// Unmarshal JSON arrays
-		if tagsJSON.Valid && tagsJSON.String != "" {
-			if err := json.Unmarshal([]byte(tagsJSON.String), &t.Tags); err != nil {
-				return nil, fmt.Errorf("unmarshaling tags: %w", err)
+	result := make([]*Task, 0)
+	err := s.tx.Query(query, args, func(rows *sql.Rows) error {
+		for rows.Next() {
+			task, err := scanTask(rows.Scan)
+			if err != nil {
+				return err
 			}
+			result = append(result, task)
 		}
-		if dependsOnJSON.Valid && dependsOnJSON.String != "" {
-			if err := json.Unmarshal([]byte(dependsOnJSON.String), &t.DependsOn); err != nil {
-				return nil, fmt.Errorf("unmarshaling depends_on: %w", err)
-			}
-		}
-
-		tasks = append(tasks, &t)
-	}
-
-	return tasks, rows.Err()
+		return nil
+	})
+	return result, err
 }
 
 // CancelExpiredTTL cancels pending tasks whose TTL has expired.
 // Only cancels 'pending' tasks — claimed tasks are managed by the lease checker.
 func (s *Store) CancelExpiredTTL() (int, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
-	result, err := s.db.Exec(`
+	result, err := s.tx.Exec(`
 		UPDATE tasks
 		SET state = 'canceled',
 		    failure_reason = 'ttl_expired',
@@ -659,12 +507,12 @@ func (s *Store) QueueHealth(staleThreshold time.Duration) (*QueueHealth, error) 
 
 	// Oldest pending age + count
 	var oldestAge sql.NullInt64
-	err := s.db.QueryRow(`
+	err := s.tx.Scan(`
 		SELECT
 		    CAST(strftime('%s','now') AS INTEGER) - MIN(CAST(strftime('%s', created_at) AS INTEGER)),
 		    COUNT(*)
 		FROM tasks WHERE state = 'pending'
-	`).Scan(&oldestAge, &health.PendingCount)
+	`, []any{}, &oldestAge, &health.PendingCount)
 	if err != nil {
 		return nil, fmt.Errorf("querying queue health: %w", err)
 	}
@@ -674,11 +522,11 @@ func (s *Store) QueueHealth(staleThreshold time.Duration) (*QueueHealth, error) 
 
 	// Stale count (pending > threshold)
 	thresholdSecs := int(staleThreshold.Seconds())
-	err = s.db.QueryRow(`
+	err = s.tx.Scan(`
 		SELECT COUNT(*) FROM tasks
 		WHERE state = 'pending'
 		  AND CAST(strftime('%s','now') AS INTEGER) - CAST(strftime('%s', created_at) AS INTEGER) > ?
-	`, thresholdSecs).Scan(&health.StaleCount)
+	`, []any{thresholdSecs}, &health.StaleCount)
 	if err != nil {
 		return nil, fmt.Errorf("querying stale count: %w", err)
 	}
@@ -689,7 +537,7 @@ func (s *Store) QueueHealth(staleThreshold time.Duration) (*QueueHealth, error) 
 // RequeueAllClaimed requeues all claimed tasks (for crash recovery)
 func (s *Store) RequeueAllClaimed() (int, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
-	res, err := s.db.Exec(`
+	res, err := s.tx.Exec(`
 		UPDATE tasks
 		SET state = 'pending',
 		    claimed_by = NULL,
@@ -715,7 +563,7 @@ func (s *Store) RequeueAllClaimed() (int, error) {
 // RequeueByOwner requeues all tasks claimed by a specific owner (for session cleanup)
 func (s *Store) RequeueByOwner(owner string) (int, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
-	res, err := s.db.Exec(`
+	res, err := s.tx.Exec(`
 		UPDATE tasks
 		SET state = 'pending',
 		    claimed_by = NULL,
@@ -740,27 +588,19 @@ func (s *Store) RequeueByOwner(owner string) (int, error) {
 
 // CountByState returns task counts grouped by state
 func (s *Store) CountByState() (map[string]int, error) {
-	rows, err := s.db.Query(`
-		SELECT state, COUNT(*) as count
-		FROM tasks
-		GROUP BY state
-	`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
 	counts := make(map[string]int)
-	for rows.Next() {
-		var state string
-		var count int
-		if err := rows.Scan(&state, &count); err != nil {
-			return nil, err
+	err := s.tx.Query("SELECT state, COUNT(*) FROM tasks GROUP BY state", nil, func(rows *sql.Rows) error {
+		for rows.Next() {
+			var state string
+			var count int
+			if err := rows.Scan(&state, &count); err != nil {
+				return err
+			}
+			counts[state] = count
 		}
-		counts[state] = count
-	}
-
-	return counts, rows.Err()
+		return nil
+	})
+	return counts, err
 }
 
 // UpdateParams holds parameters for updating a task
@@ -804,7 +644,7 @@ func (s *Store) Update(id int64, params UpdateParams) error {
 	args = append(args, id)
 
 	query := "UPDATE tasks SET " + strings.Join(updates, ", ") + " WHERE id = ?"
-	res, err := s.db.Exec(query, args...)
+	res, err := s.tx.Exec(query, args...)
 	if err != nil {
 		return err
 	}
@@ -826,7 +666,7 @@ func (s *Store) RequeueExpiredLeases() (int, error) {
 	totalCount := 0
 
 	// First, mark tasks that have exceeded max retries as failed
-	res1, err := s.db.Exec(`
+	res1, err := s.tx.Exec(`
 		UPDATE tasks
 		SET state = 'failed',
 		    failure_reason = 'max_retries_exceeded',
@@ -851,7 +691,7 @@ func (s *Store) RequeueExpiredLeases() (int, error) {
 	totalCount += int(rows1)
 
 	// Then, re-queue tasks that haven't exceeded max retries
-	res2, err := s.db.Exec(`
+	res2, err := s.tx.Exec(`
 		UPDATE tasks
 		SET state = 'pending',
 		    retry_count = retry_count + 1,

@@ -1,0 +1,406 @@
+{
+  "binary_sha256": "a93fb2616ea9982c29a2322fbeee22a2a3493f4124e8778c728a4029e5f937e5",
+  "conditions": {
+    "outside_repository": true,
+    "fresh_home": true,
+    "empty_path": true,
+    "broker_state_absent": true,
+    "network_independently_disabled": false
+  },
+  "entrypoints": [
+    {
+      "args": [
+        "--help"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout_sha256": "75b1b03d222f485f219bf09b67d59e5212033ce0e6ca86871a85d9d9a1b93529"
+    },
+    {
+      "args": [
+        "ack",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout_sha256": "9821eeca8344526d21790e5d0fd8573c590093885c9322aa042daa971f46321c"
+    },
+    {
+      "args": [
+        "completion",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout_sha256": "ad0838b735878ebc4e6b47f54af43415126801b1edb3e9c74ef809152c52715f"
+    },
+    {
+      "args": [
+        "connect",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout_sha256": "b7c7edf7d829a01eed5532bd2f104503abb43ee3846940822e9384c19f96ced7"
+    },
+    {
+      "args": [
+        "conversation",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout_sha256": "59f540ea3bc1a6466d71db2f745ab8dfeacd3e45733b69bac8d6af66bcebd747"
+    },
+    {
+      "args": [
+        "enqueue",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout_sha256": "df002347289725d58c7eceea86e90112d43de789167a2fdf619483a7f5be88d6"
+    },
+    {
+      "args": [
+        "enroll",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout_sha256": "688bcc7f4828c5ca088f8350ce348f172afe78995c9cbe26a5afe29c6361bcef"
+    },
+    {
+      "args": [
+        "events",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout_sha256": "fbe204d4785ee32c3400fb2b7a3ad9319adb8a972bc581630583b15f42714145"
+    },
+    {
+      "args": [
+        "help",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout_sha256": "365c5a04fb9c61851864847d70387416edb6614abc4efcae30257d3568f077c1"
+    },
+    {
+      "args": [
+        "inbox",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout_sha256": "d633aa55c854761cafda9ef7767fa86605cbb73c0c55b22cdcd0b44cd2f0e4c5"
+    },
+    {
+      "args": [
+        "install",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout_sha256": "118bfd7f3e3074a421b366e55a61cb1978c23b4f67e4f2cf3464e3b9feb494e8"
+    },
+    {
+      "args": [
+        "lock",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout_sha256": "9e43fd00fc5ce07c9cdbb068d64055b6abfc017071b2a8bfdf79b9cd615e4da4"
+    },
+    {
+      "args": [
+        "locks",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout_sha256": "e1cf67bfe52e6ccf6c3c54568ad0ce153bda25d8d0a5823d4a9177687e8969e0"
+    },
+    {
+      "args": [
+        "reply",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout_sha256": "a6e161d3dc2ef16a247249c270aa0f6a7dc7c3f35211180edb029206c077dcac"
+    },
+    {
+      "args": [
+        "retire",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout_sha256": "663a252ef414d2d1c11d24d6a881896394b837b7fc629074cac68bfeceae2acb"
+    },
+    {
+      "args": [
+        "send",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout_sha256": "7fd147a9ad4e86adb7e593b4f3de51a8ae0a7a720d0d88cdc7f9e7e5c70846a8"
+    },
+    {
+      "args": [
+        "sessions",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout_sha256": "827ec3fd73ab1c29b9257596fbca64e4bf596efc9f77af957150b595fbba5ea8"
+    },
+    {
+      "args": [
+        "spawn",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout_sha256": "f3d76bdc1c1e1e64d080e6639f2a4b947d4db815df9796159b47938cc9e20890"
+    },
+    {
+      "args": [
+        "start",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout_sha256": "b0dc0dbeec797ddc966783567a2a03674b1cc4a2e73494ec382f90f416314950"
+    },
+    {
+      "args": [
+        "status",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout_sha256": "763c62fedb68c0d865408faf3e0d5115efffc3822913b313c8dba9c9cda4bc24"
+    },
+    {
+      "args": [
+        "stop",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout_sha256": "b937eba0b62c34e8edfc9288aa6229e651e96d4e8ec498a2ed236230903f2e31"
+    },
+    {
+      "args": [
+        "task",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout_sha256": "29749d9bf65fa699be069ad09d02bced7e890900af69fcc821646f8fbf4a7614"
+    },
+    {
+      "args": [
+        "uninstall",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout_sha256": "a602223f8705799b8adf0ddf6019c85c65306179bdf5ed4bd9b6534b481b4eb1"
+    },
+    {
+      "args": [
+        "unlock",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout_sha256": "63cd4b8aa96500bd3bbf9fa34e3e922da82eab1a969f27f5dfd0ce9947c42191"
+    },
+    {
+      "args": [
+        "version",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout_sha256": "c09228719f5409240d10cfb126e73affc2513e39385e059b925cdb8bdad25827"
+    },
+    {
+      "args": [
+        "whoami",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout_sha256": "5ae6abee4e0e6bd57b7e66b3f2cbc57d447c611b7fa8e8f800d8c4ac1304db5e"
+    },
+    {
+      "args": [
+        "completion",
+        "bash",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout_sha256": "34e6a8282dc731149feb3e9f6eafee0d69decfe255f9f8b5d278c911685c3095"
+    },
+    {
+      "args": [
+        "completion",
+        "fish",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout_sha256": "42b830a1ad3bc3d9615a018ebce2fa0de92ac824a570d1466cedd939ae97e5d5"
+    },
+    {
+      "args": [
+        "completion",
+        "powershell",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout_sha256": "96e86a9fec789c9f5775705d3e69a1f2764cb5f6afe56b1dee929b65a12250c1"
+    },
+    {
+      "args": [
+        "completion",
+        "zsh",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout_sha256": "343878ed601784ae93d24a1709e4ddc3e6d9c9f92928e55722f4bd5b1581c3f7"
+    },
+    {
+      "args": [
+        "conversation",
+        "stop",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout_sha256": "72cad9de518011f8f15103e44efb6f8c9d82337d030cacec1a55b8ed436c9199"
+    },
+    {
+      "args": [
+        "events",
+        "publish",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout_sha256": "6bdf1e278a51e4dc7ff6dbaa0354539a28b5c6041bea0994d4af054840982f67"
+    },
+    {
+      "args": [
+        "events",
+        "subscribe",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout_sha256": "f3961bcdb1459803d4588996f31ceb25bce14f1d80a045cafcb7d339d272114d"
+    },
+    {
+      "args": [
+        "task",
+        "cancel",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout_sha256": "13f9cda34accf54cc03fad8826c401a100ad74e76dd9a7cffa7e8eaf1c8ddc20"
+    },
+    {
+      "args": [
+        "task",
+        "claim",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout_sha256": "5379defc73ade1fb512090316befdadfb811ca39ad85d601fff297da0aa6b148"
+    },
+    {
+      "args": [
+        "task",
+        "complete",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout_sha256": "74a8c24ec76fe1ea948a36d3b7fd069615e9882899e05d0bacb3b4d4edc9c3ee"
+    },
+    {
+      "args": [
+        "task",
+        "create",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout_sha256": "9aa95a58aa2599ddddd9b9fde3179273a2967d08d417d155b789d17b5af22e52"
+    },
+    {
+      "args": [
+        "task",
+        "fail",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout_sha256": "f06656145c4fde52cbe43a117dc30ad48a39fbd19e0e9c3b0eb47af8d2ee965f"
+    },
+    {
+      "args": [
+        "task",
+        "get",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout_sha256": "e6f590859946fc86b3564a3e4136b2d19f6a29f00258fa87f72bd111313fbd92"
+    },
+    {
+      "args": [
+        "task",
+        "heartbeat",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout_sha256": "728f458924d5b8408be1c8ccd03447b3cc3e3b57f2f667a97d5e55cbc8ad3197"
+    },
+    {
+      "args": [
+        "task",
+        "list",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout_sha256": "74e7f62e948d35555312ae273c83aa9a8f2d1c6ae11472b00a69e236696e7653"
+    },
+    {
+      "args": [
+        "task",
+        "update",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout_sha256": "fb4d4b681dc03b5ed4826dfaa8d3ff84e100b4dca8c772bbe3129392268e7666"
+    }
+  ],
+  "created_files": []
+}

@@ -1,14 +1,7 @@
 ---
 name: waggle-inbox
-description: Check your waggle inbox for messages from other agents
+description: Read canonical message evidence without mutating receipts.
 ---
 
-Execute this command:
-
-```bash
-WAGGLE_AGENT_NAME="${WAGGLE_AGENT_NAME:-claude-$$}" waggle inbox
-```
-
-Returns JSON with messages. Each message has `id`, `from`, `body`, `priority`, `state`.
-After reading, acknowledge important messages with `/waggle ack <id>`.
+Run `waggle inbox`. Each message separates possession, conversation disposition, deadline and attempt identity. Reading this view does not acknowledge a message or establish native delivery. Acknowledge the native envelope using the command in its Waggle-authored header.
 

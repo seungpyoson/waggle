@@ -65,7 +65,7 @@ func InstallDetectedInHome(homeDir string, lookPath LookPathFunc) ([]InstallResu
 		}
 		results = append(results, InstallResult{
 			Platform: detection.Name,
-			Message:  installMessage(detection.Name),
+			Message:  InstallMessage(detection.Name),
 		})
 	}
 	return results, nil
@@ -88,21 +88,10 @@ func InstallPlatformInHome(homeDir, platform string) error {
 	}
 }
 
-func installMessage(platform string) string {
-	switch platform {
-	case PlatformClaudeCode:
-		return "Claude Code integration installed. Restart Claude Code to activate."
-	case PlatformCodex:
-		return "Codex integration installed. Restart Codex to activate."
-	case PlatformGemini:
-		return "Gemini integration installed. Restart Gemini to activate."
-	case PlatformAuggie:
-		return "Auggie integration installed. Restart Auggie to activate."
-	case PlatformAugment:
-		return "Augment integration installed. Restart Augment to activate."
-	default:
-		return fmt.Sprintf("%s integration installed", platform)
-	}
+// InstallMessage describes file installation only. Native readiness is reported
+// by verified broker enrollment, never by installer file checks.
+func InstallMessage(platform string) string {
+	return fmt.Sprintf("%s integration files installed; native messaging is not yet available in this build.", platform)
 }
 
 func detectPlatform(homeDir string, lookPath LookPathFunc, name string, dirs []string, binaries []string) PlatformDetection {

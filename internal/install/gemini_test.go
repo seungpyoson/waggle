@@ -24,8 +24,8 @@ func TestInstall_GeminiCreatesBlock(t *testing.T) {
 	if !strings.Contains(content, geminiBlockBegin) || !strings.Contains(content, geminiBlockEnd) {
 		t.Fatalf("managed block markers missing:\n%s", content)
 	}
-	if !strings.Contains(content, "waggle adapter bootstrap gemini") {
-		t.Fatalf("bootstrap command missing:\n%s", content)
+	if !strings.Contains(content, "Native messaging is unsupported") || strings.Contains(content, "adapter bootstrap") {
+		t.Fatalf("unsupported provider instructions still imply enrollment:\n%s", content)
 	}
 }
 
@@ -226,7 +226,7 @@ func TestCheckGemini_BrokenTruncated(t *testing.T) {
 	if len(issues) == 0 {
 		t.Fatal("expected at least one issue")
 	}
-	expected := "managed block truncated (begin marker without end marker)"
+	expected := "managed block has invalid topology: unpaired managed-block marker; refusing to mutate"
 	if issues[0].Problem != expected {
 		t.Fatalf("expected %q, got %q", expected, issues[0].Problem)
 	}
@@ -256,7 +256,7 @@ func TestCheckGemini_BrokenOrphanedEnd(t *testing.T) {
 	if len(issues) == 0 {
 		t.Fatal("expected issues for orphaned end marker, got none")
 	}
-	expected := "managed block has invalid topology: orphaned end marker without begin marker; refusing to mutate"
+	expected := "managed block has invalid topology: unpaired managed-block marker; refusing to mutate"
 	if issues[0].Problem != expected {
 		t.Fatalf("expected %q, got %q", expected, issues[0].Problem)
 	}

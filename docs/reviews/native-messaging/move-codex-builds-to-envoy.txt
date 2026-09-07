@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+set -euo pipefail
+export PYTHONDONTWRITEBYTECODE=1
+python3 - "$0" <<'PY'
+import os
+import pathlib
+import shutil
+import subprocess
+import sys
+import uuid
+
+packet = pathlib.Path(sys.argv[1]).resolve().parent
+repo = packet.parents[2]
+source = repo / ".worktrees/codex-native/codex-rs/target"
+volume = pathlib.Path("/Volumes/Dev-OWC-Envoy")
+project = volume / "waggle-native-builds"
+workspace = project / "work/build--native-messaging"
+target = workspace / "target"
+ws = repo.parent / "agent-config/bin/ws"
+config = packet / "envoy-build-storage.toml"
+
+def run(*args, **kwargs):
+    return subprocess.run(list(map(str, args)), check=True, **kwargs)
+
+def ensure_quiet(directory):
+    scan = subprocess.run(
+        ["/usr/sbin/lsof", "-nP", "+D", str(directory)],
+        capture_output=True, text=True,
+    )
+    if scan.returncode not in (0, 1) or scan.stderr.strip():
+        raise RuntimeError("Cannot establish open-file status; no local files removed: " + scan.stderr)
+    if scan.stdout.strip() or scan.returncode == 0:
+        raise RuntimeError("Build files are open. Stop builds before rerunning:\n" + scan.stdout)
+
+def verify_copy(original, copied):
+    result = run(
+        "/usr/bin/rsync", "-aHnci", "--delete", "--",
+        str(original) + "/", str(copied) + "/",
+        capture_output=True, text=True,
+    )
+    if result.stdout.strip() or result.stderr.strip():
+        raise RuntimeError("Copy verification failed; local files retained:\n" + result.stdout + result.stderr)
+
+def ignore_build_link():
+    # Upstream /target/ ignores directories, but Git treats the relocated
+    # symlink as a file. Keep this checkout's build location out of source.
+    exclude = source.parent.parent / ".git/info/exclude"
+    pattern = "/codex-rs/target"
+    existing = exclude.read_text()
+    if pattern not in existing.splitlines():
+        with exclude.open("a") as handle:
+            handle.write("\n# Envoy build output (directory or symlink).\n" + pattern + "\n")
+
+if not volume.is_mount():
+    sys.exit("Dev Envoy is not mounted; nothing moved.")
+if source.is_symlink():
+    if source.resolve(strict=True) == target.resolve(strict=True) and target.stat().st_dev == volume.stat().st_dev:
+        leftovers = list(source.parent.glob("target.before-envoy-*"))
+        if leftovers:
+            sys.exit("Builds are on Envoy, but an interrupted move retained local copies: " + ", ".join(map(str, leftovers)))
+        ignore_build_link()
+        print("Already on Dev Envoy:", target)
+        sys.exit(0)
+    sys.exit("The build path is already a different symlink; nothing moved.")
+if not source.is_dir():
+    sys.exit("Local build directory is missing; nothing moved.")
+ensure_quiet(source)
+print("Provisioning Dev Envoy build storage through ws...", flush=True)
+run(ws, "--config", config, "project", "add", "waggle-native-builds", (source.parent.parent).as_uri())
+head = run("git", "-C", source.parent.parent, "rev-parse", "HEAD", capture_output=True, text=True).stdout.strip()
+create = [ws, "--config", config, "new", "build/native-messaging", "--print-path"]
+if not workspace.exists():
+    create.extend(["--from", head])
+run(*create, cwd=project)
+if target.is_symlink() or not target.is_dir() or target.resolve().stat().st_dev != volume.stat().st_dev:
+    sys.exit("Provisioned target is not a plain directory on Dev Envoy; local files retained.")
+marker = workspace / ".waggle-build-move-source"
+identity = f"{source}\n{source.stat().st_dev}:{source.stat().st_ino}\n"
+if marker.exists():
+    if marker.read_text() != identity:
+        sys.exit("Destination belongs to a different move; local files retained.")
+else:
+    if any(target.iterdir()):
+        sys.exit("Destination is not empty; local files retained.")
+    with marker.open("x") as handle:
+        handle.write(identity)
+ensure_quiet(target)
+print("Copying build artifacts to Dev Envoy...", flush=True)
+run("/usr/bin/rsync", "-aH", "--", str(source) + "/", str(target) + "/")
+print("Verifying every file by checksum...", flush=True)
+ensure_quiet(source)
+verify_copy(source, target)
+retained = source.with_name("target.before-envoy-" + uuid.uuid4().hex)
+print("Local copy retained until final verification:", retained, flush=True)
+source.rename(retained)
+try:
+    source.symlink_to(target, target_is_directory=True)
+except BaseException:
+    retained.rename(source)
+    raise
+print("Final verification before removing the old local copy...", flush=True)
+ensure_quiet(retained)
+verify_copy(retained, target)
+shutil.rmtree(retained)
+marker.unlink()
+ignore_build_link()
+print("Moved and verified:", source, "->", target, flush=True)
+run("df", "-h", repo, volume)
+PY

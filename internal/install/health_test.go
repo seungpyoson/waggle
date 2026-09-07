@@ -264,7 +264,6 @@ func TestCheckClaudeCode_DanglingSymlinkedManagedFilesReportOnlySymlink(t *testi
 	}{
 		{name: "hook", file: filepath.Join(".claude", "hooks", "waggle-connect.sh")},
 		{name: "heartbeat", file: filepath.Join(".claude", "hooks", "waggle-heartbeat.sh")},
-		{name: "push", file: filepath.Join(".claude", "hooks", "waggle-push.js")},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			tmpHome := t.TempDir()
@@ -425,27 +424,6 @@ func TestCheckClaudeCode_BrokenMissingHeartbeat(t *testing.T) {
 	}
 	if !foundHeartbeatIssue {
 		t.Errorf("did not find heartbeat issue in: %+v", issues)
-	}
-}
-
-func TestCheckClaudeCode_BrokenMissingPushHook(t *testing.T) {
-	tmpHome := t.TempDir()
-
-	if err := installClaudeCode(tmpHome); err != nil {
-		t.Fatalf("install failed: %v", err)
-	}
-
-	pushPath := filepath.Join(tmpHome, ".claude", "hooks", "waggle-push.js")
-	if err := os.Remove(pushPath); err != nil {
-		t.Fatalf("failed to delete push hook: %v", err)
-	}
-
-	issues, state := CheckClaudeCode(tmpHome)
-	if state != StateBroken {
-		t.Fatalf("expected StateBroken for missing push hook, got %q", state)
-	}
-	if !hasHealthIssueContaining(issues, "waggle-push.js missing") {
-		t.Fatalf("expected missing push hook issue, got %+v", issues)
 	}
 }
 
@@ -975,7 +953,7 @@ func TestCheckCodex_BrokenOrphanedEndOnly(t *testing.T) {
 	foundTopology := false
 	for _, issue := range issues {
 		if issue.Asset == agentsPath &&
-			issue.Problem == "managed block has invalid topology: orphaned end marker without begin marker; refusing to mutate" {
+			issue.Problem == "managed block has invalid topology: unpaired managed-block marker; refusing to mutate" {
 			foundTopology = true
 			if issue.Repair != "waggle install codex" {
 				t.Errorf("expected repair 'waggle install codex', got %q", issue.Repair)
@@ -1013,7 +991,7 @@ func TestCheckCodex_BrokenOrphanedEndOnlyWithSkill(t *testing.T) {
 	foundTopology := false
 	for _, issue := range issues {
 		if issue.Asset == agentsPath &&
-			issue.Problem == "managed block has invalid topology: orphaned end marker without begin marker; refusing to mutate" {
+			issue.Problem == "managed block has invalid topology: unpaired managed-block marker; refusing to mutate" {
 			foundTopology = true
 		}
 	}

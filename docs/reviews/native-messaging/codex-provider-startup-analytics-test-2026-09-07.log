@@ -1,0 +1,112 @@
+RUST_MIN_STACK=8388608 NEXTEST_PROFILE=local cargo nextest run --no-fail-fast "$@"
+   Compiling hyper v1.8.1
+   Compiling rama-core v0.3.0-alpha.4
+   Compiling hyper-util v0.1.20
+   Compiling rama-http-types v0.3.0-alpha.4
+   Compiling hyper-rustls v0.27.7
+   Compiling tokio-native-tls v0.3.1
+   Compiling hyper-tls v0.6.0
+   Compiling reqwest v0.12.28
+   Compiling rama-net v0.3.0-alpha.4
+   Compiling hickory-proto v0.25.2
+   Compiling hickory-resolver v0.25.2
+   Compiling pagable v0.4.1
+   Compiling rama-dns v0.3.0-alpha.4
+   Compiling rama-http-headers v0.3.0-alpha.4
+   Compiling rama-http v0.3.0-alpha.4
+   Compiling starlark_map v0.14.2
+   Compiling codex-http-client v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/http-client)
+   Compiling rama-tcp v0.3.0-alpha.4
+   Compiling starlark_syntax v0.14.2
+   Compiling rama-udp v0.3.0-alpha.4
+   Compiling rama-http-core v0.3.0-alpha.4
+   Compiling rama-unix v0.3.0-alpha.4
+   Compiling starlark v0.14.2
+   Compiling rama-http-backend v0.3.0-alpha.4
+   Compiling rama-socks5 v0.3.0-alpha.4
+   Compiling rama-tls-rustls v0.3.0-alpha.4
+   Compiling codex-network-proxy v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/network-proxy)
+   Compiling codex-execpolicy v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/execpolicy)
+   Compiling codex-utils-path-uri v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/utils/path-uri)
+   Compiling codex-protocol v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/protocol)
+   Compiling tungstenite v0.27.0 (https://github.com/openai-oss-forks/tungstenite-rs?rev=4fffad30fe373adbdcffab9545e9e9bf4f2fc19f#4fffad30)
+   Compiling tokio-tungstenite v0.28.0 (https://github.com/openai-oss-forks/tokio-tungstenite?rev=0e5b2d73aa18dd9f0a50ee9ff199d5aef7594186#0e5b2d73)
+   Compiling gix-tempfile v21.0.2
+   Compiling gix-lock v21.0.2
+   Compiling hyper-timeout v0.5.2
+   Compiling codex-client v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/codex-client)
+   Compiling tonic v0.14.3
+   Compiling codex-websocket-client v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/websocket-client)
+   Compiling tonic-prost v0.14.3
+   Compiling gix-ref v0.61.0
+   Compiling opentelemetry_sdk v0.31.0
+   Compiling opentelemetry-proto v0.31.0
+   Compiling opentelemetry-http v0.31.0
+   Compiling opentelemetry-otlp v0.31.0
+   Compiling os_info v3.14.0
+   Compiling gix-shallow v0.10.0
+   Compiling gix-config v0.54.0
+   Compiling codex-api v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/codex-api)
+   Compiling codex-otel v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/otel)
+   Compiling codex-file-system v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/file-system)
+   Compiling gix-protocol v0.59.0
+   Compiling gix-odb v0.78.0
+   Compiling gix-discover v0.49.0
+   Compiling gix v0.81.0
+   Compiling codex-utils-path v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/utils/path-utils)
+   Compiling aws-smithy-http-client v1.1.12
+   Compiling codex-git-utils v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/git-utils)
+   Compiling debugid v0.8.0
+   Compiling sentry-types v0.46.1
+   Compiling aws-smithy-runtime v1.9.5
+   Compiling codex-features v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/features)
+   Compiling codex-model-provider-info v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/model-provider-info)
+   Compiling aws-runtime v1.5.17
+   Compiling codex-config v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/config)
+   Compiling sentry-core v0.46.1
+   Compiling sqlx-core v0.9.0
+   Compiling codex-shell-command v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/shell-command)
+   Compiling codex-secrets v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/secrets)
+   Compiling tracing-appender v0.2.4
+   Compiling codex-windows-sandbox v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/windows-sandbox-rs)
+   Compiling sqlx-sqlite v0.9.0
+   Compiling codex-agent-identity v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/agent-identity)
+   Compiling sentry-backtrace v0.46.1
+   Compiling codex-workload-identity v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/workload-identity)
+   Compiling axum v0.8.8
+   Compiling codex-login v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/login)
+   Compiling sentry-contexts v0.46.1
+   Compiling aws-sdk-sts v1.95.0
+   Compiling sqlx v0.9.0
+   Compiling sentry-panic v0.46.1
+   Compiling sentry-debug-images v0.46.1
+   Compiling clatter v2.2.0
+   Compiling codex-sandboxing v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/sandboxing)
+   Compiling codex-exec-server-protocol v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/exec-server-protocol)
+   Compiling aws-sdk-ssooidc v1.93.0
+   Compiling aws-sdk-signin v1.2.0
+   Compiling aws-sdk-sso v1.91.0
+   Compiling codex-history v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/history)
+   Compiling aws-config v1.8.12
+   Compiling codex-state v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/state)
+   Compiling codex-exec-server v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/exec-server)
+   Compiling sentry v0.46.1
+   Compiling codex-utils-output-truncation v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/utils/output-truncation)
+   Compiling rmcp v3.1.3
+   Compiling codex-utils-plugins v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/utils/plugins)
+   Compiling codex-models-manager v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/models-manager)
+   Compiling codex-feedback v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/feedback)
+   Compiling codex-rollout v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/rollout)
+   Compiling codex-aws-auth v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/aws-auth)
+   Compiling codex-response-debug-context v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/response-debug-context)
+   Compiling codex-model-provider v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/model-provider)
+   Compiling codex-app-server-protocol v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/app-server-protocol)
+   Compiling codex-plugin v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/plugin)
+   Compiling codex-analytics v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/analytics)
+    Finished `dev-small` profile [unoptimized] target(s) in 6m 26s
+────────────
+ Nextest run ID 91420c23-eeb5-4dfb-b081-96c2afbb9d2a with nextest profile: local
+    Starting 1 test across 1 binary (103 tests skipped)
+        PASS [   0.022s] (1/1) codex-analytics hook_run_tests::startup_hook_analytics_has_no_fabricated_turn
+────────────
+     Summary [   0.026s] 1 test run: 1 passed, 103 skipped

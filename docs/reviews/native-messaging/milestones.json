@@ -1,0 +1,266 @@
+{
+  "schema_version": 1,
+  "base_head": "5fac0530a789f54b2a87fb10d9d21a14b2dded91",
+  "implementation_status": "m1_incomplete_native_attachment_and_enrollment_prerequisites",
+  "goal_complete": false,
+  "milestones": [
+    {
+      "id": "M0",
+      "scope": "Design approval to begin implementation and conformance work",
+      "document": "docs/native-messaging-plan.md",
+      "revision": 4,
+      "sha256": "e18636f22a2b970cc5a75384fe29abd6eb6a21361920f109a5435ffee62473b4",
+      "gate": "closed",
+      "gate_reason": "Both design verdicts are APPROVE; the interactive Claude model configuration is reported rather than independently verified, and its actual effort is not confirmed",
+      "reviews": [
+        {
+          "provider": "codex",
+          "model": "gpt-6-astra",
+          "effort": "xhigh",
+          "verdict": "APPROVE",
+          "status": "revision_4_design_approved",
+          "dispatch": "collaboration:m0_r4_astra_review",
+          "response_received": true,
+          "evidence": "docs/reviews/native-messaging/m0-r4-astra.md"
+        },
+        {
+          "provider": "claude",
+          "model": "claude-fable-5-1",
+          "effort": null,
+          "requested_effort": "xhigh",
+          "model_evidence": "Interactive harness identity reported in the user-supplied review; user separately confirmed the provider was Claude",
+          "model_independently_verified": false,
+          "effort_verification": "not_confirmed",
+          "verdict": "APPROVE",
+          "status": "revision_4_design_approved_configuration_unconfirmed",
+          "provenance": "user_supplied_interactive_report",
+          "request": "docs/reviews/native-messaging/m0-r4-review-request.md",
+          "authorization": "Latest user explicitly approved the named revision 4 plan and AGENTS.md export to Anthropic; subsequent attempts passed automatic approval review",
+          "response_received": true,
+          "evidence": "docs/reviews/native-messaging/m0-r4-claude.md",
+          "required_action": "Establish the interactive review's required model and effort configuration without treating model self-description or the separate failed CLI request as dispatch verification",
+          "prior_cli_dispatch": {
+            "evidence": "docs/reviews/native-messaging/m0-r4-claude-dispatch.md",
+            "authorized_attempts": 2,
+            "response_received": false,
+            "last_error": "EEXIST: file already exists, mkdir '/tmp/claude-501'"
+          }
+        }
+      ]
+    },
+    {
+      "id": "M1",
+      "scope": "Native transport and enrollment proof",
+      "gate": "not_approved_native_capability_gaps",
+      "gate_reason": "The isolated provider draft adds loaded-only subscription, exact hook thread identity, per-thread hook overrides, and startup-time SessionStart. Corrected subscription and startup RPC execution, ordinary credential propagation, native remote-TUI conformance, and Claude conformance remain unconfirmed. M1 is not approved.",
+      "preparation": "docs/reviews/native-messaging/m1-preparation.md",
+      "entrypoint_evidence": "docs/reviews/native-messaging/m1-entrypoint-evidence.json",
+      "findings": "docs/reviews/native-messaging/m1-entrypoint-findings.md",
+      "reviews": [],
+      "implementation_evidence": "docs/reviews/native-messaging/implementation-status-2026-09-06.md"
+    },
+    {
+      "id": "M2",
+      "scope": "Durable integration and fault evidence",
+      "gate": "not_started",
+      "reviews": []
+    },
+    {
+      "id": "M3",
+      "scope": "Release evidence and final dual approval",
+      "gate": "not_started",
+      "reviews": []
+    }
+  ],
+  "environment_constraints": [
+    {
+      "kind": "native_entrypoint_execution_blocked",
+      "evidence": "docs/reviews/native-messaging/m1-entrypoint-evidence.json",
+      "constraints": [
+        "AF_UNIX bind denied with EPERM beneath the allowed temporary root",
+        "Codex interactive startup blocked at ab.chatgpt.com",
+        "Claude interactive startup exits with EEXIST at /tmp/claude-501"
+      ],
+      "native_roundtrip_confirmed": false
+    },
+    {
+      "kind": "required_reviewer_network_blocked",
+      "blocked_host": "api.anthropic.com",
+      "disclosure_authorized": true,
+      "review_response_received": false,
+      "note": "Previous authorized CLI dispatch blocked; user separately supplied revision 2 and revision 3 REQUEST_CHANGES reports."
+    },
+    {
+      "kind": "git_metadata_write_denied",
+      "action": "Create isolated implementation branch and worktree",
+      "attempts": 2,
+      "workaround_used": false,
+      "status": "resolved_after_explicit_permission_profile_update",
+      "verified_action": "git switch -c feat/native-agent-messaging succeeded"
+    },
+    {
+      "kind": "missing_go_dependencies",
+      "blocked_host": "proxy.golang.org",
+      "full_build_confirmed": true,
+      "evidence": "docs/reviews/native-messaging/implementation-status-2026-09-06.md",
+      "historical_attempt": "Standard proxy dependency preparation with writable task-specific GOMODCACHE rejected by network allowlist",
+      "status": "websocket_runtime_dependency_resolved",
+      "latest_attempt": "User downloaded github.com/coder/websocket@v1.8.15; independently verified by build and driver race tests. Full go mod tidy still cannot fetch missing dependency test modules into the standard cache."
+    },
+    {
+      "kind": "denied_temporary_root",
+      "path": "/tmp",
+      "note": "Existing tests contain hardcoded paths; no permission bypass is authorized"
+    },
+    {
+      "kind": "review_dispatch_automatic_approval_rejection",
+      "revision": 4,
+      "action": "Send plan and AGENTS.md to Anthropic with Claude CLI",
+      "reason": "Automatic reviewer did not validate specific trusted export authorization",
+      "process_started": false,
+      "review_response_received": false,
+      "status": "resolved_by_latest_explicit_user_confirmation"
+    },
+    {
+      "kind": "reviewer_cli_startup_failure",
+      "revision": 4,
+      "authorization_accepted": true,
+      "preceding_attempt": "Telemetry destination blocked by network allowlist",
+      "last_exit_code": 1,
+      "last_error": "EEXIST: file already exists, mkdir '/tmp/claude-501'",
+      "denied_path_inspected": false,
+      "review_response_received": false
+    },
+    {
+      "kind": "canonical_entrypoint_process_and_ipc_denied",
+      "status": "currently_observed",
+      "evidence": "docs/reviews/native-messaging/implementation-status-2026-09-06.md",
+      "full_tests_passed": false,
+      "workaround_used": false
+    }
+  ],
+  "preserved_user_changes": [
+    "D GEMINI.md"
+  ],
+  "previous_revisions": [
+    {
+      "id": "M0",
+      "scope": "Design approval to begin implementation and conformance probes",
+      "document": "docs/native-messaging-plan.md",
+      "revision": 2,
+      "sha256": "35aaac843cec2790983ad21ea5d7327a2aa52b1433783716e2e517ff75486366",
+      "gate": "closed",
+      "reviews": [
+        {
+          "provider": "codex",
+          "model": "gpt-6-astra",
+          "effort": "xhigh",
+          "verdict": "APPROVE",
+          "status": "revision_2_design_approved",
+          "evidence": "docs/reviews/native-messaging/m0-r2-astra.md",
+          "dispatch": "collaboration:m0_astra_review",
+          "superseded_review": {
+            "revision": 1,
+            "sha256": "9f23da6bb96d8eb02c211a387296a4fbd52ab4c67107ef73abfdb0a5b24d43b3",
+            "verdict": "APPROVE",
+            "evidence": "docs/reviews/native-messaging/m0-astra.md"
+          }
+        },
+        {
+          "provider": "claude",
+          "model": "claude-fable-5-1",
+          "effort": "xhigh",
+          "verdict": null,
+          "status": "network_blocked",
+          "authorization": "User explicitly approved sending the plan and repository AGENTS.md to Anthropic through the installed Claude CLI",
+          "preauthorization_rejected_dispatches": 2,
+          "authorized_dispatches_blocked_by_network": 1,
+          "blocked_host": "api.anthropic.com",
+          "last_attempted_revision": 1,
+          "required_action": "Enable the required Anthropic network access, then dispatch the current revision for review using the approved CLI path",
+          "response_received": false
+        }
+      ],
+      "status": "superseded_by_revision_3",
+      "reviewed_document_snapshot": "docs/reviews/native-messaging/m0-r2-plan.md",
+      "user_supplied_reviews": [
+        {
+          "provider": "claude",
+          "verdict": "REQUEST_CHANGES",
+          "provenance": "user_supplied_report",
+          "reported_model": "claude-fable-5-1",
+          "model_independently_verified": false,
+          "effort": "not_observable",
+          "evidence": "docs/reviews/native-messaging/m0-r2-feedback.md"
+        },
+        {
+          "provider": "gpt",
+          "verdict": "REQUEST_CHANGES",
+          "provenance": "user_supplied_report",
+          "model": "not_confirmed",
+          "effort": "not_confirmed",
+          "evidence": "docs/reviews/native-messaging/m0-r2-feedback.md"
+        }
+      ]
+    },
+    {
+      "id": "M0",
+      "scope": "Design approval to begin implementation and conformance work",
+      "document": "docs/native-messaging-plan.md",
+      "revision": 3,
+      "sha256": "3e73fd0458673f34a7fb7654b27802d08365a61694d6f5ef762802f5c73f41fe",
+      "gate": "closed",
+      "reviews": [
+        {
+          "provider": "codex",
+          "model": "gpt-6-astra",
+          "effort": "xhigh",
+          "verdict": "APPROVE",
+          "status": "revision_3_design_approved",
+          "dispatch": "collaboration:m0_r3_astra_review",
+          "response_received": true,
+          "scope_update": {
+            "initial_sha256": "c49b61d1481b2553e2ea4f561648311d0bf9b1921037849af1a631797b82d07f",
+            "final_requested_sha256": "3e73fd0458673f34a7fb7654b27802d08365a61694d6f5ef762802f5c73f41fe",
+            "reason": "Require evidence across provider restart/resume; specify native WebSocket-over-Unix framing and upstream support limit",
+            "reviewer_notified": true
+          },
+          "evidence": "docs/reviews/native-messaging/m0-r3-astra.md"
+        },
+        {
+          "provider": "claude",
+          "model": "claude-fable-5-1",
+          "effort": "xhigh",
+          "verdict": null,
+          "status": "prepared_not_dispatched",
+          "request": "docs/reviews/native-messaging/m0-r3-review-request.md",
+          "authorization": "User approved sending the plan and AGENTS.md to Anthropic",
+          "dispatch_constraint": "Our CLI route remains blocked by network allowlist for api.anthropic.com",
+          "response_received": false
+        }
+      ],
+      "status": "superseded_by_revision_4",
+      "reviewed_document_snapshot": "docs/reviews/native-messaging/m0-r3-plan.md",
+      "user_supplied_reviews": [
+        {
+          "provider": "claude",
+          "verdict": "REQUEST_CHANGES",
+          "provenance": "user_supplied_interactive_report",
+          "reported_model": "claude-fable-5-1",
+          "model_independently_verified": false,
+          "effort": "not_observable",
+          "evidence": "docs/reviews/native-messaging/m0-r3-feedback.md"
+        }
+      ]
+    }
+  ],
+  "branch": "feat/native-agent-messaging",
+  "implementation_authorization": "User repeatedly instructed proceed with implementation and then proceed on your own; historical reviewer effort metadata remains as recorded, not newly verified.",
+  "current_implementation_evidence": "docs/reviews/native-messaging/implementation-status-2026-09-06.md",
+  "provider_source_work": {
+    "authorization": "User approved proceeding with the identified provider source prerequisites",
+    "status": "startup_hooks_implemented_native_runtime_verification_pending",
+    "evidence": "docs/reviews/native-messaging/codex-provider-source-2026-09-07.json",
+    "installed_binary_changed": false
+  }
+}

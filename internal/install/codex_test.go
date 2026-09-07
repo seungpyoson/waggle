@@ -37,8 +37,8 @@ func TestInstallCodex_AGENTSManagedBlockCreated(t *testing.T) {
 	if !strings.Contains(content, codexBlockBegin) || !strings.Contains(content, codexBlockEnd) {
 		t.Fatalf("managed block markers missing:\n%s", content)
 	}
-	if !strings.Contains(content, "waggle adapter bootstrap codex") {
-		t.Fatalf("expected waggle adapter bootstrap command in AGENTS block:\n%s", content)
+	if !strings.Contains(content, "sending and receiving through Codex are unsupported") || strings.Contains(content, "adapter bootstrap") {
+		t.Fatalf("unproven Codex integration still implies enrollment:\n%s", content)
 	}
 }
 

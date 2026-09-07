@@ -1,600 +1,369 @@
 package messages
 
 import (
-	"database/sql"
+	"errors"
 	"fmt"
-	"sync"
 	"testing"
 	"time"
 
-	_ "modernc.org/sqlite"
-
+	"github.com/seungpyoson/waggle/internal/brokerstate"
+	"github.com/seungpyoson/waggle/internal/brokerstate/statetest"
 	"github.com/seungpyoson/waggle/internal/config"
 )
 
-func newTestStore(t *testing.T) *Store {
-	t.Helper()
-	db, err := sql.Open("sqlite", ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	db.SetMaxOpenConns(1)
-
-	// Set pragmas (same as production)
-	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
-		db.Close()
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(fmt.Sprintf("PRAGMA busy_timeout=%d", config.Defaults.BusyTimeout.Milliseconds())); err != nil {
-		db.Close()
-		t.Fatal(err)
-	}
-
-	s, err := NewStore(db)
-	if err != nil {
-		db.Close()
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-	return s
-}
-
-// TestStore_SendAndInbox — send message, inbox returns it
-func TestStore_SendAndInbox(t *testing.T) {
-	s := newTestStore(t)
-
-	msg, err := s.Send("alice", "bob", "hello", "", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if msg.ID == 0 {
-		t.Fatal("expected non-zero ID")
-	}
-	if msg.From != "alice" {
-		t.Errorf("from = %q, want alice", msg.From)
-	}
-	if msg.To != "bob" {
-		t.Errorf("to = %q, want bob", msg.To)
-	}
-	if msg.Body != "hello" {
-		t.Errorf("body = %q, want hello", msg.Body)
-	}
-	if msg.State != "queued" {
-		t.Errorf("state = %q, want queued", msg.State)
-	}
-
-	// Check inbox
-	messages, err := s.Inbox("bob")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(messages) != 1 {
-		t.Fatalf("inbox len = %d, want 1", len(messages))
-	}
-	if messages[0].Body != "hello" {
-		t.Errorf("inbox message body = %q, want hello", messages[0].Body)
-	}
-}
-
-// TestStore_InboxFiltersByRecipient — send to A and B, A only sees A's
-func TestStore_InboxFiltersByRecipient(t *testing.T) {
-	s := newTestStore(t)
-
-	s.Send("alice", "bob", "msg for bob", "", nil)
-	s.Send("alice", "charlie", "msg for charlie", "", nil)
-	s.Send("bob", "charlie", "another for charlie", "", nil)
-
-	bobInbox, _ := s.Inbox("bob")
-	if len(bobInbox) != 1 {
-		t.Errorf("bob inbox len = %d, want 1", len(bobInbox))
-	}
-	if len(bobInbox) > 0 && bobInbox[0].Body != "msg for bob" {
-		t.Errorf("bob got wrong message: %q", bobInbox[0].Body)
-	}
-
-	charlieInbox, _ := s.Inbox("charlie")
-	if len(charlieInbox) != 2 {
-		t.Errorf("charlie inbox len = %d, want 2", len(charlieInbox))
-	}
-}
-
-// TestStore_InboxOrdering — 3 messages arrive in order
-func TestStore_InboxOrdering(t *testing.T) {
-	s := newTestStore(t)
-
-	s.Send("alice", "bob", "first", "", nil)
-	time.Sleep(10 * time.Millisecond)
-	s.Send("alice", "bob", "second", "", nil)
-	time.Sleep(10 * time.Millisecond)
-	s.Send("alice", "bob", "third", "", nil)
-
-	messages, _ := s.Inbox("bob")
-	if len(messages) != 3 {
-		t.Fatalf("inbox len = %d, want 3", len(messages))
-	}
-	if messages[0].Body != "first" {
-		t.Errorf("messages[0] = %q, want first", messages[0].Body)
-	}
-	if messages[1].Body != "second" {
-		t.Errorf("messages[1] = %q, want second", messages[1].Body)
-	}
-	if messages[2].Body != "third" {
-		t.Errorf("messages[2] = %q, want third", messages[2].Body)
-	}
-}
-
-// TestStore_MarkPushed — state changes from queued to pushed, then inbox marks as seen
-func TestStore_MarkPushed(t *testing.T) {
-	s := newTestStore(t)
-
-	msg, _ := s.Send("alice", "bob", "hello", "", nil)
-	if msg.State != "queued" {
-		t.Errorf("initial state = %q, want queued", msg.State)
-	}
-
-	err := s.MarkPushed(msg.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Verify state changed (Task 48: inbox call marks pushed→seen)
-	messages, _ := s.Inbox("bob")
-	if len(messages) != 1 {
-		t.Fatalf("inbox len = %d, want 1", len(messages))
-	}
-	if messages[0].State != "seen" {
-		t.Errorf("state after inbox = %q, want seen (Task 48: inbox marks as seen)", messages[0].State)
-	}
-	if messages[0].PushedAt == "" {
-		t.Error("pushed_at should be set")
-	}
-	if messages[0].SeenAt == "" {
-		t.Error("seen_at should be set after inbox call")
-	}
-}
-
-// TestStore_SendConcurrent — 10 goroutines, all messages stored
-func TestStore_SendConcurrent(t *testing.T) {
-	s := newTestStore(t)
-
-	var wg sync.WaitGroup
-	count := 10
-	wg.Add(count)
-
-	for i := 0; i < count; i++ {
-		go func(n int) {
-			defer wg.Done()
-			_, err := s.Send("alice", "bob", fmt.Sprintf("msg-%d", n), "", nil)
-			if err != nil {
-				t.Errorf("send failed: %v", err)
-			}
-		}(i)
-	}
-
-	wg.Wait()
-
-	messages, _ := s.Inbox("bob")
-	if len(messages) != count {
-		t.Errorf("inbox len = %d, want %d", len(messages), count)
-	}
-}
-
-// TestStore_EmptyInbox — inbox with no messages returns empty slice (not nil, not error)
-func TestStore_EmptyInbox(t *testing.T) {
-	s := newTestStore(t)
-
-	messages, err := s.Inbox("nobody")
-	if err != nil {
-		t.Errorf("empty inbox should not error: %v", err)
-	}
-	if messages == nil {
-		t.Error("inbox should return empty slice, not nil")
-	}
-	if len(messages) != 0 {
-		t.Errorf("inbox len = %d, want 0", len(messages))
-	}
-}
-
-// TestStore_SendValidation — empty from/to/body returns error
-func TestStore_SendValidation(t *testing.T) {
-	s := newTestStore(t)
-
-	tests := []struct {
-		name string
-		from string
-		to   string
-		body string
-	}{
-		{"empty from", "", "bob", "hello"},
-		{"empty to", "alice", "", "hello"},
-		{"empty body", "alice", "bob", ""},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := s.Send(tt.from, tt.to, tt.body, "", nil)
-			if err == nil {
-				t.Errorf("expected error for %s", tt.name)
-			}
-		})
-	}
-}
-
-// ========== Task 48 Phase A: Failing Tests ==========
-
-// TestStore_Ack — ack sets state=acked + acked_at timestamp
-func TestStore_Ack(t *testing.T) {
-	s := newTestStore(t)
-
-	msg, _ := s.Send("alice", "bob", "hello", "", nil)
-
-	// Ack the message
-	err := s.Ack(msg.ID, "bob")
-	if err != nil {
-		t.Fatalf("ack failed: %v", err)
-	}
-
-	// Verify state changed to acked
-	messages, _ := s.Inbox("bob")
-	// Message should not be in inbox anymore (acked messages are terminal)
-	for _, m := range messages {
-		if m.ID == msg.ID {
-			t.Errorf("acked message should not be in inbox")
+func TestObservationPagesExcludeTerminalHistoryAndReachEveryLiveEnrollment(t *testing.T) {
+	f := newFixture(t)
+	f.limits.ScanLimit = 2
+	live := make(map[string]bool)
+	for i := 0; i < 5; i++ {
+		e := f.must(Enroll{Provider: "codex", Conversation: fmt.Sprint(i), Endpoint: "/registered/daemon.sock", Label: fmt.Sprint(i)})
+		if i == 2 {
+			f.must(Retire{ID: e.Enrollment.ID, Reason: "retired fixture"})
+		} else {
+			live[e.Enrollment.ID] = true
 		}
 	}
-
-	// Query the message directly to verify state
-	var state, ackedAt string
-	err = s.db.QueryRow("SELECT state, acked_at FROM messages WHERE id = ?", msg.ID).Scan(&state, &ackedAt)
-	if err != nil {
-		t.Fatalf("query message: %v", err)
+	var after string
+	seen := make(map[string]bool)
+	for {
+		var page []Enrollment
+		err := statetest.Write(f.owner, func(tx *brokerstate.WriteTx) error {
+			var err error
+			page, err = NewStore(tx, f.limits, f.now).Enrollments(after, ObservableEnrollments)
+			return err
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(page) == 0 {
+			break
+		}
+		if len(page) > f.limits.ScanLimit {
+			t.Fatal("unbounded observation page")
+		}
+		for _, e := range page {
+			if !live[e.ID] || seen[e.ID] || e.ID <= after {
+				t.Fatal("terminal, duplicate or out-of-order observation candidate")
+			}
+			seen[e.ID] = true
+			after = e.ID
+		}
 	}
-	if state != "acked" {
-		t.Errorf("state = %q, want acked", state)
-	}
-	if ackedAt == "" {
-		t.Error("acked_at should be set")
-	}
-}
-
-// TestStore_AckNonexistent — ack unknown id returns ErrMessageNotFound
-func TestStore_AckNonexistent(t *testing.T) {
-	s := newTestStore(t)
-
-	err := s.Ack(99999, "bob")
-	if err == nil {
-		t.Fatal("expected error for nonexistent message")
-	}
-	if err != ErrMessageNotFound {
-		t.Errorf("expected ErrMessageNotFound, got %v", err)
-	}
-}
-
-// TestStore_AckForbidden — caller != to_name returns ErrNotRecipient
-func TestStore_AckForbidden(t *testing.T) {
-	s := newTestStore(t)
-
-	msg, _ := s.Send("alice", "bob", "hello", "", nil)
-
-	// Alice tries to ack a message sent to bob
-	err := s.Ack(msg.ID, "alice")
-	if err == nil {
-		t.Fatal("expected error when non-recipient acks")
-	}
-	if err != ErrNotRecipient {
-		t.Errorf("expected ErrNotRecipient, got %v", err)
+	if len(seen) != len(live) {
+		t.Fatal("bounded scans stranded a live enrollment")
 	}
 }
 
-// TestStore_AckIdempotent — ack already-acked message: success (idempotent)
-func TestStore_AckIdempotent(t *testing.T) {
-	s := newTestStore(t)
-
-	msg, _ := s.Send("alice", "bob", "hello", "", nil)
-
-	// Ack once
-	err := s.Ack(msg.ID, "bob")
-	if err != nil {
-		t.Fatalf("first ack failed: %v", err)
+func TestEnrollmentCapacityIsTransactionalAndRetirementFreesCapacity(t *testing.T) {
+	f := newFixture(t)
+	f.limits.EnrollmentCapacity = 1
+	first := f.must(Enroll{Provider: "codex", Conversation: "first", Endpoint: "/registered/daemon.sock", Label: "first"})
+	if _, err := f.apply(Enroll{Provider: "codex", Conversation: "second", Endpoint: "/registered/daemon.sock", Label: "second"}); err == nil {
+		t.Fatal("enrollment exceeded capacity")
 	}
-
-	// Ack again — should succeed (idempotent)
-	err = s.Ack(msg.ID, "bob")
-	if err != nil {
-		t.Errorf("second ack should be idempotent, got error: %v", err)
+	f.must(Retire{ID: first.Enrollment.ID, Reason: "capacity test"})
+	second := f.must(Enroll{Provider: "codex", Conversation: "second", Endpoint: "/registered/daemon.sock", Label: "second"})
+	if second.Enrollment.State != "pending" {
+		t.Fatal("retirement failed to free enrollment capacity")
 	}
 }
 
-// TestStore_ConcurrentAck — 10 goroutines ack same message; exactly one wins
-func TestStore_ConcurrentAck(t *testing.T) {
-	s := newTestStore(t)
-
-	msg, _ := s.Send("alice", "bob", "hello", "", nil)
-
-	var wg sync.WaitGroup
-	count := 10
-	wg.Add(count)
-
-	for i := 0; i < count; i++ {
-		go func() {
-			defer wg.Done()
-			s.Ack(msg.ID, "bob")
-		}()
+func TestUnavailablePendingObservationPreservesDeadlineAndCannotReviveRetirement(t *testing.T) {
+	f := newFixture(t)
+	e := f.must(Enroll{Provider: "codex", Conversation: "pending", Endpoint: "/registered/daemon.sock", Label: "pending"})
+	f.must(Unavailable{ID: e.Enrollment.ID, Evidence: "thread is not loaded"})
+	f.now = f.now.Add(f.limits.PendingTTL)
+	f.must(Expire{})
+	if _, err := f.apply(Bind{ID: e.Enrollment.ID, Conversation: "pending", Endpoint: "/registered/daemon.sock", Evidence: "late idle observation"}); !errors.Is(err, ErrConflict) {
+		t.Fatal("late probe revived failed enrollment")
 	}
-
-	wg.Wait()
-
-	// Verify message is acked exactly once
-	var state string
-	err := s.db.QueryRow("SELECT state FROM messages WHERE id = ?", msg.ID).Scan(&state)
-	if err != nil {
-		t.Fatalf("query message: %v", err)
-	}
-	if state != "acked" {
-		t.Errorf("state = %q, want acked", state)
+	f.must(Retire{ID: e.Enrollment.ID, Reason: "operator retirement"})
+	if _, err := f.apply(Unavailable{ID: e.Enrollment.ID, Evidence: "late unavailable observation"}); !errors.Is(err, ErrConflict) {
+		t.Fatal("late observation changed retirement")
 	}
 }
 
-// TestStore_MarkExpired — send with ttl=1; sleep 1s; MarkExpired; state=expired
-func TestStore_MarkExpired(t *testing.T) {
-	s := newTestStore(t)
+type fixture struct {
+	t      *testing.T
+	owner  *brokerstate.Owner
+	limits config.MessagingConfig
+	now    time.Time
+}
 
-	ttl := 1
-	s.Send("alice", "bob", "hello", "", &ttl)
+func newFixture(t *testing.T) *fixture {
+	return &fixture{t: t, owner: statetest.New(t, Schema+"UPDATE cutover SET state='active' WHERE singleton=1"), limits: config.NewMessagingConfig(), now: time.Now().UTC()}
+}
 
-	// Wait for TTL to expire
-	time.Sleep(2 * time.Second)
+func (f *fixture) apply(c Command) (out Result, err error) {
+	err = statetest.Write(f.owner, func(tx *brokerstate.WriteTx) error { out, err = NewStore(tx, f.limits, f.now).Apply(c); return err })
+	return
+}
 
-	// Mark expired
-	count, err := s.MarkExpired()
+func (f *fixture) must(c Command) Result {
+	f.t.Helper()
+	out, err := f.apply(c)
 	if err != nil {
-		t.Fatalf("MarkExpired failed: %v", err)
+		f.t.Fatal(err)
 	}
-	if count != 1 {
-		t.Errorf("MarkExpired count = %d, want 1", count)
-	}
+	return out
+}
 
-	// Verify state changed to expired
-	var state string
-	err = s.db.QueryRow("SELECT state FROM messages WHERE to_name = 'bob'").Scan(&state)
-	if err != nil {
-		t.Fatalf("query message: %v", err)
+func (f *fixture) enrolled(label string) Result {
+	f.t.Helper()
+	out := f.must(Enroll{Provider: "codex", Conversation: label, Endpoint: "/registered/daemon.sock", Label: label})
+	f.must(Bind{ID: out.Enrollment.ID, Conversation: label, Endpoint: "/registered/daemon.sock", Evidence: "exact thread membership and native idle observation"})
+	return out
+}
+
+func (f *fixture) send(sender, recipient Result, key string) Message {
+	f.t.Helper()
+	return f.must(Enqueue{Credential: sender.Credential, Recipient: recipient.Enrollment.ID, RequestID: key, Body: key, Within: f.limits.DefaultDeadline, Hops: f.limits.DefaultHops}).Message
+}
+
+func (f *fixture) message(id string) (m Message) {
+	f.t.Helper()
+	if err := statetest.Write(f.owner, func(tx *brokerstate.WriteTx) error {
+		var err error
+		m, err = NewStore(tx, f.limits, f.now).Message(id)
+		return err
+	}); err != nil {
+		f.t.Fatal(err)
 	}
-	if state != "expired" {
-		t.Errorf("state = %q, want expired", state)
+	return
+}
+
+func TestFreshEnrollmentBindsWithoutToolCall(t *testing.T) {
+	f := newFixture(t)
+	sender := f.enrolled("sender")
+	receiver := f.must(Enroll{Provider: "codex", Conversation: "fresh", Endpoint: "/registered/daemon.sock", Label: "fresh"})
+	if receiver.Enrollment.State != "pending" {
+		t.Fatal("unverified enrollment reported ready")
+	}
+	_, err := f.apply(Enqueue{Credential: sender.Credential, Recipient: receiver.Enrollment.ID, RequestID: "first", Body: "first", Within: time.Minute, Hops: 2})
+	if !errors.Is(err, ErrNotBound) {
+		t.Fatalf("pending target accepted direct send: %v", err)
+	}
+	f.must(Bind{ID: receiver.Enrollment.ID, Conversation: "fresh", Endpoint: "/registered/daemon.sock", Evidence: "thread loaded, native idle"})
+	m := f.send(sender, receiver, "first")
+	d := f.must(Select{}).Dispatches
+	if len(d) != 1 || d[0].Envelope.Message.ID != m.ID || d[0].Envelope.Acknowledgement == "" {
+		t.Fatalf("fresh target not selectable with ack instruction: %+v", d)
+	}
+	f.must(Consume{Credential: receiver.Credential, MessageID: m.ID, Attempt: d[0].Envelope.Message.Attempt})
+	if got := f.message(m.ID).Possession; got != "consumed" {
+		t.Fatalf("first authenticated tool call did not consume: %s", got)
 	}
 }
 
-// TestStore_MarkExpired_NoTTL — messages without ttl never marked expired
-func TestStore_MarkExpired_NoTTL(t *testing.T) {
-	s := newTestStore(t)
-
-	s.Send("alice", "bob", "hello", "", nil)
-
-	// Wait and mark expired
-	time.Sleep(2 * time.Second)
-	count, err := s.MarkExpired()
-	if err != nil {
-		t.Fatalf("MarkExpired failed: %v", err)
+func TestBindingAndReceiptRequireExactIncarnation(t *testing.T) {
+	f := newFixture(t)
+	a := f.enrolled("a")
+	b := f.enrolled("b")
+	if a.Credential == b.Credential || a.Enrollment.ID == b.Enrollment.ID {
+		t.Fatal("same endpoint shared an identity")
 	}
-	if count != 0 {
-		t.Errorf("MarkExpired count = %d, want 0 (no TTL)", count)
+	pending := f.must(Enroll{Provider: "codex", Conversation: "c", Endpoint: "/registered/daemon.sock", Label: "c"})
+	if _, err := f.apply(Bind{ID: pending.Enrollment.ID, Conversation: "b", Endpoint: "/registered/daemon.sock", Evidence: "another thread"}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("substituted binding accepted: %v", err)
 	}
-
-	// Verify message still queued
-	messages, _ := s.Inbox("bob")
-	if len(messages) != 1 {
-		t.Errorf("inbox len = %d, want 1", len(messages))
+	m := f.send(a, b, "hello")
+	d := f.must(Select{}).Dispatches[0]
+	for _, receipt := range []Consume{
+		{Credential: a.Credential, MessageID: m.ID, Attempt: d.Envelope.Message.Attempt},
+		{Credential: b.Credential, MessageID: m.ID, Attempt: "another-attempt"},
+		{Credential: "b", MessageID: m.ID, Attempt: d.Envelope.Message.Attempt},
+	} {
+		if _, err := f.apply(receipt); err == nil {
+			t.Fatal("substituted receipt accepted")
+		}
 	}
-}
-
-// TestStore_InboxExcludesExpired — expired message absent from Inbox
-func TestStore_InboxExcludesExpired(t *testing.T) {
-	s := newTestStore(t)
-
-	ttl := 1
-	s.Send("alice", "bob", "hello", "", &ttl)
-
-	// Wait for TTL to expire
-	time.Sleep(2 * time.Second)
-
-	// Inbox should exclude expired message (belt-and-suspenders SQL filter)
-	messages, err := s.Inbox("bob")
-	if err != nil {
-		t.Fatalf("Inbox failed: %v", err)
-	}
-	if len(messages) != 0 {
-		t.Errorf("inbox len = %d, want 0 (expired message excluded)", len(messages))
+	if f.message(m.ID).Possession != "uncertain" {
+		t.Fatal("invalid receipt changed possession")
 	}
 }
 
-// TestStore_InboxMarksSeen — inbox call transitions pushed→seen; sets seen_at
-func TestStore_InboxMarksSeen(t *testing.T) {
-	s := newTestStore(t)
-
-	msg, _ := s.Send("alice", "bob", "hello", "", nil)
-
-	// Mark as pushed
-	s.MarkPushed(msg.ID)
-
-	// Call inbox — should transition to seen
-	messages, err := s.Inbox("bob")
-	if err != nil {
-		t.Fatalf("Inbox failed: %v", err)
+func TestRetainedInputSurvivesExpiryRestartAndLateEvidence(t *testing.T) {
+	f := newFixture(t)
+	a := f.enrolled("a")
+	b := f.enrolled("b")
+	m := f.send(a, b, "held")
+	d := f.must(Select{}).Dispatches[0]
+	f.must(Observe{Attempt: d.Envelope.Message.Attempt, Recipient: b.Enrollment.ID, Kind: "held", Evidence: "native held input"})
+	f.now = f.now.Add(f.limits.DefaultDeadline)
+	f.must(Expire{})
+	f.must(Restart{})
+	f.must(Bind{ID: a.Enrollment.ID, Conversation: "a", Endpoint: "/registered/daemon.sock", Evidence: "reconnected same thread"})
+	f.must(Bind{ID: b.Enrollment.ID, Conversation: "b", Endpoint: "/registered/daemon.sock", Evidence: "reconnected same thread"})
+	next := f.send(a, b, "later")
+	if got := f.message(next.ID).BlockedBy; got != m.ID {
+		t.Fatalf("retained input must identify the blocking message: %q", got)
 	}
-	if len(messages) != 1 {
-		t.Fatalf("inbox len = %d, want 1", len(messages))
+	if len(f.must(Select{}).Dispatches) != 0 {
+		t.Fatal("expiry or restart cleared retention barrier")
 	}
-
-	// Verify state changed to seen
-	var state, seenAt string
-	err = s.db.QueryRow("SELECT state, seen_at FROM messages WHERE id = ?", msg.ID).Scan(&state, &seenAt)
-	if err != nil {
-		t.Fatalf("query message: %v", err)
+	if got := f.message(m.ID); got.Possession != "held" || got.Disposition != "deadline_elapsed" {
+		t.Fatalf("lost independent facts: %+v", got)
 	}
-	if state != "seen" {
-		t.Errorf("state = %q, want seen", state)
+	f.must(Consume{Credential: b.Credential, MessageID: m.ID, Attempt: d.Envelope.Message.Attempt})
+	f.must(Observe{Attempt: d.Envelope.Message.Attempt, Recipient: b.Enrollment.ID, Kind: "uncertain", Evidence: "delayed transport response loss"})
+	if got := f.message(m.ID); got.Possession != "consumed" || got.Disposition != "deadline_elapsed" {
+		t.Fatalf("late evidence reversed terminal facts: %+v", got)
 	}
-	if seenAt == "" {
-		t.Error("seen_at should be set")
+	work := f.must(Select{}).Dispatches
+	if len(work) != 1 || work[0].Envelope.Message.ID != next.ID {
+		t.Fatal("receipt did not release exact recipient barrier")
 	}
-}
-
-func TestStore_ReplayDoesNotMarkSeen(t *testing.T) {
-	s := newTestStore(t)
-
-	msg, _ := s.Send("alice", "bob", "hello", "", nil)
-	if err := s.MarkPushed(msg.ID); err != nil {
-		t.Fatalf("MarkPushed failed: %v", err)
-	}
-
-	messages, err := s.Replay("bob")
-	if err != nil {
-		t.Fatalf("Replay failed: %v", err)
-	}
-	if len(messages) != 1 {
-		t.Fatalf("replay len = %d, want 1", len(messages))
-	}
-
-	var state string
-	var seenAt sql.NullString
-	err = s.db.QueryRow("SELECT state, seen_at FROM messages WHERE id = ?", msg.ID).Scan(&state, &seenAt)
-	if err != nil {
-		t.Fatalf("query message: %v", err)
-	}
-	if state != "pushed" {
-		t.Errorf("state = %q, want pushed", state)
-	}
-	if seenAt.Valid {
-		t.Errorf("seen_at = %q, want unset", seenAt.String)
+	if len(f.must(Select{}).Dispatches) != 0 {
+		t.Fatal("second attempt became eligible")
 	}
 }
 
-// TestStore_PriorityStored — Send with priority=critical; inbox shows priority=critical
-func TestStore_PriorityStored(t *testing.T) {
-	s := newTestStore(t)
-
-	msg, err := s.Send("alice", "bob", "urgent", "critical", nil)
-	if err != nil {
-		t.Fatalf("Send failed: %v", err)
+func TestCancellationBeforeIntentAndReplyBudget(t *testing.T) {
+	f := newFixture(t)
+	a := f.enrolled("a")
+	b := f.enrolled("b")
+	stopped := f.send(a, b, "stop-before-intent")
+	f.must(Stop{Credential: a.Credential, Conversation: stopped.Conversation, Reason: "operator stopped"})
+	m := f.must(Enqueue{Credential: a.Credential, Recipient: b.Enrollment.ID, RequestID: "one-hop", Body: "bounded conversation", Within: time.Minute, Hops: 1}).Message
+	d := f.must(Select{}).Dispatches
+	if len(d) != 1 || d[0].Envelope.Message.ID != m.ID {
+		t.Fatal("canceled unsent work retained ordering")
 	}
-
-	if msg.Priority != "critical" {
-		t.Errorf("msg.Priority = %q, want critical", msg.Priority)
+	reply := f.must(Reply{Credential: b.Credential, MessageID: m.ID, RequestID: "reply", Body: "correlated reply"}).Message
+	if reply.Conversation != m.Conversation || !reply.Deadline.Equal(m.Deadline) || reply.RemainingHops != 0 || reply.Disposition != "budget_exhausted" {
+		t.Fatalf("reply reset conversation bounds: %+v", reply)
 	}
-
-	// Verify via inbox
-	messages, _ := s.Inbox("bob")
-	if len(messages) != 1 {
-		t.Fatalf("inbox len = %d, want 1", len(messages))
-	}
-	if messages[0].Priority != "critical" {
-		t.Errorf("inbox priority = %q, want critical", messages[0].Priority)
+	if f.message(m.ID).Possession != "consumed" || len(f.must(Select{}).Dispatches) != 0 {
+		t.Fatal("reply consumption or budget contract failed")
 	}
 }
 
-// TestStore_PriorityDefault — Send with empty priority; inbox shows priority=normal
-func TestStore_PriorityDefault(t *testing.T) {
-	s := newTestStore(t)
-
-	msg, err := s.Send("alice", "bob", "hello", "", nil)
-	if err != nil {
-		t.Fatalf("Send failed: %v", err)
+func TestIdempotencyCapacityAndFailedCommandRollback(t *testing.T) {
+	f := newFixture(t)
+	f.limits.QueueCapacity = 1
+	a := f.enrolled("a")
+	b := f.enrolled("b")
+	c := Enqueue{Credential: a.Credential, Recipient: b.Enrollment.ID, RequestID: "request", Body: "body", Within: time.Minute, Hops: 2}
+	first := f.must(c).Message
+	if f.must(c).Message.ID != first.ID {
+		t.Fatal("duplicate request inserted another message")
 	}
-
-	if msg.Priority != "normal" {
-		t.Errorf("msg.Priority = %q, want normal", msg.Priority)
+	c.Body = "changed"
+	if _, err := f.apply(c); !errors.Is(err, ErrConflict) {
+		t.Fatalf("request ID conflict: %v", err)
 	}
-
-	// Verify via inbox
-	messages, _ := s.Inbox("bob")
-	if len(messages) != 1 {
-		t.Fatalf("inbox len = %d, want 1", len(messages))
+	c.RequestID = "second"
+	if _, err := f.apply(c); !errors.Is(err, ErrBackpressure) {
+		t.Fatalf("queue capacity: %v", err)
 	}
-	if messages[0].Priority != "normal" {
-		t.Errorf("inbox priority = %q, want normal", messages[0].Priority)
-	}
-}
-
-// TestStore_PriorityInvalid — Send with priority=unknown returns error
-func TestStore_PriorityInvalid(t *testing.T) {
-	s := newTestStore(t)
-
-	_, err := s.Send("alice", "bob", "hello", "unknown", nil)
-	if err == nil {
-		t.Fatal("expected error for invalid priority")
+	if len(f.must(Select{}).Dispatches) != 1 {
+		t.Fatal("failed command damaged stored work")
 	}
 }
 
-// TestStore_TTLValidation — Send with ttl>MaxTTL returns error
-func TestStore_TTLValidation(t *testing.T) {
-	s := newTestStore(t)
-
-	ttl := config.Defaults.MaxTTL + 1
-	_, err := s.Send("alice", "bob", "hello", "", &ttl)
-	if err == nil {
-		t.Fatal("expected error for ttl > MaxTTL")
+func TestRequestDeadlineIsAssignedOnceByBroker(t *testing.T) {
+	f := newFixture(t)
+	a, b := f.enrolled("a"), f.enrolled("b")
+	c := Enqueue{Credential: a.Credential, Recipient: b.Enrollment.ID, RequestID: "stable", Body: "body", Hops: 2}
+	first := f.must(c).Message
+	if !first.Deadline.Equal(f.now.Add(f.limits.DefaultDeadline)) {
+		t.Fatal("broker did not assign its configured default deadline")
+	}
+	f.now = f.now.Add(f.limits.DefaultDeadline * 2)
+	f.limits.DefaultDeadline = f.limits.DefaultDeadline / 2
+	duplicate := f.must(c).Message
+	if duplicate.ID != first.ID || !duplicate.Deadline.Equal(first.Deadline) || duplicate.Disposition != "deadline_elapsed" {
+		t.Fatal("duplicate request changed its deadline or restarted expired work")
+	}
+	c.Within = time.Minute
+	if _, err := f.apply(c); !errors.Is(err, ErrConflict) {
+		t.Fatalf("changed duration reused the same request ID: %v", err)
 	}
 }
 
-// TestStore_SchemaMigration — create v1 schema, insert row, run migration, read row
-func TestStore_SchemaMigration(t *testing.T) {
-	db, err := sql.Open("sqlite", ":memory:")
-	if err != nil {
+func TestRetirementCannotRebindHeldConversation(t *testing.T) {
+	f := newFixture(t)
+	a := f.enrolled("a")
+	b := f.enrolled("b")
+	m := f.send(a, b, "uncertain")
+	d := f.must(Select{}).Dispatches[0]
+	f.must(Retire{ID: b.Enrollment.ID, Reason: "unresolved provider retention"})
+	if _, err := f.apply(Enroll{Provider: "codex", Conversation: "b", Endpoint: "/registered/daemon.sock", Label: "b"}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("retirement bypassed retained input: %v", err)
+	}
+	f.must(Consume{Credential: b.Credential, MessageID: m.ID, Attempt: d.Envelope.Message.Attempt})
+	f.must(Enroll{Provider: "codex", Conversation: "b", Endpoint: "/registered/daemon.sock", Label: "b"})
+	if len(f.must(Select{}).Dispatches) != 0 {
+		t.Fatal("retirement replayed old input")
+	}
+}
+
+func TestPendingBoundAndNonRetentionHaveExplicitEvidence(t *testing.T) {
+	f := newFixture(t)
+	a := f.enrolled("a")
+	b := f.enrolled("b")
+	p := f.must(Enroll{Provider: "codex", Conversation: "pending", Endpoint: "/registered/daemon.sock", Label: "pending"})
+	f.now = f.now.Add(f.limits.PendingTTL)
+	f.must(Expire{})
+	if _, err := f.apply(Bind{ID: p.Enrollment.ID, Conversation: "pending", Endpoint: "/registered/daemon.sock", Evidence: "late readiness"}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("expired enrollment activated: %v", err)
+	}
+	m := f.send(a, b, "refused")
+	d := f.must(Select{}).Dispatches[0]
+	if _, err := f.apply(Observe{Attempt: d.Envelope.Message.Attempt, Recipient: b.Enrollment.ID, Kind: "refused"}); err == nil {
+		t.Fatal("unsubstantiated refusal accepted")
+	}
+	f.must(Observe{Attempt: d.Envelope.Message.Attempt, Recipient: b.Enrollment.ID, Kind: "refused", Evidence: "attempt-specific definitive native refusal"})
+	if got := f.message(m.ID).Possession; got != "not_retained" {
+		t.Fatalf("definitive refusal did not establish non-retention: %s", got)
+	}
+	if _, err := f.apply(Consume{Credential: b.Credential, MessageID: m.ID, Attempt: d.Envelope.Message.Attempt}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("contradictory receipt accepted: %v", err)
+	}
+	f.send(a, b, "next")
+	if len(f.must(Select{}).Dispatches) != 1 {
+		t.Fatal("definitive non-retention retained barrier")
+	}
+}
+
+func TestInboxDoesNotAcknowledgeOrReleaseBarrier(t *testing.T) {
+	f := newFixture(t)
+	a := f.enrolled("a")
+	b := f.enrolled("b")
+	m := f.send(a, b, "inbox")
+	f.must(Select{})
+	if err := statetest.Write(f.owner, func(tx *brokerstate.WriteTx) error {
+		items, err := NewStore(tx, f.limits, f.now).Inbox(b.Credential)
+		if err == nil && len(items) != 1 {
+			t.Fatal("inbox lost message")
+		}
+		return err
+	}); err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
-	db.SetMaxOpenConns(1)
+	if f.message(m.ID).Possession != "uncertain" || len(f.must(Select{}).Dispatches) != 0 {
+		t.Fatal("inbox mutated delivery state")
+	}
+}
 
-	// Set pragmas
-	db.Exec("PRAGMA journal_mode=WAL")
-	db.Exec(fmt.Sprintf("PRAGMA busy_timeout=%d", config.Defaults.BusyTimeout.Milliseconds()))
-
-	// Create v1 schema (without new columns)
-	schema := `
-	CREATE TABLE IF NOT EXISTS messages (
-		id          INTEGER PRIMARY KEY AUTOINCREMENT,
-		from_name   TEXT NOT NULL,
-		to_name     TEXT NOT NULL,
-		body        TEXT NOT NULL,
-		state       TEXT DEFAULT 'queued',
-		created_at  TEXT NOT NULL,
-		pushed_at   TEXT
-	);
-	`
-	if _, err := db.Exec(schema); err != nil {
-		t.Fatalf("create v1 schema: %v", err)
+func TestCanonicalSchemaRejectsDanglingAndDuplicateAttempts(t *testing.T) {
+	f := newFixture(t)
+	err := statetest.Write(f.owner, func(tx *brokerstate.WriteTx) error {
+		_, err := tx.Exec("INSERT INTO attempts(id,message_id,owner_id,generation,intent_at) VALUES('attempt','missing-message','owner',1,1)")
+		return err
+	})
+	if err == nil {
+		t.Fatal("foreign-key enforcement is disabled on canonical storage")
 	}
-
-	// Insert a v1 row
-	now := time.Now().UTC().Format(time.RFC3339)
-	_, err = db.Exec(
-		`INSERT INTO messages (from_name, to_name, body, state, created_at)
-		 VALUES (?, ?, ?, 'queued', ?)`,
-		"alice", "bob", "v1 message", now,
-	)
-	if err != nil {
-		t.Fatalf("insert v1 row: %v", err)
-	}
-
-	// Run migration (NewStore should run it)
-	s, err := NewStore(db)
-	if err != nil {
-		t.Fatalf("NewStore (migration): %v", err)
-	}
-
-	// Verify v1 row survives and has correct defaults
-	messages, err := s.Inbox("bob")
-	if err != nil {
-		t.Fatalf("Inbox failed: %v", err)
-	}
-	if len(messages) != 1 {
-		t.Fatalf("inbox len = %d, want 1", len(messages))
-	}
-	if messages[0].Body != "v1 message" {
-		t.Errorf("body = %q, want 'v1 message'", messages[0].Body)
-	}
-	if messages[0].Priority != "normal" {
-		t.Errorf("priority = %q, want normal (default)", messages[0].Priority)
+	a := f.enrolled("a")
+	b := f.enrolled("b")
+	m := f.send(a, b, "one-attempt")
+	f.must(Select{})
+	err = statetest.Write(f.owner, func(tx *brokerstate.WriteTx) error {
+		_, err := tx.Exec("INSERT INTO attempts(id,message_id,owner_id,generation,intent_at) VALUES('second-attempt',?,'owner',1,1)", m.ID)
+		return err
+	})
+	if err == nil {
+		t.Fatal("schema admitted a second attempt for one message")
 	}
 }

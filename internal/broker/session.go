@@ -2,17 +2,19 @@ package broker
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"log"
 	"net"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
 
+	"github.com/seungpyoson/waggle/internal/brokerstate"
 	"github.com/seungpyoson/waggle/internal/config"
 	"github.com/seungpyoson/waggle/internal/protocol"
+	"github.com/seungpyoson/waggle/internal/tasks"
 )
 
 // Session represents a client connection
@@ -22,9 +24,8 @@ type Session struct {
 	enc             *json.Encoder
 	scan            *bufio.Scanner
 	broker          *Broker
-	ownsPushToken   bool
 	cleanDisconnect atomic.Bool // Set to true when disconnect command is received
-	cleanupOnce     sync.Once
+	streams         sync.WaitGroup
 	writeMu         sync.Mutex // protects enc writes
 }
 
@@ -43,23 +44,34 @@ func newSession(conn net.Conn, broker *Broker) *Session {
 	}
 }
 
-// readLoop reads requests and sends responses
-func (s *Session) readLoop() {
-	defer s.cleanup()
+// readLoop owns connection cleanup within the admitted service lifetime.
+// Each new RPC still requires its own admission before it can execute.
+func (s *Session) readLoop(lifetime *brokerstate.Operation) {
+	defer s.cleanup(lifetime)
 
 	for s.scan.Scan() {
-		var req protocol.Request
-		if err := json.Unmarshal(s.scan.Bytes(), &req); err != nil {
+		req, err := protocol.DecodeRequest(s.scan.Bytes())
+		if err != nil {
 			resp := protocol.ErrResponse(protocol.ErrInvalidRequest, "invalid JSON")
+			if errors.Is(err, protocol.ErrUnsupportedVersion) {
+				resp = protocol.ErrResponse("UNSUPPORTED_VERSION", err.Error())
+			}
 			s.writeMu.Lock()
 			s.enc.Encode(resp)
 			s.writeMu.Unlock()
 			continue
 		}
 
-		resp := route(s, req)
+		var resp protocol.Response
+		err = s.broker.owner.Do(context.Background(), func(op *brokerstate.Operation) error {
+			resp = route(&call{Session: s, op: op}, req)
+			return nil
+		})
+		if err != nil {
+			resp = protocol.ErrResponse(protocol.ErrInternalError, err.Error())
+		}
 		s.writeMu.Lock()
-		err := s.enc.Encode(resp)
+		err = s.enc.Encode(resp)
 		s.writeMu.Unlock()
 		if err != nil {
 			// Suppress errors after disconnect — client may have already closed
@@ -94,14 +106,9 @@ func isConnectionClosed(err error) bool {
 		errors.Is(err, syscall.EPIPE)
 }
 
-// cleanup releases resources on disconnect. Safe to call multiple times:
-// readLoop defers it, and paired-session teardown may call it directly.
-func (s *Session) cleanup() {
-	s.cleanupOnce.Do(s.doCleanup)
-}
-
-func (s *Session) doCleanup() {
-	var pushListener *Session
+// cleanup runs once, when this connection's read loop returns. Its writes
+// finish under the existing admission, before the service can drain.
+func (s *Session) cleanup(lifetime *brokerstate.Operation) {
 	if s.name != "" {
 		// Release all locks
 		s.broker.lockMgr.ReleaseAll(s.name)
@@ -110,7 +117,11 @@ func (s *Session) doCleanup() {
 		// Only requeue on unclean disconnect (connection dropped without disconnect command)
 		// Clean disconnect means the client intentionally disconnected and wants to keep tasks claimed
 		if !s.cleanDisconnect.Load() {
-			count, err := s.broker.store.RequeueByOwner(s.name)
+			var count int
+			err := lifetime.Write(context.Background(), func(tx *brokerstate.WriteTx) (err error) {
+				count, err = tasks.NewStore(tx).RequeueByOwner(s.name)
+				return err
+			})
 			if err != nil {
 				log.Printf("session: error requeuing tasks for %s: %v", s.name, err)
 			} else if count > 0 {
@@ -121,36 +132,13 @@ func (s *Session) doCleanup() {
 		// Unsubscribe from all events
 		s.broker.hub.UnsubscribeAll(s.name)
 
-		// Remove from broker session map
-		// CLASS 4 FIX (E2): Only delete if we still own this name in the sessions map
-		// Prevents old session cleanup from deleting new session's entry after name collision
-		var shouldPublish bool
+		// This read loop is the sole owner of its connection registration.
 		s.broker.mu.Lock()
-		if s.broker.sessions[s.name] == s {
-			delete(s.broker.sessions, s.name)
-			shouldPublish = true
-			if !strings.HasSuffix(s.name, "-push") && s.ownsPushToken {
-				delete(s.broker.pushTokens, s.name)
-				pushListener = s.broker.sessions[s.name+"-push"]
-			}
-		}
+		delete(s.broker.sessions, s.name)
 		s.broker.mu.Unlock()
 
-		// Base agent disconnects should tear down the paired push listener, too.
-		// Close it outside broker.mu so its cleanup can safely mutate broker state.
-		if pushListener != nil {
-			pushListener.cleanDisconnect.Store(true)
-			pushListener.cleanup()
-		}
-
-		// Publish presence event OUTSIDE the lock to avoid deadlock
-		// If any event subscriber tries to read broker.sessions, publishing inside
-		// the lock would cause: cleanup holds broker.mu (write) → hub.Publish →
-		// subscriber reads broker.sessions → needs broker.mu (read) → deadlock
-		if shouldPublish {
-			publishPresenceEvent(s.broker, "presence.offline", s.name)
-		}
 	}
 
 	s.conn.Close()
+	s.streams.Wait()
 }
