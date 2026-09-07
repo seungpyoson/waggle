@@ -3,6 +3,7 @@ package brokerstate
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -471,5 +472,57 @@ func TestReportFatalInterruptsAndRetainsOwnership(t *testing.T) {
 	case <-o.Draining():
 	default:
 		t.Fatal("fatal report did not begin draining")
+	}
+}
+
+// failCloseConnector is a real canonical connection whose pooled handle refuses
+// to close. database/sql closes a connector before reporting, so this reproduces
+// the only failure that can follow a committed release.
+type failCloseConnector struct {
+	dsn    string
+	driver driver.Driver
+	err    error
+}
+
+func (c failCloseConnector) Connect(context.Context) (driver.Conn, error) { return c.driver.Open(c.dsn) }
+func (c failCloseConnector) Driver() driver.Driver                        { return c.driver }
+func (c failCloseConnector) Close() error                                 { return c.err }
+
+// A canonical store that was released but whose local handle did not close is
+// not retained ownership: the row is free, a successor acquires it, and the
+// reported error says so distinctly instead of claiming finalization failed.
+func TestReleasedStoreWithFailedHandleCloseIsNotRetainedOwnership(t *testing.T) {
+	cfg := config.NewOwnershipConfig(filepath.Join(t.TempDir(), "state.db"), config.CreateStore)
+	o, err := Acquire(t.Context(), cfg, processFixture{status: ProcessAlive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	local := errors.New("canonical store handle did not close")
+	// Replace the pooled handle with an equivalent one over the same store whose
+	// close fails. Everything before the close stays the production path.
+	original := o.state.db
+	dsn := "file:" + cfg.Database + "?mode=rw"
+	replacement := sql.OpenDB(failCloseConnector{dsn: dsn, driver: original.Driver(), err: local})
+	replacement.SetMaxOpenConns(config.CanonicalConnections)
+	o.state.db = replacement
+	if err := original.Close(); err != nil {
+		t.Fatal(err)
+	}
+	o.BeginShutdown(nil)
+	err = o.Wait(t.Context())
+	if !errors.Is(err, ErrStoreCloseFailed) || !errors.Is(err, local) {
+		t.Fatalf("store close failure was not reported distinctly: %v", err)
+	}
+	if errors.Is(err, ErrFinalizationFailed) {
+		t.Fatalf("released ownership reported as a finalization failure: %v", err)
+	}
+	cfg.Action = config.OpenStore
+	next, err := Acquire(t.Context(), cfg, processFixture{status: ProcessAlive})
+	if err != nil {
+		t.Fatalf("ownership was not actually released: %v", err)
+	}
+	next.BeginShutdown(nil)
+	if err := next.Wait(t.Context()); err != nil {
+		t.Fatal(err)
 	}
 }

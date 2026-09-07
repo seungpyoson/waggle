@@ -13,20 +13,32 @@ import (
 
 var ErrShutdownDeadlineMissed = errors.New("shutdown deadline missed; ownership retained while draining continues")
 
+// releaseOutcome separates a released store whose local handle did not close
+// from ownership the broker still holds. Only the latter is an exit failure:
+// after a released row there is nothing for an operator to recover, so the
+// close is warned about and the command still succeeds.
+func releaseOutcome(err error, report io.Writer) error {
+	if errors.Is(err, brokerstate.ErrStoreCloseFailed) {
+		fmt.Fprintln(report, err.Error())
+		return nil
+	}
+	return err
+}
+
 // supervise runs ingress and observes shutdown progress concurrently. The
-// first signal (or an ingress end, or an RPC stop observed through Draining)
-// begins orderly draining and starts the reporting deadline. A second signal
+// first signal (or an ingress end, an RPC stop observed through Draining, or
+// cancellation of the parent context) begins orderly draining exactly once and
+// starts the reporting deadline. A second signal
 // escalates to interruption. The deadline never changes owner progress: the
 // command reports it, keeps draining, and exits nonzero with the eventual
 // result. A permanent finalization failure returns immediately without release.
 func supervise(ctx context.Context, signals <-chan os.Signal, serve func(context.Context) error, owner *brokerstate.Owner, deadline time.Duration, report io.Writer) error {
-	serveCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
 	serveDone := make(chan error, 1)
-	go func() { serveDone <- serve(serveCtx) }()
+	go func() { serveDone <- serve(ctx) }()
 	finalDone := make(chan error, 1)
 	go func() { finalDone <- owner.Wait(context.Background()) }()
 	draining := owner.Draining()
+	parent := ctx.Done()
 	var serveErr, missed, escalated error
 	var timer <-chan time.Time
 	// begun stays true once draining starts, so escalation stays available
@@ -38,10 +50,12 @@ func supervise(ctx context.Context, signals <-chan os.Signal, serve func(context
 			begun = true
 			timer = time.After(deadline)
 		}
-		draining = nil
+		draining, parent = nil, nil
 	}
 	for {
 		select {
+		case <-parent:
+			begin(ctx.Err())
 		case sig := <-signals:
 			if !begun {
 				begin(fmt.Errorf("received %s", sig))
@@ -66,6 +80,7 @@ func supervise(ctx context.Context, signals <-chan os.Signal, serve func(context
 			missed = ErrShutdownDeadlineMissed
 			fmt.Fprintln(report, missed.Error())
 		case err := <-finalDone:
+			err = releaseOutcome(err, report)
 			if err == nil {
 				if missed != nil {
 					fmt.Fprintln(report, "broker released after the missed shutdown deadline")

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -155,6 +156,47 @@ func TestSuperviseEscalatesOnTheSignalAfterAMissedDeadline(t *testing.T) {
 		}
 	case <-time.After(config.Defaults.StartupTimeout):
 		t.Fatalf("signal after a missed deadline never interrupted native I/O: %q", report.String())
+	}
+}
+
+// Cancelling the parent context is a shutdown trigger, not a silent no-op: the
+// supervisor begins orderly draining once and returns the normal release result.
+func TestSuperviseBeginsShutdownWhenTheParentContextIsCancelled(t *testing.T) {
+	o := superviseOwner(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	serve := func(context.Context) error { <-o.Draining(); return nil }
+	done := make(chan error, 1)
+	go func() { done <- supervise(ctx, make(chan os.Signal, 2), serve, o, config.Defaults.ShutdownTimeout, &syncBuffer{}) }()
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("parent cancellation did not release cleanly: %v", err)
+		}
+	case <-time.After(config.Defaults.StartupTimeout):
+		t.Fatal("parent cancellation never began shutdown")
+	}
+	if err := o.Wait(t.Context()); err != nil {
+		t.Fatalf("ownership retained after parent cancellation: %v", err)
+	}
+}
+
+// A canonical store that was released but whose local handle did not close is
+// not retained ownership. The command warns and still exits successfully;
+// anything else keeps its exit failure.
+func TestReleasedStoreCloseFailureIsAWarningNotAnExitFailure(t *testing.T) {
+	local := errors.New("canonical store handle did not close")
+	var report syncBuffer
+	released := fmt.Errorf("%w: %w", brokerstate.ErrStoreCloseFailed, local)
+	if err := releaseOutcome(released, &report); err != nil {
+		t.Fatalf("released ownership reported as an exit failure: %v", err)
+	}
+	if !strings.Contains(report.String(), local.Error()) {
+		t.Fatalf("close failure was not warned about: %q", report.String())
+	}
+	retained := fmt.Errorf("%w: %w", brokerstate.ErrFinalizationFailed, local)
+	if err := releaseOutcome(retained, &report); !errors.Is(err, brokerstate.ErrFinalizationFailed) {
+		t.Fatalf("retained ownership was downgraded to a warning: %v", err)
 	}
 }
 

@@ -31,7 +31,6 @@ type OwnershipConfig struct {
 	Action             StoreAction
 	AcquireTimeout     time.Duration
 	TransactionTimeout time.Duration
-	ShutdownTimeout    time.Duration
 }
 
 // BrokerEndpoints names the IPC files belonging to a canonical store.
@@ -82,7 +81,6 @@ func NewOwnershipConfig(database string, action StoreAction) OwnershipConfig {
 		Action:             action,
 		AcquireTimeout:     Defaults.StartupTimeout,
 		TransactionTimeout: Defaults.BusyTimeout,
-		ShutdownTimeout:    Defaults.ShutdownTimeout,
 	}
 }
 
@@ -93,7 +91,7 @@ func (c OwnershipConfig) Validate() error {
 	if c.Action != OpenStore && c.Action != CreateStore {
 		return fmt.Errorf("canonical store action must explicitly be open or create")
 	}
-	if c.AcquireTimeout <= 0 || c.TransactionTimeout <= 0 || c.ShutdownTimeout <= 0 {
+	if c.AcquireTimeout <= 0 || c.TransactionTimeout <= 0 {
 		return fmt.Errorf("ownership deadlines must be positive")
 	}
 	return nil

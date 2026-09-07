@@ -26,6 +26,10 @@ var (
 	ErrDuplicateWork       = errors.New("managed work key is already registered")
 	ErrFinalizationFailed  = errors.New("broker finalization failed; ownership retained")
 	ErrShutdownIncomplete  = errors.New("broker shutdown incomplete; ownership retained")
+	// ErrStoreCloseFailed reports a local database handle that did not close
+	// after the canonical row was released. Ownership was released: the store is
+	// free for a successor and nothing about this failure retains it.
+	ErrStoreCloseFailed = errors.New("canonical store handle did not close; ownership was released")
 )
 
 type lifecycle uint8
@@ -53,7 +57,6 @@ type ownerState struct {
 	workers        map[string]struct{}
 	drained        chan struct{}
 	stop           chan struct{}
-	stopCause      error
 	interrupt      context.Context
 	cancel         context.CancelCauseFunc
 	shutdownOnce   sync.Once
@@ -225,19 +228,20 @@ func (o *Owner) Draining() <-chan struct{} {
 }
 
 // BeginShutdown closes normal admission, closes ingress and starts the sole
-// finalizer. It never cancels Interrupt and never waits.
-func (o *Owner) BeginShutdown(cause error) {
+// finalizer. It never cancels Interrupt and never waits. The cause is the
+// caller's own diagnostic: orderly draining records none, and only Interrupt
+// carries a cause into the native I/O it cancels.
+func (o *Owner) BeginShutdown(error) {
 	if o == nil || o.state == nil {
 		return
 	}
-	o.state.beginShutdown(cause)
+	o.state.beginShutdown()
 }
 
-func (s *ownerState) beginShutdown(cause error) {
+func (s *ownerState) beginShutdown() {
 	s.shutdownOnce.Do(func() {
 		s.mu.Lock()
 		s.phase = draining
-		s.stopCause = cause
 		close(s.stop)
 		s.settle()
 		s.mu.Unlock()
@@ -263,7 +267,7 @@ func (o *Owner) Interrupt(cause error) {
 }
 
 func (s *ownerState) interruptWith(cause error) {
-	s.beginShutdown(cause)
+	s.beginShutdown()
 	s.cancel(cause)
 }
 
@@ -335,6 +339,6 @@ func (s *ownerState) finalize() {
 	s.phase = released
 	s.mu.Unlock()
 	if err := s.db.Close(); err != nil {
-		s.finalErr = fmt.Errorf("close canonical store after release: %w", err)
+		s.finalErr = fmt.Errorf("%w: %w", ErrStoreCloseFailed, err)
 	}
 }
