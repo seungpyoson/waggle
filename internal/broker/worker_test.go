@@ -169,6 +169,14 @@ func TestUncorrelatedReadinessDisconnectsOnlyThatEnrollment(t *testing.T) {
 	if e.Evidence != "native readiness uncorrelated with the enrolled conversation" {
 		t.Fatalf("provider anomaly recorded without its diagnostics: %q", e.Evidence)
 	}
+	// The transport is joined before the observation is written, on the same
+	// path a failed probe uses, so the next open waits out the reconnect backoff.
+	fake.mu.Lock()
+	joined := fake.closes[broken.Enrollment.ID]
+	fake.mu.Unlock()
+	if joined < 1 {
+		t.Fatal("anomaly recorded readiness without joining its transport")
+	}
 	select {
 	case <-b.owner.Draining():
 		t.Fatal("a provider anomaly closed broker admission")
