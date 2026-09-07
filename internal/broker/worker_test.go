@@ -38,7 +38,7 @@ func TestFatalWaitPersistsAnotherWorkersAcceptedOutcome(t *testing.T) {
 	cfg.Messaging.IdleCheckInterval = cfg.Messaging.QueueCheckInterval
 	transport := config.NewNativeConfig()
 	transport.RequestTimeout = waitBudget / 2
-	if cfg.Messaging.IdleCheckInterval+config.Defaults.StartupPollInterval >= transport.RequestTimeout || transport.RequestTimeout >= waitBudget {
+	if cfg.Messaging.IdleCheckInterval+config.Defaults.ShutdownPollInterval >= transport.RequestTimeout || transport.RequestTimeout >= waitBudget {
 		t.Fatal("fixture requires idle check plus held wait < native request timeout < owner wait budget")
 	}
 	b, err := newWithConnector(t.Context(), owner, cfg, transport, newNativeFixture())
@@ -83,7 +83,7 @@ func TestFatalWaitPersistsAnotherWorkersAcceptedOutcome(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("close failure never drained broker")
 	}
-	short, stop := context.WithTimeout(ctx, config.Defaults.StartupPollInterval)
+	short, stop := context.WithTimeout(ctx, config.Defaults.ShutdownPollInterval)
 	defer stop()
 	if err := owner.Wait(short); !errors.Is(err, brokerstate.ErrShutdownIncomplete) {
 		t.Errorf("Wait returned before A's outcome: %v", err)
@@ -153,7 +153,7 @@ func TestWorkerOpenFailureClassification(t *testing.T) {
 					select {
 					case <-ctx.Done():
 						t.Fatal("Open error was not observed")
-					case <-time.After(config.Defaults.StartupPollInterval):
+					case <-time.After(config.Defaults.ShutdownPollInterval):
 					}
 				}
 				select {
@@ -433,7 +433,7 @@ func TestIdleBoundWorkerIssuesNoWriteTransactions(t *testing.T) {
 	socket := shortBrokerSocketPath(t, "waggle-idle-*")
 	cfg := config.NewBrokerConfig(config.BrokerEndpoints{Socket: socket, PID: socket + ".pid"})
 	// Keep the measurement fast while exercising distinct scheduling periods.
-	cfg.Messaging.QueueCheckInterval = config.Defaults.StartupPollInterval / 2
+	cfg.Messaging.QueueCheckInterval = config.Defaults.ShutdownPollInterval / 2
 	cfg.Messaging.IdleCheckInterval = 4 * cfg.Messaging.QueueCheckInterval
 	cfg.Messaging.DiscoveryInterval = 2 * cfg.Messaging.IdleCheckInterval
 	cfg.Messaging.ProbeInterval = cfg.Messaging.IdleCheckInterval
@@ -496,7 +496,7 @@ func TestBoundRecipientWakeDeliversBeforeIdlePoll(t *testing.T) {
 	recipient := boundFixture(t, b, "recipient")
 	c := connectClient(t, socket)
 	defer c.Close()
-	allowance := config.Defaults.StartupPollInterval
+	allowance := config.Defaults.ShutdownPollInterval
 	bound := cfg.Messaging.QueueCheckInterval + allowance
 	if bound >= cfg.Messaging.IdleCheckInterval/2 {
 		t.Fatal("delivery bound does not distinguish wakes from idle polling")

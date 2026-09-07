@@ -17,7 +17,7 @@ import (
 func awaitTransport(t *testing.T, fake *nativeFixture, id, reason string, invariant, reached func(opens, closes, probes int) bool) {
 	t.Helper()
 	deadline := time.After(config.Defaults.StartupTimeout)
-	tick := time.NewTicker(config.Defaults.StartupPollInterval)
+	tick := time.NewTicker(config.Defaults.ShutdownPollInterval)
 	defer tick.Stop()
 	for {
 		fake.mu.Lock()

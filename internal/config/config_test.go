@@ -302,18 +302,6 @@ func TestDefaults_LeaseCheckPeriod(t *testing.T) {
 	}
 }
 
-func TestDefaults_IdleCheckInterval(t *testing.T) {
-	if Defaults.IdleCheckInterval != 1*time.Second {
-		t.Fatalf("IdleCheckInterval = %v, want 1s", Defaults.IdleCheckInterval)
-	}
-}
-
-func TestDefaults_StartupPollInterval(t *testing.T) {
-	if Defaults.StartupPollInterval != 100*time.Millisecond {
-		t.Fatalf("StartupPollInterval = %v, want 100ms", Defaults.StartupPollInterval)
-	}
-}
-
 func TestDefaults_ShutdownPollInterval(t *testing.T) {
 	if Defaults.ShutdownPollInterval != 100*time.Millisecond {
 		t.Fatalf("ShutdownPollInterval = %v, want 100ms", Defaults.ShutdownPollInterval)

@@ -284,7 +284,7 @@ func (e e2eEnv) launch(t *testing.T, logName string, args ...string) *e2eBroker 
 		<-broker.exited
 	})
 
-	ticker := time.NewTicker(config.Defaults.StartupPollInterval)
+	ticker := time.NewTicker(config.Defaults.ShutdownPollInterval)
 	defer ticker.Stop()
 	deadline := time.NewTimer(2 * config.Defaults.StartupTimeout)
 	defer deadline.Stop()

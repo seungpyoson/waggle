@@ -73,7 +73,7 @@ func TestSuperviseReportsDeadlineThenEventualRelease(t *testing.T) {
 			t.Fatalf("deadline was not reported while draining: %q", report.String())
 		case err := <-done:
 			t.Fatalf("supervisor returned before finalization: %v", err)
-		case <-time.After(config.Defaults.StartupPollInterval):
+		case <-time.After(config.Defaults.ShutdownPollInterval):
 		}
 	}
 	release()
@@ -103,7 +103,7 @@ func TestSuperviseSecondSignalInterruptsAdmittedNativeCall(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- supervise(t.Context(), signals, serve, o, time.Second, &report) }()
 	signals <- syscall.SIGINT
-	time.Sleep(config.Defaults.StartupPollInterval)
+	time.Sleep(config.Defaults.ShutdownPollInterval)
 	select {
 	case err := <-done:
 		t.Fatalf("orderly draining cancelled native I/O: %v", err)
@@ -142,7 +142,7 @@ func TestSuperviseEscalatesOnTheSignalAfterAMissedDeadline(t *testing.T) {
 			t.Fatalf("deadline was not reported while draining: %q", report.String())
 		case err := <-done:
 			t.Fatalf("supervisor returned before finalization: %v", err)
-		case <-time.After(config.Defaults.StartupPollInterval):
+		case <-time.After(config.Defaults.ShutdownPollInterval):
 		}
 	}
 	signals <- syscall.SIGINT

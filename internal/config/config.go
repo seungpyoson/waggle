@@ -55,23 +55,17 @@ func ValidateDefaults() error {
 }
 
 var Defaults = struct {
-	DirName    string
-	DBFile     string
-	ConfigFile string
-	PIDFile    string
-	LockFile   string
-	LogFile    string
+	DirName  string
+	DBFile   string
+	PIDFile  string
+	LockFile string
+	LogFile  string
 
 	ShutdownTimeout      time.Duration
-	PollInterval         time.Duration
-	MaxLogSize           int64
 	MaxMessageSize       int64
 	LeaseDuration        time.Duration
-	IdleTimeout          time.Duration
 	BusyTimeout          time.Duration
 	LeaseCheckPeriod     time.Duration
-	IdleCheckInterval    time.Duration
-	StartupPollInterval  time.Duration
 	ShutdownPollInterval time.Duration
 	StartupTimeout       time.Duration
 	DisconnectTimeout    time.Duration
@@ -84,31 +78,24 @@ var Defaults = struct {
 	AgentConfigFile    string
 
 	// Connection timeout defaults
-	ConnectTimeout     time.Duration
-	HealthCheckTimeout time.Duration
+	ConnectTimeout time.Duration
 
 	// Task lifecycle defaults
 	TaskTTLCheckPeriod time.Duration
 	TaskStaleThreshold time.Duration
 	MaxTaskTTL         int
 }{
-	DirName:    ".waggle",
-	DBFile:     "state.db",
-	ConfigFile: "config.json",
-	PIDFile:    "waggle-v2.pid",
-	LockFile:   "waggle.lock",
-	LogFile:    "waggle.log",
+	DirName:  ".waggle",
+	DBFile:   "state.db",
+	PIDFile:  "waggle-v2.pid",
+	LockFile: "waggle.lock",
+	LogFile:  "waggle.log",
 
 	ShutdownTimeout:      5 * time.Second,
-	PollInterval:         500 * time.Millisecond,
-	MaxLogSize:           10 * 1024 * 1024,
 	MaxMessageSize:       1024 * 1024, // 1MB buffer for large AI agent payloads
 	LeaseDuration:        5 * time.Minute,
-	IdleTimeout:          5 * time.Minute,
 	BusyTimeout:          5 * time.Second,
 	LeaseCheckPeriod:     30 * time.Second,
-	IdleCheckInterval:    1 * time.Second,
-	StartupPollInterval:  100 * time.Millisecond,
 	ShutdownPollInterval: 100 * time.Millisecond,
 	StartupTimeout:       2 * time.Second,
 	DisconnectTimeout:    2 * time.Second,
@@ -119,8 +106,7 @@ var Defaults = struct {
 	SpawnLaunchTimeout: 10 * time.Second,
 	AgentConfigFile:    "agents.json",
 
-	ConnectTimeout:     5 * time.Second,
-	HealthCheckTimeout: 1 * time.Second,
+	ConnectTimeout: 5 * time.Second,
 
 	TaskTTLCheckPeriod: 30 * time.Second,
 	TaskStaleThreshold: 5 * time.Minute,

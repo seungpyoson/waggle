@@ -133,7 +133,7 @@ func TestUnresolvedCloseFailureRetainsOwnership(t *testing.T) {
 		select {
 		case <-deadline:
 			t.Fatal("retired worker never closed its transport")
-		case <-time.After(config.Defaults.StartupPollInterval):
+		case <-time.After(config.Defaults.ShutdownPollInterval):
 		}
 	}
 	// Ingress closes because the fatal close report begins draining. Bound the

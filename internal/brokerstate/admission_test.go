@@ -51,7 +51,7 @@ func TestFatalFinalizationWaitsForAdmittedOperation(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("fatal did not drain")
 	}
-	short, stop := context.WithTimeout(ctx, config.Defaults.StartupPollInterval)
+	short, stop := context.WithTimeout(ctx, config.Defaults.ShutdownPollInterval)
 	defer stop()
 	if err := o.Wait(short); !errors.Is(err, ErrShutdownIncomplete) {
 		t.Errorf("Wait abandoned admitted operation: %v", err)

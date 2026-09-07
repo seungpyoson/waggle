@@ -38,7 +38,7 @@ func waitEnrollment(t *testing.T, b *Broker, id, state string) messages.Enrollme
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), config.Defaults.StartupTimeout)
 	defer cancel()
-	tick := time.NewTicker(config.Defaults.StartupPollInterval)
+	tick := time.NewTicker(config.Defaults.ShutdownPollInterval)
 	defer tick.Stop()
 	for {
 		var e messages.Enrollment
