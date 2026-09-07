@@ -55,11 +55,21 @@ func ValidateDefaults() error {
 }
 
 var Defaults = struct {
-	DirName  string
-	DBFile   string
-	PIDFile  string
-	LockFile string
-	LogFile  string
+	DirName    string
+	DBFile     string
+	PIDFile    string
+	SocketFile string
+	LockFile   string
+	LogFile    string
+
+	// The retired broker's IPC names. They are never opened or served: the
+	// native runtime only recognizes them so conversion can report and retire
+	// them. Nothing may fall back to these endpoints.
+	LegacyPIDFile    string
+	LegacySocketFile string
+
+	// SnapshotDir holds pre-conversion database copies, under DataDir.
+	SnapshotDir string
 
 	ShutdownTimeout      time.Duration
 	MaxMessageSize       int64
@@ -85,11 +95,17 @@ var Defaults = struct {
 	TaskStaleThreshold time.Duration
 	MaxTaskTTL         int
 }{
-	DirName:  ".waggle",
-	DBFile:   "state.db",
-	PIDFile:  "waggle-v2.pid",
-	LockFile: "waggle.lock",
-	LogFile:  "waggle.log",
+	DirName:    ".waggle",
+	DBFile:     "state.db",
+	PIDFile:    "waggle-v2.pid",
+	SocketFile: "broker-v2.sock",
+	LockFile:   "waggle.lock",
+	LogFile:    "waggle.log",
+
+	LegacyPIDFile:    "waggle.pid",
+	LegacySocketFile: "broker.sock",
+
+	SnapshotDir: "rollback",
 
 	ShutdownTimeout:      5 * time.Second,
 	MaxMessageSize:       1024 * 1024, // 1MB buffer for large AI agent payloads
@@ -122,6 +138,15 @@ type Paths struct {
 	Lock      string
 	Log       string
 	Socket    string
+
+	// LegacyPID and LegacySocket are the retired broker's endpoints in the same
+	// resolved directories. Conversion reports and retires them; nothing serves
+	// or discovers them.
+	LegacyPID    string
+	LegacySocket string
+
+	// SnapshotDir holds the pre-conversion copies a rollback restores.
+	SnapshotDir string
 }
 
 // NewPaths computes all derived paths from a project ID. Broker state lives
@@ -144,13 +169,16 @@ func NewPaths(projectID string) Paths {
 	socketDir := filepath.Join(home, Defaults.DirName, "sockets", hash)
 
 	return Paths{
-		ProjectID: projectID,
-		DataDir:   dataDir,
-		DB:        filepath.Join(dataDir, Defaults.DBFile),
-		PID:       filepath.Join(dataDir, Defaults.PIDFile),
-		Lock:      filepath.Join(dataDir, Defaults.LockFile),
-		Log:       filepath.Join(dataDir, Defaults.LogFile),
-		Socket:    filepath.Join(socketDir, "broker-v2.sock"),
+		ProjectID:    projectID,
+		DataDir:      dataDir,
+		DB:           filepath.Join(dataDir, Defaults.DBFile),
+		PID:          filepath.Join(dataDir, Defaults.PIDFile),
+		Lock:         filepath.Join(dataDir, Defaults.LockFile),
+		Log:          filepath.Join(dataDir, Defaults.LogFile),
+		Socket:       filepath.Join(socketDir, Defaults.SocketFile),
+		LegacyPID:    filepath.Join(dataDir, Defaults.LegacyPIDFile),
+		LegacySocket: filepath.Join(socketDir, Defaults.LegacySocketFile),
+		SnapshotDir:  filepath.Join(dataDir, Defaults.SnapshotDir),
 	}
 }
 

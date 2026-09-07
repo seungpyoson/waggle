@@ -85,16 +85,27 @@ func newWithConnector(ctx context.Context, owner *brokerstate.Owner, cfg config.
 func Initialize(ctx context.Context, owner *brokerstate.Owner) error {
 	return owner.Do(ctx, func(op *brokerstate.Operation) error {
 		return op.Write(ctx, func(tx *brokerstate.WriteTx) error {
-			if _, err := tx.Exec(tasks.Schema()); err != nil {
+			if err := domainSchema(tx, tasks.Schema()); err != nil {
 				return err
 			}
-			if _, err := tx.Exec(messages.Schema); err != nil {
-				return err
-			}
-			_, err := tx.Exec("UPDATE cutover SET state = 'active' WHERE singleton = 1 AND state = 'prepared'")
-			return err
+			return tx.Activate()
 		})
 	})
+}
+
+// UpgradeDomain is the domain half of offline conversion: brokerstate owns the
+// transaction and the version record, this package owns what the schema is. The
+// store it leaves behind is prepared, so activation remains a separate decision.
+func UpgradeDomain(tx *brokerstate.WriteTx) error { return domainSchema(tx, tasks.UpgradeFromV1()) }
+
+// domainSchema is the one statement of what a native store's domain tables are.
+// Fresh initialization passes the tasks schema; conversion passes its upgrade.
+func domainSchema(tx *brokerstate.WriteTx, tasksDDL string) error {
+	if _, err := tx.Exec(tasksDDL); err != nil {
+		return err
+	}
+	_, err := tx.Exec(messages.Schema)
+	return err
 }
 
 // Serve runs ingress until the owner closes the listener. Workers are

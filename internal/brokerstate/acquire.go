@@ -15,8 +15,16 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const ownershipSchema = `
+// schemaVersionDDL creates the single shared version record. A legacy store
+// already has this table, so conversion updates the row it finds instead.
+const schemaVersionDDL = `
 CREATE TABLE schema_version (version INTEGER NOT NULL);
+`
+
+// ownershipTables is the one definition of native ownership storage, executed
+// by fresh creation and by offline conversion alike. The cutover row is created
+// prepared with empty provenance; conversion records where the store came from.
+const ownershipTables = `
 CREATE TABLE broker_owner (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
     instance_id TEXT NOT NULL CHECK (length(instance_id) > 0),
@@ -29,9 +37,12 @@ CREATE TABLE broker_owner (
 );
 CREATE TABLE cutover (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-    state TEXT NOT NULL CHECK (state IN ('prepared', 'active'))
+    state TEXT NOT NULL CHECK (state IN ('prepared', 'active')),
+    source_schema INTEGER,
+    converted_at TEXT,
+    snapshot TEXT
 );
-INSERT INTO cutover(singleton, state) VALUES (1, 'prepared');
+INSERT INTO cutover(singleton, state, source_schema, converted_at, snapshot) VALUES (1, 'prepared', NULL, NULL, NULL);
 CREATE TABLE endpoint_binding (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
     instance_id TEXT NOT NULL,
@@ -42,6 +53,34 @@ CREATE TABLE endpoint_binding (
     bound_at TEXT NOT NULL
 );
 `
+
+// firstGeneration is the ownership generation of the process that brings a
+// canonical store into existence, by creation or by conversion.
+const firstGeneration = 1
+
+// openCanonical is the only place the canonical database is opened, by the
+// owner, by offline conversion and by read-only inspection. Access is "rw" for
+// an existing store, "rwc" for explicit creation and "ro" for inspection, which
+// never creates a file. Every connection carries a bounded busy wait; callers
+// add their own context deadline.
+func openCanonical(path, access string, busy time.Duration) (*sql.DB, error) {
+	u := url.URL{Scheme: "file", Path: path}
+	q := u.Query()
+	q.Set("mode", access)
+	// Each opened connection uses a bounded SQLite busy wait. Acquisition and
+	// transactions also carry their caller's context deadline.
+	q.Set("_pragma", fmt.Sprintf("busy_timeout(%d)", busy.Milliseconds()))
+	// Referential integrity is mandatory on every connection, including those
+	// opened by database/sql after an earlier connection has been discarded.
+	q.Add("_pragma", "foreign_keys(1)")
+	u.RawQuery = q.Encode()
+	db, err := sql.Open("sqlite", u.String())
+	if err != nil {
+		return nil, fmt.Errorf("open canonical store: %w", err)
+	}
+	db.SetMaxOpenConns(config.CanonicalConnections)
+	return db, nil
+}
 
 // Acquire is the only owner constructor. CreateStore is explicit fresh-store
 // initialization; OpenStore requires an existing native store and never migrates.
@@ -80,19 +119,9 @@ func Acquire(ctx context.Context, cfg config.OwnershipConfig, inspector ProcessI
 	if !info.Mode().IsRegular() {
 		return nil, fmt.Errorf("canonical store must be a regular file, not a symlink")
 	}
-	u := url.URL{Scheme: "file", Path: cfg.Database}
-	q := u.Query()
-	q.Set("mode", "rw")
-	// Each opened connection uses a bounded SQLite busy wait. Acquisition and
-	// transactions also carry their caller's context deadline.
-	q.Set("_pragma", fmt.Sprintf("busy_timeout(%d)", cfg.TransactionTimeout.Milliseconds()))
-	// Referential integrity is mandatory on every connection, including those
-	// opened by database/sql after an earlier connection has been discarded.
-	q.Add("_pragma", "foreign_keys(1)")
-	u.RawQuery = q.Encode()
-	db, err := sql.Open("sqlite", u.String())
+	db, err := openCanonical(cfg.Database, "rw", cfg.TransactionTimeout)
 	if err != nil {
-		return nil, fmt.Errorf("open canonical store: %w", err)
+		return nil, err
 	}
 	keep := false
 	defer func() {
@@ -100,7 +129,6 @@ func Acquire(ctx context.Context, cfg config.OwnershipConfig, inspector ProcessI
 			err = errors.Join(err, db.Close())
 		}
 	}()
-	db.SetMaxOpenConns(config.CanonicalConnections)
 	// Journal initialization belongs to explicit creation. Opening existing
 	// storage must never change its journal mode before ownership is acquired.
 	if cfg.Action == config.CreateStore {
@@ -119,18 +147,14 @@ func Acquire(ctx context.Context, cfg config.OwnershipConfig, inspector ProcessI
 			return fmt.Errorf("%w: expected canonical journal mode %s, got %s", ErrSchemaVersion, config.CanonicalJournalMode, journal)
 		}
 		if cfg.Action == config.CreateStore {
-			if _, err := conn.ExecContext(ctx, ownershipSchema); err != nil {
+			if _, err := conn.ExecContext(ctx, schemaVersionDDL+ownershipTables); err != nil {
 				return err
 			}
 			if _, err := conn.ExecContext(ctx, "INSERT INTO schema_version(version) VALUES (?)", config.NativeSchemaVersion); err != nil {
 				return err
 			}
-			generation = 1
-			_, err := conn.ExecContext(ctx, `INSERT INTO broker_owner
-				(singleton, instance_id, generation, boot_id, pid, process_start, acquired_at)
-				VALUES (1, ?, ?, ?, ?, ?, ?)`, instance, generation, self.BootID, self.PID, self.Start,
-				time.Now().UTC().Format(time.RFC3339Nano))
-			return err
+			generation = firstGeneration
+			return claimOwnership(ctx, conn, instance, self, sql.NullString{})
 		}
 		var count, minVersion, maxVersion int
 		if err := conn.QueryRowContext(ctx, `SELECT count(*), coalesce(min(version), 0), coalesce(max(version), 0) FROM schema_version`).Scan(&count, &minVersion, &maxVersion); err != nil {
@@ -196,6 +220,18 @@ func Acquire(ctx context.Context, cfg config.OwnershipConfig, inspector ProcessI
 	}}, nil
 }
 
+// claimOwnership records the first incarnation of a canonical store. Fresh
+// creation records itself as the live owner. Offline conversion records the
+// converting process already released: its exclusive access was proven by an OS
+// census and ends with the conversion, so the next broker succeeds it normally.
+func claimOwnership(ctx context.Context, conn *sql.Conn, instance string, self ProcessIdentity, released sql.NullString) error {
+	_, err := conn.ExecContext(ctx, `INSERT INTO broker_owner
+		(singleton, instance_id, generation, boot_id, pid, process_start, acquired_at, released_at)
+		VALUES (1, ?, ?, ?, ?, ?, ?, ?)`, instance, firstGeneration, self.BootID, self.PID, self.Start,
+		time.Now().UTC().Format(time.RFC3339Nano), released)
+	return err
+}
+
 // RequireActive belongs in the same transaction as enrollment or selection.
 // Acquiring maintenance ownership of prepared storage never implies readiness.
 func (tx *WriteTx) RequireActive() error {
@@ -207,4 +243,34 @@ func (tx *WriteTx) RequireActive() error {
 		return ErrPrepared
 	}
 	return nil
+}
+
+// Activate is the only prepared → active transition. Fresh initialization runs
+// it in the same transaction that creates the domain schema; `waggle store
+// activate` runs it alone through Owner.Activate. Reaching the active state is
+// success, so activating an already active store is not an error.
+func (tx *WriteTx) Activate() error {
+	res, err := tx.Exec("UPDATE cutover SET state = 'active' WHERE singleton = 1 AND state = 'prepared'")
+	if err != nil {
+		return err
+	}
+	changed, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if changed == 1 {
+		return nil
+	}
+	if err := tx.RequireActive(); err != nil {
+		return fmt.Errorf("%w: %w", ErrNotPrepared, err)
+	}
+	return nil
+}
+
+// Activate performs the transition as its own owned transaction, for callers
+// that hold ownership only to activate a converted store.
+func (o *Owner) Activate(ctx context.Context) error {
+	return o.Do(ctx, func(op *Operation) error {
+		return op.Write(ctx, func(tx *WriteTx) error { return tx.Activate() })
+	})
 }

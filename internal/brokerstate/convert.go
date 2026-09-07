@@ -1,0 +1,547 @@
+package brokerstate
+
+import (
+	"context"
+	"crypto/rand"
+	"database/sql"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/seungpyoson/waggle/internal/config"
+)
+
+// ConversionConfig locates the one canonical store and the snapshots taken
+// before it is changed. Every value comes from resolved project paths.
+type ConversionConfig struct {
+	Database           string
+	SnapshotDir        string
+	TransactionTimeout time.Duration
+}
+
+func NewConversionConfig(paths config.Paths) ConversionConfig {
+	return ConversionConfig{
+		Database:           paths.DB,
+		SnapshotDir:        paths.SnapshotDir,
+		TransactionTimeout: config.Defaults.BusyTimeout,
+	}
+}
+
+func (c ConversionConfig) Validate() error {
+	if !filepath.IsAbs(c.Database) || !filepath.IsAbs(c.SnapshotDir) {
+		return fmt.Errorf("conversion requires absolute database and snapshot paths")
+	}
+	if c.TransactionTimeout <= 0 {
+		return fmt.Errorf("conversion deadline must be positive")
+	}
+	return nil
+}
+
+// Handle is one observed holder: a process with the canonical store open, or a
+// running old Waggle executable. It never carries an environment or arguments.
+type Handle struct {
+	PID     int
+	Command string
+	Path    string
+}
+
+// WriterCensus is the OS-level proof that the offline state actually holds.
+// Both methods must fail loudly rather than report an empty partial listing.
+type WriterCensus interface {
+	// OpenHandles lists processes holding any of paths (or their -wal/-shm
+	// siblings) open.
+	OpenHandles(ctx context.Context, paths []string) ([]Handle, error)
+	// WaggleProcesses lists running processes whose executable basename is the
+	// Waggle binary, excluding self.
+	WaggleProcesses(ctx context.Context) ([]Handle, error)
+}
+
+// Report is what an operator sees after a conversion or a rollback.
+type Report struct {
+	Database    string
+	Snapshot    string
+	FromVersion int
+	ToVersion   int
+	Tasks       int
+	ConvertedAt time.Time
+}
+
+// Provenance records where a prepared store came from, in the conversion
+// transaction itself. It is the only record a rollback trusts.
+type Provenance struct {
+	SourceSchema int
+	ConvertedAt  string
+	Snapshot     string
+}
+
+// Inspection is the read-only operator view of one project's storage.
+type Inspection struct {
+	Database            string
+	Exists              bool
+	SchemaVersion       int
+	Cutover             string
+	Provenance          *Provenance
+	LegacyPIDPresent    bool
+	LegacySocketPresent bool
+	Snapshots           []string
+}
+
+// Convert performs the offline upgrade of a schema-v1 store to native storage.
+// The domain schema is not this package's to know: upgrade receives the same
+// scoped write capability every other domain transaction gets, inside the one
+// transaction that moves the version record.
+//
+// The order is the whole safety argument: a full census proves nothing is
+// holding the store, a consistent snapshot is taken, the census is repeated
+// immediately before any change, and every change then happens in one
+// transaction that also moves the version record. An interruption at any point
+// leaves the source untouched and the snapshot present. The converted store is
+// prepared, never active: activation stays a separate, ownership-guarded
+// decision.
+func Convert(ctx context.Context, cfg ConversionConfig, census WriterCensus, inspector ProcessInspector, upgrade func(*WriteTx) error) (_ Report, err error) {
+	if err := cfg.Validate(); err != nil {
+		return Report{}, err
+	}
+	if census == nil || inspector == nil || upgrade == nil {
+		return Report{}, fmt.Errorf("conversion requires a writer census, process identity and a domain upgrade")
+	}
+	if err := requireRegularFile(cfg.Database); err != nil {
+		return Report{}, err
+	}
+	self, err := inspector.Current(ctx)
+	if err != nil {
+		return Report{}, fmt.Errorf("identify converting process: %w", err)
+	}
+	if err := self.validate(); err != nil {
+		return Report{}, err
+	}
+	if err := survey(ctx, census, cfg.Database); err != nil {
+		return Report{}, err
+	}
+	// The source is examined read-only first, so a store this conversion must
+	// refuse is never opened for writing and never gains a snapshot.
+	if err := requireLegacyVersion(ctx, cfg); err != nil {
+		return Report{}, err
+	}
+
+	db, err := openCanonical(cfg.Database, "rw", cfg.TransactionTimeout)
+	if err != nil {
+		return Report{}, err
+	}
+	defer func() { err = errors.Join(err, db.Close()) }()
+
+	snapshot, err := takeSnapshot(ctx, cfg, db)
+	if err != nil {
+		return Report{}, err
+	}
+	// Recheck immediately before conversion: the census above is only as fresh
+	// as the moment it ran, and the snapshot took time.
+	if err := survey(ctx, census, cfg.Database); err != nil {
+		return Report{}, err
+	}
+
+	converted := time.Now().UTC()
+	report := Report{
+		Database:    cfg.Database,
+		Snapshot:    snapshot,
+		FromVersion: config.LegacySchemaVersion,
+		ToVersion:   config.NativeSchemaVersion,
+		ConvertedAt: converted,
+	}
+	deadline, cancel := context.WithTimeout(ctx, cfg.TransactionTimeout)
+	defer cancel()
+	if err := reserved(deadline, db, writeAccess, func(conn *sql.Conn) error {
+		if err := legacyVersion(deadline, conn); err != nil {
+			return err
+		}
+		if _, err := conn.ExecContext(deadline, ownershipTables); err != nil {
+			return err
+		}
+		// The upgrade runs on a capability that expires with this callback. It
+		// carries no ownership fence: exclusive access here was proven by the
+		// census, since no incarnation owns a legacy store.
+		tx := &WriteTx{state: &transactionState{conn: conn, ctx: deadline, active: true}}
+		defer func() { tx.state.mu.Lock(); tx.state.active = false; tx.state.mu.Unlock() }()
+		if err := upgrade(tx); err != nil {
+			return fmt.Errorf("upgrade domain schema: %w", err)
+		}
+		if err := claimOwnership(deadline, conn, rand.Text(), self,
+			sql.NullString{String: converted.Format(time.RFC3339Nano), Valid: true}); err != nil {
+			return err
+		}
+		if err := affectsOneRow(conn.ExecContext(deadline, `UPDATE cutover SET source_schema = ?, converted_at = ?, snapshot = ?
+			WHERE singleton = 1 AND state = 'prepared'`, config.LegacySchemaVersion, converted.Format(time.RFC3339Nano), snapshot)); err != nil {
+			return fmt.Errorf("record conversion provenance: %w", err)
+		}
+		if err := affectsOneRow(conn.ExecContext(deadline, "UPDATE schema_version SET version = ? WHERE version = ?",
+			config.NativeSchemaVersion, config.LegacySchemaVersion)); err != nil {
+			return fmt.Errorf("update schema version: %w", err)
+		}
+		return conn.QueryRowContext(deadline, "SELECT count(*) FROM tasks").Scan(&report.Tasks)
+	}); err != nil {
+		return Report{}, fmt.Errorf("convert canonical store: %w", err)
+	}
+	// The journal mode is part of what makes the store native, and it can only
+	// be set outside a transaction. SQLite reports a refused change by returning
+	// the unchanged mode rather than an error, so the result is read back: a
+	// converted store that keeps the old journal is one Acquire would reject.
+	var journal string
+	if err := db.QueryRowContext(ctx, "PRAGMA journal_mode="+config.CanonicalJournalMode).Scan(&journal); err != nil {
+		return Report{}, fmt.Errorf("initialize canonical journal (store is converted; roll it back): %w", err)
+	}
+	if journal != config.CanonicalJournalMode {
+		return Report{}, fmt.Errorf("canonical journal stayed %s (store is converted; roll it back)", journal)
+	}
+	return report, nil
+}
+
+// Rollback restores the snapshot a prepared store records as its origin. It
+// refuses an active store, refuses a census that is not clean, and never
+// guesses which snapshot belongs to this store.
+func Rollback(ctx context.Context, cfg ConversionConfig, census WriterCensus) (_ Report, err error) {
+	if err := cfg.Validate(); err != nil {
+		return Report{}, err
+	}
+	if census == nil {
+		return Report{}, fmt.Errorf("rollback requires a writer census")
+	}
+	if err := requireRegularFile(cfg.Database); err != nil {
+		return Report{}, err
+	}
+	if err := survey(ctx, census, cfg.Database); err != nil {
+		return Report{}, err
+	}
+	origin, err := preparedProvenance(ctx, cfg)
+	if err != nil {
+		return Report{}, err
+	}
+	if err := requireRegularFile(origin.Snapshot); err != nil {
+		return Report{}, fmt.Errorf("recorded snapshot: %w", err)
+	}
+	// The census proved nothing holds this store, so the sidecars belong to no
+	// live reader and would otherwise be applied to the restored file.
+	for _, sidecar := range sidecars(cfg.Database) {
+		if err := os.Remove(sidecar); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return Report{}, fmt.Errorf("remove journal sidecar: %w", err)
+		}
+	}
+	if err := replaceFile(origin.Snapshot, cfg.Database); err != nil {
+		return Report{}, err
+	}
+	report := Report{
+		Database:    cfg.Database,
+		Snapshot:    origin.Snapshot,
+		FromVersion: config.NativeSchemaVersion,
+		ConvertedAt: time.Now().UTC(),
+	}
+	if err := readOnly(ctx, cfg, func(ctx context.Context, db *sql.DB) error {
+		return db.QueryRowContext(ctx, "SELECT (SELECT version FROM schema_version), (SELECT count(*) FROM tasks)").
+			Scan(&report.ToVersion, &report.Tasks)
+	}); err != nil {
+		return Report{}, fmt.Errorf("verify restored store: %w", err)
+	}
+	if report.ToVersion != origin.SourceSchema {
+		return Report{}, fmt.Errorf("restored store reports schema %d, expected %d", report.ToVersion, origin.SourceSchema)
+	}
+	return report, nil
+}
+
+// Inspect reports what an operator needs before deciding, and changes nothing.
+// It opens the database read-only and never creates it. Reading a native store
+// materializes SQLite's own -wal/-shm sidecars, as any reader does; the
+// database file itself is never written.
+func Inspect(ctx context.Context, cfg ConversionConfig, paths config.Paths) (Inspection, error) {
+	if err := cfg.Validate(); err != nil {
+		return Inspection{}, err
+	}
+	view := Inspection{Database: cfg.Database}
+	view.LegacyPIDPresent = exists(paths.LegacyPID)
+	view.LegacySocketPresent = exists(paths.LegacySocket)
+	snapshots, err := listSnapshots(cfg)
+	if err != nil {
+		return Inspection{}, err
+	}
+	view.Snapshots = snapshots
+	info, err := os.Lstat(cfg.Database)
+	if errors.Is(err, os.ErrNotExist) {
+		return view, nil
+	}
+	if err != nil {
+		return Inspection{}, fmt.Errorf("inspect canonical store: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return Inspection{}, fmt.Errorf("canonical store must be a regular file, not a symlink")
+	}
+	view.Exists = true
+	if err := readOnly(ctx, cfg, func(ctx context.Context, db *sql.DB) error {
+		// Which records a store carries is itself part of the answer: a legacy
+		// store has no cutover row, and a store this young has no version row.
+		// Asking the catalogue first keeps a missing record distinct from an
+		// unreadable database, which stays an error.
+		present, err := tablesPresent(ctx, db, "schema_version", "cutover")
+		if err != nil {
+			return err
+		}
+		if present["schema_version"] {
+			if err := db.QueryRowContext(ctx, "SELECT coalesce(max(version), 0) FROM schema_version").Scan(&view.SchemaVersion); err != nil {
+				return fmt.Errorf("read schema version: %w", err)
+			}
+		}
+		if !present["cutover"] {
+			return nil
+		}
+		var state string
+		var source sql.NullInt64
+		var at, snapshot sql.NullString
+		if err := db.QueryRowContext(ctx, "SELECT state, source_schema, converted_at, snapshot FROM cutover WHERE singleton = 1").
+			Scan(&state, &source, &at, &snapshot); err != nil {
+			return fmt.Errorf("read cutover state: %w", err)
+		}
+		view.Cutover = state
+		if source.Valid || at.Valid || snapshot.Valid {
+			view.Provenance = &Provenance{SourceSchema: int(source.Int64), ConvertedAt: at.String, Snapshot: snapshot.String}
+		}
+		return nil
+	}); err != nil {
+		return Inspection{}, err
+	}
+	return view, nil
+}
+
+// tablesPresent reports which of the named tables the store actually has.
+func tablesPresent(ctx context.Context, db *sql.DB, names ...string) (_ map[string]bool, err error) {
+	rows, err := db.QueryContext(ctx, "SELECT name FROM sqlite_schema WHERE type = 'table'")
+	if err != nil {
+		return nil, fmt.Errorf("read store catalogue: %w", err)
+	}
+	defer func() { err = errors.Join(err, rows.Close()) }()
+	found := make(map[string]bool, len(names))
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		for _, want := range names {
+			if name == want {
+				found[name] = true
+			}
+		}
+	}
+	return found, rows.Err()
+}
+
+// survey is one full census: running old executables and open handles on the
+// canonical store. Any uncertainty blocks, and an empty partial listing is not
+// proof, so an error is never downgraded to "nothing found".
+func survey(ctx context.Context, census WriterCensus, database string) error {
+	processes, err := census.WaggleProcesses(ctx)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrCensusUnavailable, err)
+	}
+	if len(processes) > 0 {
+		return fmt.Errorf("%w: running %s", ErrWritersPresent, describe(processes))
+	}
+	handles, err := census.OpenHandles(ctx, []string{database})
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrCensusUnavailable, err)
+	}
+	if len(handles) > 0 {
+		return fmt.Errorf("%w: open handles held by %s", ErrWritersPresent, describe(handles))
+	}
+	return nil
+}
+
+func describe(handles []Handle) string {
+	out := ""
+	for i, h := range handles {
+		if i > 0 {
+			out += ", "
+		}
+		out += fmt.Sprintf("pid=%d command=%s path=%s", h.PID, h.Command, h.Path)
+	}
+	return out
+}
+
+// requireLegacyVersion reads the version record without opening the store for
+// writing, so a refusal cannot touch it.
+func requireLegacyVersion(ctx context.Context, cfg ConversionConfig) error {
+	return readOnly(ctx, cfg, func(ctx context.Context, db *sql.DB) error {
+		return legacyVersion(ctx, db)
+	})
+}
+
+// scanner is the single-row read shared by a plain connection and a reserved
+// transaction connection, so the version rule has one implementation.
+type scanner interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// legacyVersion accepts exactly one version row holding LegacySchemaVersion.
+// Missing, duplicate or unexpected rows are refusals, never repairs.
+func legacyVersion(ctx context.Context, from scanner) error {
+	var count, low, high int
+	if err := from.QueryRowContext(ctx, "SELECT count(*), coalesce(min(version), 0), coalesce(max(version), 0) FROM schema_version").
+		Scan(&count, &low, &high); err != nil {
+		return fmt.Errorf("%w: read schema version: %w", ErrNotLegacy, err)
+	}
+	if count > 1 {
+		return fmt.Errorf("%w: %d duplicate schema version rows (%d..%d)", ErrNotLegacy, count, low, high)
+	}
+	if count != 1 || low != config.LegacySchemaVersion || high != config.LegacySchemaVersion {
+		return fmt.Errorf("%w: found %d version rows reporting %d", ErrNotLegacy, count, high)
+	}
+	return nil
+}
+
+// preparedProvenance reads the origin a prepared store recorded for itself.
+func preparedProvenance(ctx context.Context, cfg ConversionConfig) (Provenance, error) {
+	var origin Provenance
+	err := readOnly(ctx, cfg, func(ctx context.Context, db *sql.DB) error {
+		var state string
+		var source sql.NullInt64
+		var at, snapshot sql.NullString
+		if err := db.QueryRowContext(ctx, "SELECT state, source_schema, converted_at, snapshot FROM cutover WHERE singleton = 1").
+			Scan(&state, &source, &at, &snapshot); err != nil {
+			return fmt.Errorf("%w: %w", ErrNotPrepared, err)
+		}
+		if state != "prepared" {
+			return fmt.Errorf("%w: cutover state is %q", ErrNotPrepared, state)
+		}
+		if !source.Valid || !snapshot.Valid {
+			return fmt.Errorf("prepared store records no conversion provenance; nothing to roll back to")
+		}
+		origin = Provenance{SourceSchema: int(source.Int64), ConvertedAt: at.String, Snapshot: snapshot.String}
+		return nil
+	})
+	return origin, err
+}
+
+// takeSnapshot writes a consistent copy, including committed WAL content, of
+// the store as it stands before any change.
+func takeSnapshot(ctx context.Context, cfg ConversionConfig, db *sql.DB) (string, error) {
+	if err := os.MkdirAll(cfg.SnapshotDir, 0700); err != nil {
+		return "", fmt.Errorf("create snapshot directory: %w", err)
+	}
+	snapshot := filepath.Join(cfg.SnapshotDir, fmt.Sprintf("%s.v%d-%s",
+		filepath.Base(cfg.Database), config.LegacySchemaVersion, time.Now().UTC().Format(time.RFC3339Nano)))
+	if _, err := db.ExecContext(ctx, "VACUUM INTO ?", snapshot); err != nil {
+		return "", fmt.Errorf("snapshot canonical store: %w", err)
+	}
+	return snapshot, nil
+}
+
+// listSnapshots reports the snapshots belonging to this database, newest first
+// by the timestamp in the name. A missing directory is an empty listing.
+func listSnapshots(cfg ConversionConfig) ([]string, error) {
+	entries, err := os.ReadDir(cfg.SnapshotDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("list snapshots: %w", err)
+	}
+	prefix := fmt.Sprintf("%s.v%d-", filepath.Base(cfg.Database), config.LegacySchemaVersion)
+	type snapshot struct {
+		path string
+		at   time.Time
+	}
+	var found []snapshot
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasPrefix(entry.Name(), prefix) {
+			continue
+		}
+		at, err := time.Parse(time.RFC3339Nano, strings.TrimPrefix(entry.Name(), prefix))
+		if err != nil {
+			continue // Not a snapshot this package wrote.
+		}
+		found = append(found, snapshot{path: filepath.Join(cfg.SnapshotDir, entry.Name()), at: at})
+	}
+	sort.Slice(found, func(i, j int) bool { return found[i].at.After(found[j].at) })
+	paths := make([]string, 0, len(found))
+	for _, s := range found {
+		paths = append(paths, s.path)
+	}
+	return paths, nil
+}
+
+// readOnly runs one read against the canonical store through a connection that
+// cannot create or change it.
+func readOnly(ctx context.Context, cfg ConversionConfig, view func(context.Context, *sql.DB) error) (err error) {
+	db, err := openCanonical(cfg.Database, "ro", cfg.TransactionTimeout)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, db.Close()) }()
+	deadline, cancel := context.WithTimeout(ctx, cfg.TransactionTimeout)
+	defer cancel()
+	return view(deadline, db)
+}
+
+// replaceFile installs source at target through a temporary file in the target
+// directory, so a partial copy can never be left in place of the store.
+func replaceFile(source, target string) (err error) {
+	in, err := os.Open(source)
+	if err != nil {
+		return fmt.Errorf("open snapshot: %w", err)
+	}
+	defer func() { err = errors.Join(err, in.Close()) }()
+	staged := target + ".restoring"
+	out, err := os.OpenFile(staged, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return fmt.Errorf("stage restored store: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, os.Remove(staged))
+		}
+	}()
+	if _, err = io.Copy(out, in); err != nil {
+		return errors.Join(fmt.Errorf("copy snapshot: %w", err), out.Close())
+	}
+	if err = errors.Join(out.Sync(), out.Close()); err != nil {
+		return fmt.Errorf("flush restored store: %w", err)
+	}
+	if err = os.Rename(staged, target); err != nil {
+		return fmt.Errorf("install restored store: %w", err)
+	}
+	return nil
+}
+
+func sidecars(database string) []string {
+	return []string{database + "-wal", database + "-shm"}
+}
+
+func requireRegularFile(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return fmt.Errorf("inspect canonical store: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("canonical store must be a regular file, not a symlink: %s", path)
+	}
+	return nil
+}
+
+func exists(path string) bool {
+	_, err := os.Lstat(path)
+	return err == nil
+}
+
+func affectsOneRow(res sql.Result, err error) error {
+	if err != nil {
+		return err
+	}
+	changed, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if changed != 1 {
+		return fmt.Errorf("statement changed %d rows, expected exactly 1", changed)
+	}
+	return nil
+}

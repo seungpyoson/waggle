@@ -112,6 +112,28 @@ func Schema() string {
 	`, int(config.Defaults.LeaseDuration.Seconds()), config.Defaults.MaxRetries)
 }
 
+// UpgradeFromV1 rebuilds a schema-v1 tasks table as the table Schema() defines,
+// used only by offline conversion. The v1 table lacks ttl, and a column added by
+// ALTER TABLE lands last, so a converted store would carry a different table
+// from a fresh one forever. Rebuilding through Schema() keeps exactly one
+// definition of this table: every v1 column is copied and ttl is left NULL,
+// which is what "no expiry" already means.
+func UpgradeFromV1() string {
+	return `
+	ALTER TABLE tasks RENAME TO tasks_v1;
+	DROP INDEX idx_tasks_claimable;
+	DROP INDEX idx_tasks_idempotency;
+	` + Schema() + `
+	INSERT INTO tasks (id, idempotency_key, type, tags, payload, priority, state, blocked, depends_on,
+		claim_token, claimed_by, claimed_at, lease_expires_at, lease_duration, max_retries, retry_count,
+		result, failure_reason, created_at, updated_at)
+	SELECT id, idempotency_key, type, tags, payload, priority, state, blocked, depends_on,
+		claim_token, claimed_by, claimed_at, lease_expires_at, lease_duration, max_retries, retry_count,
+		result, failure_reason, created_at, updated_at FROM tasks_v1;
+	DROP TABLE tasks_v1;
+	`
+}
+
 // nullableInt converts 0 to SQL NULL
 func nullableInt(v int) interface{} {
 	if v == 0 {

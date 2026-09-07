@@ -9,6 +9,10 @@ import (
 // NativeSchemaVersion is shared by canonical storage and offline conversion.
 const NativeSchemaVersion = 2
 
+// LegacySchemaVersion is the retired broker's schema. It is the only version
+// offline conversion accepts as a source, and the only one it can restore to.
+const LegacySchemaVersion = 1
+
 const CanonicalJournalMode = "wal"
 const CanonicalConnections = 1
 
