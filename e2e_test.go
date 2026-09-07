@@ -13,93 +13,27 @@ import (
 	"testing"
 	"time"
 
+	"github.com/seungpyoson/waggle/cmd"
 	"github.com/seungpyoson/waggle/internal/brokerstate"
 	"github.com/seungpyoson/waggle/internal/client"
 	"github.com/seungpyoson/waggle/internal/config"
 	"github.com/seungpyoson/waggle/internal/protocol"
 )
 
+// Every end-to-end broker runs under this project, so the canonical resolver
+// produces the same socket for a predecessor and its successor.
+const e2eProjectID = "e2e-test-project"
+
 func TestE2E_TaskRoundTrip(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping e2e in short mode")
 	}
 
-	// Build binary
-	tmpBin := filepath.Join(t.TempDir(), "waggle")
-	build := exec.Command("go", "build", "-o", tmpBin, ".")
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build: %s\n%s", err, out)
-	}
+	env := newE2EEnv(t)
+	broker := env.launch(t, "startup.log", "--initialize")
 
-	// Create project directory
-	project := t.TempDir()
-
-	// Keep the isolated HOME under the writable checkout.
-	// Unix domain sockets have a 104-byte path limit on macOS
-	root, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	tmpHome, err := os.MkdirTemp(root, ".h-")
-	if err != nil {
-		t.Fatalf("create temp home: %v", err)
-	}
-	t.Cleanup(func() {
-		os.RemoveAll(tmpHome)
-	})
-
-	// Use the canonical path resolver for the isolated project.
-	t.Setenv("HOME", tmpHome)
-	socketPath := config.NewPaths("e2e-test-project").Socket
-	outputPath := filepath.Join(tmpHome, "startup.log")
-	output, err := os.Create(outputPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { output.Close() })
-
-	// Start the real foreground entrypoint and retain its failure diagnostics.
-	startCmd := exec.Command(tmpBin, "start", "--foreground", "--initialize")
-	startCmd.Dir = project
-	startCmd.Env = append(os.Environ(), "HOME="+tmpHome, "WAGGLE_PROJECT_ID=e2e-test-project")
-	startCmd.Stdout, startCmd.Stderr = output, output
-	if err := startCmd.Start(); err != nil {
-		t.Fatalf("start broker: %v", err)
-	}
-
-	exited := make(chan struct{})
-	var processErr error
-	go func() {
-		processErr = startCmd.Wait()
-		close(exited)
-	}()
-	t.Cleanup(func() {
-		startCmd.Process.Kill()
-		<-exited
-	})
-	ticker := time.NewTicker(config.Defaults.StartupPollInterval)
-	defer ticker.Stop()
-	deadline := time.NewTimer(2 * config.Defaults.StartupTimeout)
-	defer deadline.Stop()
-ready:
-	for {
-		select {
-		case <-exited:
-			data, _ := os.ReadFile(outputPath)
-			t.Fatalf("foreground broker exited before readiness: %v\n%s", processErr, data)
-		case <-deadline.C:
-			data, _ := os.ReadFile(outputPath)
-			t.Fatalf("foreground broker exceeded readiness deadline\n%s", data)
-		case <-ticker.C:
-			conn, err := net.DialTimeout("unix", socketPath, config.Defaults.ConnectTimeout)
-			if err == nil {
-				conn.Close()
-				break ready
-			}
-		}
-	}
-
-	assertCompetingStartsRejected(t, tmpBin, startCmd, socketPath)
+	assertCompetingStartsRejected(t, env.binary, broker.cmd, env.socket)
+	socketPath := env.socket
 
 	// Connect to broker and create session
 	c, err := client.Connect(socketPath, config.Defaults.ConnectTimeout)
@@ -247,4 +181,142 @@ func assertCompetingStartsRejected(t *testing.T, binary string, running *exec.Cm
 	}
 	defer running.Process.Signal(syscall.SIGCONT)
 	start()
+}
+
+// A signalled broker must release ownership cleanly, so the next incarnation
+// of the same project can acquire the store it left behind.
+func TestE2E_SigtermShutdownReleasesOwnership(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping e2e in short mode")
+	}
+
+	env := newE2EEnv(t)
+	first := env.launch(t, "first.log", "--initialize")
+	firstExit := first.terminate(t)
+
+	// The successor opens the released store; only a real release lets it serve.
+	second := env.launch(t, "second.log")
+	secondExit := second.terminate(t)
+	t.Logf("orderly shutdown took %s then %s", firstExit, secondExit)
+}
+
+// e2eEnv is a built entrypoint plus an isolated HOME whose canonical socket
+// stays inside the 104-byte AF_UNIX path limit on macOS.
+type e2eEnv struct {
+	binary  string
+	home    string
+	project string
+	socket  string
+}
+
+func newE2EEnv(t *testing.T) e2eEnv {
+	t.Helper()
+	binary := filepath.Join(t.TempDir(), "waggle")
+	build := exec.Command("go", "build", "-o", binary, ".")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build: %s\n%s", err, out)
+	}
+	// Keep the isolated HOME under the writable checkout, where the resolved
+	// socket path is short enough for AF_UNIX.
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	home, err := os.MkdirTemp(root, ".h-")
+	if err != nil {
+		t.Fatalf("create temp home: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(home) })
+
+	// Use the canonical path resolver for the isolated project.
+	t.Setenv("HOME", home)
+	return e2eEnv{binary: binary, home: home, project: t.TempDir(), socket: config.NewPaths(e2eProjectID).Socket}
+}
+
+// launch starts the real foreground entrypoint, retains its failure
+// diagnostics, and returns once the broker is serving.
+func (e e2eEnv) launch(t *testing.T, logName string, args ...string) *e2eBroker {
+	t.Helper()
+	logPath := filepath.Join(e.home, logName)
+	output, err := os.Create(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { output.Close() })
+
+	startCmd := exec.Command(e.binary, append([]string{"start", "--foreground"}, args...)...)
+	startCmd.Dir = e.project
+	startCmd.Env = append(os.Environ(), "HOME="+e.home, "WAGGLE_PROJECT_ID="+e2eProjectID)
+	startCmd.Stdout, startCmd.Stderr = output, output
+	if err := startCmd.Start(); err != nil {
+		t.Fatalf("start broker: %v", err)
+	}
+	broker := &e2eBroker{cmd: startCmd, logPath: logPath, exited: make(chan struct{})}
+	go func() {
+		broker.err = startCmd.Wait()
+		close(broker.exited)
+	}()
+	t.Cleanup(func() {
+		startCmd.Process.Kill()
+		<-broker.exited
+	})
+
+	ticker := time.NewTicker(config.Defaults.StartupPollInterval)
+	defer ticker.Stop()
+	deadline := time.NewTimer(2 * config.Defaults.StartupTimeout)
+	defer deadline.Stop()
+	for {
+		select {
+		case <-broker.exited:
+			t.Fatalf("foreground broker exited before readiness: %v\n%s", broker.err, broker.output())
+		case <-deadline.C:
+			t.Fatalf("foreground broker exceeded readiness deadline\n%s", broker.output())
+		case <-ticker.C:
+			conn, err := net.DialTimeout("unix", e.socket, config.Defaults.ConnectTimeout)
+			if err == nil {
+				conn.Close()
+				return broker
+			}
+		}
+	}
+}
+
+// e2eBroker is a running foreground broker. Reading err is safe only after
+// exited closes.
+type e2eBroker struct {
+	cmd     *exec.Cmd
+	logPath string
+	exited  chan struct{}
+	err     error
+}
+
+func (b *e2eBroker) output() string {
+	data, _ := os.ReadFile(b.logPath)
+	return string(data)
+}
+
+// terminate requires the first SIGTERM to drain and release within the
+// configured shutdown budget, without reporting a missed deadline.
+func (b *e2eBroker) terminate(t *testing.T) time.Duration {
+	t.Helper()
+	signalled := time.Now()
+	if err := b.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatalf("signal broker: %v", err)
+	}
+	budget := config.Defaults.ShutdownTimeout + 2*config.Defaults.StartupTimeout
+	timer := time.NewTimer(budget)
+	defer timer.Stop()
+	select {
+	case <-b.exited:
+	case <-timer.C:
+		t.Fatalf("broker did not exit within %s of SIGTERM\n%s", budget, b.output())
+	}
+	elapsed := time.Since(signalled)
+	if b.err != nil {
+		t.Fatalf("broker exited %v after SIGTERM\n%s", b.err, b.output())
+	}
+	if out := b.output(); strings.Contains(out, cmd.ErrShutdownDeadlineMissed.Error()) {
+		t.Fatalf("orderly shutdown reported a missed deadline\n%s", out)
+	}
+	return elapsed
 }
