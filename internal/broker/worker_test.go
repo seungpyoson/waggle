@@ -154,17 +154,14 @@ func TestShutdownRetainsOwnershipUntilDriverCloseJoins(t *testing.T) {
 }
 
 // TestIdleBoundWorkerIssuesNoWriteTransactions holds the design's idle contract:
-// a bound worker with an empty queue observes through read snapshots and enters
-// no write transaction at all, yet still finds work committed without a wakeup.
+// an idle broker with one bound enrollment observes through read snapshots and
+// enters no write transaction at all, from its worker or from discovery, yet
+// still finds work committed without a wakeup. The window covers whole periods
+// of both loops.
 func TestIdleBoundWorkerIssuesNoWriteTransactions(t *testing.T) {
 	socket := shortBrokerSocketPath(t, "waggle-idle-*")
 	cfg := config.NewBrokerConfig(config.BrokerEndpoints{Socket: socket, PID: socket + ".pid"})
-	idle := 3 * cfg.Messaging.QueueCheckInterval
-	// Supervisor discovery is a second, independent write source and is not this
-	// test's subject: keep its period beyond the whole measurement so the counter
-	// delta belongs to the enrollment worker alone. Enrollment still registers a
-	// worker immediately, through the discovery wakeup rather than its period.
-	cfg.Messaging.DiscoveryInterval = 2 * (config.Defaults.StartupTimeout + idle)
+	idle := 3 * max(cfg.Messaging.QueueCheckInterval, cfg.Messaging.DiscoveryInterval)
 	b, err := newOwnedTestBroker(t, filepath.Join(t.TempDir(), "state.db"), config.CreateStore, cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -182,10 +179,10 @@ func TestIdleBoundWorkerIssuesNoWriteTransactions(t *testing.T) {
 	time.Sleep(idle)
 	after := b.owner.Stats()
 	if after.Writes != before.Writes {
-		t.Fatalf("idle worker opened %d write transactions in %v", after.Writes-before.Writes, idle)
+		t.Fatalf("idle broker opened %d write transactions in %v", after.Writes-before.Writes, idle)
 	}
 	if after.Reads < before.Reads+2 {
-		t.Fatalf("idle worker took %d read snapshots in %v, want at least 2", after.Reads-before.Reads, idle)
+		t.Fatalf("idle broker took %d read snapshots in %v, want at least 2", after.Reads-before.Reads, idle)
 	}
 	// The hint must still carry committed work into the intent transaction. This
 	// row is committed without an RPC wakeup, so only the snapshot can find it.

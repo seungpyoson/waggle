@@ -91,21 +91,21 @@ func (s *Supervisor) run(lifetime brokerstate.WorkLifetime, reportFatal func(err
 	}
 }
 
-// discover pages observable enrollments and registers absent workers. A key
-// still registered with the owner (joined but not yet completed) is skipped
-// until its completion commits; no second worker can exist for an enrollment.
+// discover expires elapsed deadlines at most once, then pages observable
+// enrollments under read snapshots and registers absent workers. A key still
+// registered with the owner (joined but not yet completed) is skipped until its
+// completion commits; no second worker can exist for an enrollment.
 func (s *Supervisor) discover(lifetime brokerstate.WorkLifetime) error {
+	if err := s.expire(lifetime); err != nil {
+		return err
+	}
 	var after string
 	for {
 		var page []messages.Enrollment
 		if err := s.owner.Do(lifetime.Interrupt, func(op *brokerstate.Operation) error {
-			return op.Write(lifetime.Interrupt, func(tx *brokerstate.WriteTx) error {
-				store := messages.NewStore(tx, s.limits, time.Now())
-				if _, err := store.Apply(messages.Expire{}); err != nil {
-					return err
-				}
+			return op.Read(lifetime.Interrupt, func(tx *brokerstate.ReadTx) error {
 				var err error
-				page, err = store.Enrollments(after, messages.ObservableEnrollments)
+				page, err = messages.NewView(tx, s.limits, time.Now()).Enrollments(after, messages.ObservableEnrollments)
 				return err
 			})
 		}); err != nil {
@@ -121,6 +121,31 @@ func (s *Supervisor) discover(lifetime brokerstate.WorkLifetime) error {
 		}
 		after = page[len(page)-1].ID
 	}
+}
+
+// expire runs the deadline transition once per discovery pass, and only when a
+// read snapshot reports an elapsed row. The snapshot is a hint, never the
+// decision: Expire reapplies both predicates under its own fence.
+func (s *Supervisor) expire(lifetime brokerstate.WorkLifetime) error {
+	var expirable bool
+	if err := s.owner.Do(lifetime.Interrupt, func(op *brokerstate.Operation) error {
+		return op.Read(lifetime.Interrupt, func(tx *brokerstate.ReadTx) error {
+			var err error
+			expirable, err = messages.NewView(tx, s.limits, time.Now()).Expirable()
+			return err
+		})
+	}); err != nil {
+		return err
+	}
+	if !expirable {
+		return nil
+	}
+	return s.owner.Do(lifetime.Interrupt, func(op *brokerstate.Operation) error {
+		return op.Write(lifetime.Interrupt, func(tx *brokerstate.WriteTx) error {
+			_, err := messages.NewStore(tx, s.limits, time.Now()).Apply(messages.Expire{})
+			return err
+		})
+	})
 }
 
 func (s *Supervisor) register(lifetime brokerstate.WorkLifetime, id string) error {

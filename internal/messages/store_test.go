@@ -443,3 +443,50 @@ func TestPendingHintTracksSelectEligibility(t *testing.T) {
 		t.Fatal("hint and selection disagreed about eligibility")
 	}
 }
+
+// expirable runs the read-only hint the discovery pass uses to decide whether
+// entering the Expire transaction can change anything at all.
+func (f *fixture) expirable() (out bool) {
+	f.t.Helper()
+	if err := statetest.Write(f.owner, func(tx *brokerstate.WriteTx) error {
+		var err error
+		out, err = NewView(tx, f.limits, f.now).Expirable()
+		return err
+	}); err != nil {
+		f.t.Fatal(err)
+	}
+	return
+}
+
+func TestExpirableHintTracksExpire(t *testing.T) {
+	f := newFixture(t)
+	e := f.must(Enroll{Provider: "codex", Conversation: "pending", Endpoint: "/registered/daemon.sock", Label: "pending"})
+	if f.expirable() {
+		t.Fatal("live readiness deadline hinted expiry")
+	}
+	f.now = f.now.Add(f.limits.PendingTTL)
+	if !f.expirable() {
+		t.Fatal("elapsed readiness deadline did not hint expiry")
+	}
+	f.must(Expire{})
+	if f.expirable() {
+		t.Fatal("expiry left an expirable enrollment behind")
+	}
+	if got := f.must(Enroll{Provider: "codex", Conversation: "reenrolled", Endpoint: "/registered/daemon.sock", Label: "reenrolled"}); got.Enrollment.State != "pending" {
+		t.Fatalf("expiry did not free the failed enrollment: %s", e.Enrollment.State)
+	}
+	a := f.enrolled("a")
+	b := f.enrolled("b")
+	f.send(a, b, "deadline")
+	if f.expirable() {
+		t.Fatal("live conversation deadline hinted expiry")
+	}
+	f.now = f.now.Add(f.limits.DefaultDeadline)
+	if !f.expirable() {
+		t.Fatal("elapsed conversation deadline did not hint expiry")
+	}
+	f.must(Expire{})
+	if f.expirable() {
+		t.Fatal("expiry left an expirable conversation behind")
+	}
+}

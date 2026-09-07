@@ -103,10 +103,10 @@ func (s *Store) Apply(command Command) (Result, error) {
 	case Retire:
 		return s.retire(c)
 	case Expire:
-		if _, err := s.tx.Exec("UPDATE enrollments SET state='failed', evidence='native readiness deadline elapsed' WHERE state='pending' AND pending_until<=?", s.now.UnixNano()); err != nil {
+		if _, err := s.tx.Exec("UPDATE enrollments SET state='failed', evidence='native readiness deadline elapsed' WHERE "+expiredEnrollment, s.now.UnixNano()); err != nil {
 			return Result{}, err
 		}
-		_, err := s.tx.Exec("UPDATE conversations SET stopped_reason='deadline_elapsed' WHERE stopped_reason='' AND deadline<=?", s.now.UnixNano())
+		_, err := s.tx.Exec("UPDATE conversations SET stopped_reason='deadline_elapsed' WHERE "+expiredConversation, s.now.UnixNano())
 		return Result{}, err
 	default:
 		return Result{}, fmt.Errorf("unsupported message transition")
@@ -371,6 +371,25 @@ func (s *Store) reply(c Reply) (Result, error) {
 	// Deadline, stop and hop budget are inherited. Late replies remain inspectable
 	// but selection cannot turn them into fresh conversations or reset budgets.
 	return s.insert(sender.ID, original.Sender, original.Conversation, original.ID, c.RequestID, c.Body, hash)
+}
+
+// expiredEnrollment and expiredConversation are the two expiry predicates, each
+// taking the caller's current time. They exist once so a read snapshot and the
+// Expire transition can never disagree about what has elapsed.
+const (
+	expiredEnrollment   = `state='pending' AND pending_until<=?`
+	expiredConversation = `stopped_reason='' AND deadline<=?`
+)
+
+// Expirable reports whether Expire would change at least one row at this
+// snapshot. It is a hint only: Expire remains the sole transition and reapplies
+// both predicates under its own fence.
+func (v *View) Expirable() (bool, error) {
+	var expirable bool
+	err := v.r.Scan(`SELECT EXISTS(SELECT 1 FROM enrollments WHERE `+expiredEnrollment+`)
+	 OR EXISTS(SELECT 1 FROM conversations WHERE `+expiredConversation+`)`,
+		[]any{v.now.UnixNano(), v.now.UnixNano()}, &expirable)
+	return expirable, err
 }
 
 // eligible is the selection predicate. It exists once so a read snapshot and
