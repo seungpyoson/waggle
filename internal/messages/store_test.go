@@ -389,3 +389,57 @@ func TestSelectScopedToRecipientLeavesOtherRecipientsUntouched(t *testing.T) {
 		t.Fatalf("scoped selection touched another recipient: %+v", rest)
 	}
 }
+
+// pending runs the read-only hint through a View built over the fixture's write
+// transaction: WriteTx is a Reader, so the hint sees exactly what selection sees.
+func (f *fixture) pending(recipient string) (out bool) {
+	f.t.Helper()
+	if err := statetest.Write(f.owner, func(tx *brokerstate.WriteTx) error {
+		var err error
+		out, err = NewView(tx, f.limits, f.now).Pending(recipient)
+		return err
+	}); err != nil {
+		f.t.Fatal(err)
+	}
+	return
+}
+
+func TestPendingHintTracksSelectEligibility(t *testing.T) {
+	f := newFixture(t)
+	a := f.enrolled("a")
+	b := f.enrolled("b")
+	if f.pending(b.Enrollment.ID) {
+		t.Fatal("empty queue hinted queued work")
+	}
+	m := f.send(a, b, "hint")
+	if !f.pending(b.Enrollment.ID) {
+		t.Fatal("queued eligible message did not hint work")
+	}
+	f.must(Unavailable{ID: b.Enrollment.ID, Evidence: "native readiness withdrawn"})
+	if f.pending(b.Enrollment.ID) {
+		t.Fatal("recipient that is not bound hinted work")
+	}
+	f.must(Bind{ID: b.Enrollment.ID, Conversation: "b", Endpoint: "/registered/daemon.sock", Evidence: "reconnected same thread"})
+	if !f.pending(b.Enrollment.ID) {
+		t.Fatal("rebound recipient lost its hint")
+	}
+	d := f.must(Select{Recipient: b.Enrollment.ID}).Dispatches
+	if len(d) != 1 || d[0].Envelope.Message.ID != m.ID {
+		t.Fatalf("selection did not claim the hinted message: %+v", d)
+	}
+	if f.pending(b.Enrollment.ID) {
+		t.Fatal("claimed attempt and retained input still hinted work")
+	}
+	f.must(Consume{Credential: b.Credential, MessageID: m.ID, Attempt: d[0].Envelope.Message.Attempt})
+	next := f.send(a, b, "stopped")
+	if !f.pending(b.Enrollment.ID) {
+		t.Fatal("released barrier did not restore the hint")
+	}
+	f.must(Stop{Credential: a.Credential, Conversation: next.Conversation, Reason: "operator stop"})
+	if f.pending(b.Enrollment.ID) {
+		t.Fatal("stopped conversation hinted work")
+	}
+	if len(f.must(Select{Recipient: b.Enrollment.ID}).Dispatches) != 0 {
+		t.Fatal("hint and selection disagreed about eligibility")
+	}
+}

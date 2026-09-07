@@ -69,15 +69,24 @@ func (w *worker) run(lifetime brokerstate.WorkLifetime, reportFatal func(error))
 	}
 }
 
-// check is one admitted workflow: read the enrollment, observe readiness,
-// persist only changed evidence, select at most one message for this
-// recipient, submit it, persist the outcome. done reports a terminal enrollment.
+// check is one admitted workflow: snapshot the enrollment and whether work may
+// be queued, observe readiness, persist only changed evidence, select at most
+// one message for this recipient, submit it, persist the outcome. An idle bound
+// worker never leaves the snapshot. done reports a terminal enrollment.
 func (w *worker) check(lifetime brokerstate.WorkLifetime) (done bool, err error) {
 	err = w.owner.Do(lifetime.Interrupt, func(op *brokerstate.Operation) error {
 		var e messages.Enrollment
-		if err := op.Write(lifetime.Interrupt, func(tx *brokerstate.WriteTx) error {
+		var pending bool
+		if err := op.Read(lifetime.Interrupt, func(tx *brokerstate.ReadTx) error {
+			view := messages.NewView(tx, w.limits, time.Now())
 			var err error
-			e, err = messages.NewStore(tx, w.limits, time.Now()).Enrollment(w.id)
+			if e, err = view.Enrollment(w.id); err != nil {
+				return err
+			}
+			if e.State != "bound" {
+				return nil
+			}
+			pending, err = view.Pending(w.id)
 			return err
 		}); err != nil {
 			return err
@@ -90,6 +99,7 @@ func (w *worker) check(lifetime brokerstate.WorkLifetime) (done bool, err error)
 		default:
 			return fmt.Errorf("invalid canonical enrollment state for %s", w.id)
 		}
+		observed := false
 		if !w.bound || e.State != "bound" || time.Since(w.lastProbe) >= w.limits.ProbeInterval {
 			command, err := w.observe(lifetime, e)
 			if err != nil {
@@ -108,10 +118,18 @@ func (w *worker) check(lifetime brokerstate.WorkLifetime) (done bool, err error)
 				if err != nil {
 					return err
 				}
+				observed = true
 			}
 			if !w.bound {
 				return nil
 			}
+		}
+		// The snapshot is a hint, never the decision. Enter the intent
+		// transaction when it saw queued work, or when this check just changed
+		// canonical readiness and so may have made queued work eligible; that
+		// transaction rechecks every constraint under its own fence.
+		if !pending && !observed {
+			return nil
 		}
 		var selected messages.Result
 		if err := op.Write(lifetime.Interrupt, func(tx *brokerstate.WriteTx) error {

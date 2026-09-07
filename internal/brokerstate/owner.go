@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/seungpyoson/waggle/internal/config"
@@ -44,6 +45,8 @@ type ownerState struct {
 	identity       string
 	generation     int64
 	config         config.OwnershipConfig
+	writes         atomic.Uint64
+	reads          atomic.Uint64
 	mu             sync.Mutex
 	phase          lifecycle
 	operations     int
@@ -120,6 +123,18 @@ func (o *Owner) Do(ctx context.Context, work func(*Operation) error) error {
 		s.mu.Unlock()
 	}()
 	return work(op)
+}
+
+// Stats are cumulative admitted-transaction counters for load verification.
+type Stats struct{ Writes, Reads uint64 }
+
+// Stats reports what this incarnation has admitted since acquisition. A fenced
+// or rejected transaction is never counted: only work that passed the fence.
+func (o *Owner) Stats() Stats {
+	if o == nil || o.state == nil {
+		return Stats{}
+	}
+	return Stats{Writes: o.state.writes.Load(), Reads: o.state.reads.Load()}
 }
 
 // StartWork inserts a unique key and schedules Run in one decision against

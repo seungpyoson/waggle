@@ -102,7 +102,7 @@ func Acquire(ctx context.Context, cfg config.OwnershipConfig, inspector ProcessI
 	instance := rand.Text()
 	var generation int64
 	var predecessor *ProcessIdentity
-	err = immediate(ctx, db, func(conn *sql.Conn) error {
+	err = reserved(ctx, db, writeAccess, func(conn *sql.Conn) error {
 		var journal string
 		if err := conn.QueryRowContext(ctx, "PRAGMA journal_mode").Scan(&journal); err != nil {
 			return err

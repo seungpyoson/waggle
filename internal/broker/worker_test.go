@@ -152,3 +152,53 @@ func TestShutdownRetainsOwnershipUntilDriverCloseJoins(t *testing.T) {
 		t.Fatalf("ownership released before native close joined: %v", err)
 	}
 }
+
+// TestIdleBoundWorkerIssuesNoWriteTransactions holds the design's idle contract:
+// a bound worker with an empty queue observes through read snapshots and enters
+// no write transaction at all, yet still finds work committed without a wakeup.
+func TestIdleBoundWorkerIssuesNoWriteTransactions(t *testing.T) {
+	socket := shortBrokerSocketPath(t, "waggle-idle-*")
+	cfg := config.NewBrokerConfig(config.BrokerEndpoints{Socket: socket, PID: socket + ".pid"})
+	idle := 3 * cfg.Messaging.QueueCheckInterval
+	// Supervisor discovery is a second, independent write source and is not this
+	// test's subject: keep its period beyond the whole measurement so the counter
+	// delta belongs to the enrollment worker alone. Enrollment still registers a
+	// worker immediately, through the discovery wakeup rather than its period.
+	cfg.Messaging.DiscoveryInterval = 2 * (config.Defaults.StartupTimeout + idle)
+	b, err := newOwnedTestBroker(t, filepath.Join(t.TempDir(), "state.db"), config.CreateStore, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shutdown := serveTestBroker(t, b)
+	defer shutdown()
+	recipient := boundFixture(t, b, "recipient")
+	fake := b.native()
+	// A second probe proves the binding check completed: its write transactions,
+	// and any selection it entered, are behind the measurement.
+	awaitTransport(t, fake, recipient.Enrollment.ID, "bound worker replaced or dropped its transport",
+		func(opens, closes, _ int) bool { return opens <= 1 && closes == 0 },
+		func(_, _, probes int) bool { return probes >= 2 })
+	before := b.owner.Stats()
+	time.Sleep(idle)
+	after := b.owner.Stats()
+	if after.Writes != before.Writes {
+		t.Fatalf("idle worker opened %d write transactions in %v", after.Writes-before.Writes, idle)
+	}
+	if after.Reads < before.Reads+2 {
+		t.Fatalf("idle worker took %d read snapshots in %v, want at least 2", after.Reads-before.Reads, idle)
+	}
+	// The hint must still carry committed work into the intent transaction. This
+	// row is committed without an RPC wakeup, so only the snapshot can find it.
+	sender := boundFixture(t, b, "sender")
+	var stored messages.Result
+	if err := statetest.Write(b.owner, func(tx *brokerstate.WriteTx) error {
+		var err error
+		stored, err = messages.NewStore(tx, b.config.Messaging, time.Now()).Apply(messages.Enqueue{Credential: sender.Credential, Recipient: recipient.Enrollment.ID, RequestID: "after-idle", Body: "queued while idle", Hops: b.config.Messaging.DefaultHops})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := fake.receive(t); got.Message.ID != stored.Message.ID {
+		t.Fatal("pending hint did not enter the intent transaction")
+	}
+}

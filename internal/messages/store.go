@@ -23,15 +23,27 @@ var (
 	ErrConflict     = errors.New("request conflicts with canonical state")
 )
 
-// Store is a domain view of one fenced transaction, not another database owner.
-type Store struct {
-	tx     *brokerstate.WriteTx
+// View is read-only domain access over any fenced capability. A read snapshot
+// and a write transaction answer the same questions through it.
+type View struct {
+	r      brokerstate.Reader
 	limits config.MessagingConfig
 	now    time.Time
 }
 
+func NewView(r brokerstate.Reader, limits config.MessagingConfig, now time.Time) *View {
+	return &View{r: r, limits: limits, now: now.UTC()}
+}
+
+// Store adds mutation to a View over a write transaction. It is a domain view
+// of one fenced transaction, not another database owner.
+type Store struct {
+	*View
+	tx *brokerstate.WriteTx
+}
+
 func NewStore(tx *brokerstate.WriteTx, limits config.MessagingConfig, now time.Time) *Store {
-	return &Store{tx: tx, limits: limits, now: now.UTC()}
+	return &Store{View: NewView(tx, limits, now), tx: tx}
 }
 
 // Apply is the only mutation entrypoint. Errors must propagate to the owner so
@@ -179,9 +191,9 @@ func (s *Store) bind(c Bind) (Result, error) {
 	return Result{Enrollment: e}, err
 }
 
-func (s *Store) Enrollment(id string) (Enrollment, error) {
+func (v *View) Enrollment(id string) (Enrollment, error) {
 	var e Enrollment
-	err := s.tx.Scan("SELECT id,provider,conversation,endpoint,label,state,evidence FROM enrollments WHERE id=?", []any{id}, &e.ID, &e.Provider, &e.Conversation, &e.Endpoint, &e.Label, &e.State, &e.Evidence)
+	err := v.r.Scan("SELECT id,provider,conversation,endpoint,label,state,evidence FROM enrollments WHERE id=?", []any{id}, &e.ID, &e.Provider, &e.Conversation, &e.Endpoint, &e.Label, &e.State, &e.Evidence)
 	if errors.Is(err, sql.ErrNoRows) {
 		return e, ErrNotFound
 	}
@@ -190,19 +202,19 @@ func (s *Store) Enrollment(id string) (Enrollment, error) {
 
 // Authenticate establishes scope only. Sending additionally requires a bound
 // incarnation; a retired recipient may still provide a late consumption receipt.
-func (s *Store) Authenticate(credential string) (Enrollment, error) {
+func (v *View) Authenticate(credential string) (Enrollment, error) {
 	if credential == "" {
 		return Enrollment{}, ErrCredential
 	}
 	var id string
-	err := s.tx.Scan("SELECT id FROM enrollments WHERE credential_hash=?", []any{credentialHash(credential)}, &id)
+	err := v.r.Scan("SELECT id FROM enrollments WHERE credential_hash=?", []any{credentialHash(credential)}, &id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Enrollment{}, ErrCredential
 	}
 	if err != nil {
 		return Enrollment{}, err
 	}
-	return s.Enrollment(id)
+	return v.Enrollment(id)
 }
 
 func (s *Store) requireBound(id string) error {
@@ -361,6 +373,24 @@ func (s *Store) reply(c Reply) (Result, error) {
 	return s.insert(sender.ID, original.Sender, original.Conversation, original.ID, c.RequestID, c.Body, hash)
 }
 
+// eligible is the selection predicate. It exists once so a read snapshot and
+// the intent transaction can never disagree about what makes a message
+// dispatchable. Its single parameter is the caller's current time.
+const eligible = `FROM messages m JOIN conversations c ON c.id=m.conversation_id
+	 JOIN enrollments e ON e.id=m.recipient JOIN broker_owner o ON o.singleton=1
+	 WHERE e.state='bound' AND e.verified_generation=o.generation AND c.stopped_reason='' AND c.deadline>? AND c.remaining_hops>0
+	 AND NOT EXISTS(SELECT 1 FROM attempts a WHERE a.message_id=m.id)
+	 AND NOT EXISTS(SELECT 1 FROM recipient_barrier b WHERE b.recipient=m.recipient)`
+
+// Pending reports whether at least one message for recipient satisfies the
+// selection predicate at this snapshot. It is a hint only: Select remains the
+// sole eligibility decision and rechecks every constraint under its own fence.
+func (v *View) Pending(recipient string) (bool, error) {
+	var pending bool
+	err := v.r.Scan("SELECT EXISTS(SELECT 1 "+eligible+" AND m.recipient=?)", []any{v.now.UnixNano(), recipient}, &pending)
+	return pending, err
+}
+
 func (s *Store) selectWork(c Select) (Result, error) {
 	var ids []string
 	limit := s.limits.ScanLimit
@@ -369,12 +399,8 @@ func (s *Store) selectWork(c Select) (Result, error) {
 	}
 	err := s.tx.Query(`SELECT id FROM (
 	 SELECT m.id,m.sequence,row_number() OVER (PARTITION BY m.recipient ORDER BY m.sequence) AS position
-	 FROM messages m JOIN conversations c ON c.id=m.conversation_id
-	 JOIN enrollments e ON e.id=m.recipient JOIN broker_owner o ON o.singleton=1
-	 WHERE e.state='bound' AND e.verified_generation=o.generation AND c.stopped_reason='' AND c.deadline>? AND c.remaining_hops>0
+	 `+eligible+`
 	 AND (?='' OR m.recipient=?)
-	 AND NOT EXISTS(SELECT 1 FROM attempts a WHERE a.message_id=m.id)
-	 AND NOT EXISTS(SELECT 1 FROM recipient_barrier b WHERE b.recipient=m.recipient)
 	) WHERE position=1 ORDER BY sequence LIMIT ?`, []any{s.now.UnixNano(), c.Recipient, c.Recipient, limit}, func(rows *sql.Rows) error {
 		for rows.Next() {
 			var id string
@@ -541,9 +567,9 @@ func scanMessage(scan func(...any) error) (Message, error) {
 	return m, err
 }
 
-func (s *Store) Message(id string) (Message, error) {
+func (v *View) Message(id string) (Message, error) {
 	m, err := scanMessage(func(dest ...any) error {
-		return s.tx.Scan("SELECT "+messageColumns+" FROM message_status m JOIN enrollments e ON e.id=m.recipient WHERE m.id=?", []any{s.now.UnixNano(), id}, dest...)
+		return v.r.Scan("SELECT "+messageColumns+" FROM message_status m JOIN enrollments e ON e.id=m.recipient WHERE m.id=?", []any{v.now.UnixNano(), id}, dest...)
 	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return m, ErrNotFound
@@ -552,13 +578,13 @@ func (s *Store) Message(id string) (Message, error) {
 }
 
 // Inbox is an authenticated, read-only projection. It supplies no receipt.
-func (s *Store) Inbox(credential string) ([]Message, error) {
-	e, err := s.Authenticate(credential)
+func (v *View) Inbox(credential string) ([]Message, error) {
+	e, err := v.Authenticate(credential)
 	if err != nil {
 		return nil, err
 	}
 	items := make([]Message, 0)
-	err = s.tx.Query("SELECT "+messageColumns+" FROM message_status m JOIN enrollments e ON e.id=m.recipient WHERE m.recipient=? ORDER BY m.sequence DESC LIMIT ?", []any{s.now.UnixNano(), e.ID, s.limits.ScanLimit}, func(rows *sql.Rows) error {
+	err = v.r.Query("SELECT "+messageColumns+" FROM message_status m JOIN enrollments e ON e.id=m.recipient WHERE m.recipient=? ORDER BY m.sequence DESC LIMIT ?", []any{v.now.UnixNano(), e.ID, v.limits.ScanLimit}, func(rows *sql.Rows) error {
 		for rows.Next() {
 			m, err := scanMessage(rows.Scan)
 			if err != nil {
@@ -573,15 +599,15 @@ func (s *Store) Inbox(credential string) ([]Message, error) {
 
 // Enrollments uses a bounded keyset page for both inspection and observation.
 // Callers continue after the final ID; an empty page ends a scan.
-func (s *Store) Enrollments(after string, scope EnrollmentScope) ([]Enrollment, error) {
-	if len(after) > s.limits.MaxFieldBytes {
+func (v *View) Enrollments(after string, scope EnrollmentScope) ([]Enrollment, error) {
+	if len(after) > v.limits.MaxFieldBytes {
 		return nil, fmt.Errorf("enrollment cursor exceeds the configured bound")
 	}
 	if scope != AllEnrollments && scope != ObservableEnrollments {
 		return nil, fmt.Errorf("enrollment scan requires an explicit scope")
 	}
 	items := make([]Enrollment, 0)
-	err := s.tx.Query("SELECT id,provider,conversation,endpoint,label,state,evidence FROM enrollments WHERE id>? AND (? OR state IN ('pending','bound','disconnected')) ORDER BY id LIMIT ?", []any{after, scope == AllEnrollments, s.limits.ScanLimit}, func(rows *sql.Rows) error {
+	err := v.r.Query("SELECT id,provider,conversation,endpoint,label,state,evidence FROM enrollments WHERE id>? AND (? OR state IN ('pending','bound','disconnected')) ORDER BY id LIMIT ?", []any{after, scope == AllEnrollments, v.limits.ScanLimit}, func(rows *sql.Rows) error {
 		for rows.Next() {
 			var e Enrollment
 			if err := rows.Scan(&e.ID, &e.Provider, &e.Conversation, &e.Endpoint, &e.Label, &e.State, &e.Evidence); err != nil {
