@@ -29,7 +29,8 @@ func New(t *testing.T, schema string) *brokerstate.Owner {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if err := o.Shutdown(context.Background()); err != nil {
+		o.BeginShutdown(nil)
+		if err := o.Wait(context.Background()); err != nil {
 			t.Error(err)
 		}
 	})
@@ -61,32 +62,4 @@ type Row struct {
 func (s SQL) QueryRow(query string, args ...any) Row { return Row{s.Owner, query, args} }
 func (r Row) Scan(dest ...any) error {
 	return Write(r.owner, func(tx *brokerstate.WriteTx) error { return tx.Scan(r.query, r.args, dest...) })
-}
-
-// Operation keeps a real admitted lifetime open until test cleanup.
-func Operation(t *testing.T, owner *brokerstate.Owner) *brokerstate.Operation {
-	t.Helper()
-	started := make(chan *brokerstate.Operation)
-	stop := make(chan struct{})
-	done := make(chan error, 1)
-	go func() {
-		done <- owner.Do(t.Context(), func(op *brokerstate.Operation) error {
-			started <- op
-			<-stop
-			return nil
-		})
-	}()
-	var op *brokerstate.Operation
-	select {
-	case op = <-started:
-	case err := <-done:
-		t.Fatalf("admit fixture: %v", err)
-	}
-	t.Cleanup(func() {
-		close(stop)
-		if err := <-done; err != nil {
-			t.Error(err)
-		}
-	})
-	return op
 }

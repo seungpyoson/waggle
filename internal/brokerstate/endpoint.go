@@ -17,66 +17,112 @@ import (
 type ownedFile struct {
 	path     string
 	identity os.FileInfo
+	removed  bool // cleanup progress survives a later failure; never re-deleted
 }
 
 type ownedEndpoint struct {
 	listener *net.UnixListener
 	files    []ownedFile
-	ready    bool
 }
 
-// Bind is the only IPC constructor. It records each created file immediately,
-// so partial startup uses the same owned shutdown as a running broker.
+// Bind is the only IPC constructor. Filesystem work and listening happen
+// outside the lifecycle mutex; publication is one decision against draining.
+// If draining wins, the created endpoint is closed and removed unpublished.
 func (o *Owner) Bind(ctx context.Context, paths config.BrokerEndpoints) error {
 	if err := paths.Validate(); err != nil {
 		return err
 	}
 	return o.Do(ctx, func(op *Operation) error {
-		return op.Write(ctx, func(tx *WriteTx) error {
-			if err := tx.RequireActive(); err != nil {
-				return err
-			}
-			s := o.state
-			s.mu.Lock()
-			defer s.mu.Unlock()
-			if s.endpoint != nil {
-				return fmt.Errorf("broker endpoints already bound")
-			}
-			if err := s.reclaimEndpoints(ctx, paths); err != nil {
-				return err
-			}
-			listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: paths.Socket, Net: "unix"})
-			if err != nil {
-				return fmt.Errorf("bind broker socket: %w", err)
-			}
-			listener.SetUnlinkOnClose(false)
-			s.endpoint = &ownedEndpoint{listener: listener, files: []ownedFile{{path: paths.Socket}}}
-			info, err := os.Lstat(paths.Socket)
-			if err != nil {
-				return fmt.Errorf("record broker socket identity: %w", err)
-			}
-			s.endpoint.files[0].identity = info
-			if err := os.Chmod(paths.Socket, 0700); err != nil {
-				return err
-			}
-			pid, err := os.OpenFile(paths.PID, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-			if err != nil {
-				return fmt.Errorf("create broker PID file: %w", err)
-			}
-			s.endpoint.files = append(s.endpoint.files, ownedFile{path: paths.PID})
-			info, statErr := pid.Stat()
-			if statErr != nil {
-				return errors.Join(statErr, pid.Close())
-			}
-			s.endpoint.files[1].identity = info
-			_, writeErr := fmt.Fprintln(pid, os.Getpid())
-			if err := errors.Join(writeErr, pid.Close()); err != nil {
-				return err
-			}
-			s.endpoint.ready = true
-			return nil
-		})
+		s := o.state
+		s.mu.Lock()
+		bound := s.endpoint != nil
+		s.mu.Unlock()
+		if bound {
+			return fmt.Errorf("broker endpoints already bound")
+		}
+		if err := op.Write(ctx, func(tx *WriteTx) error { return tx.RequireActive() }); err != nil {
+			return err
+		}
+		if err := s.reclaimEndpoints(ctx, paths); err != nil {
+			return err
+		}
+		ep, err := createEndpoint(paths)
+		if err != nil {
+			return err
+		}
+		if s.beforePublish != nil {
+			s.beforePublish()
+		}
+		s.mu.Lock()
+		if s.phase != serving || s.endpoint != nil {
+			s.mu.Unlock()
+			return errors.Join(ErrAdmissionClosed, ep.discard())
+		}
+		s.endpoint = ep
+		s.mu.Unlock()
+		return nil
 	})
+}
+
+func createEndpoint(paths config.BrokerEndpoints) (_ *ownedEndpoint, err error) {
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: paths.Socket, Net: "unix"})
+	if err != nil {
+		return nil, fmt.Errorf("bind broker socket: %w", err)
+	}
+	listener.SetUnlinkOnClose(false)
+	ep := &ownedEndpoint{listener: listener}
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, ep.discard())
+		}
+	}()
+	info, err := os.Lstat(paths.Socket)
+	if err != nil {
+		return nil, fmt.Errorf("record broker socket identity: %w", err)
+	}
+	ep.files = append(ep.files, ownedFile{path: paths.Socket, identity: info})
+	if err = os.Chmod(paths.Socket, 0700); err != nil {
+		return nil, err
+	}
+	pid, err := os.OpenFile(paths.PID, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return nil, fmt.Errorf("create broker PID file: %w", err)
+	}
+	info, statErr := pid.Stat()
+	if statErr != nil {
+		return nil, errors.Join(statErr, pid.Close())
+	}
+	ep.files = append(ep.files, ownedFile{path: paths.PID, identity: info})
+	_, writeErr := fmt.Fprintln(pid, os.Getpid())
+	if err = errors.Join(writeErr, pid.Close()); err != nil {
+		return nil, err
+	}
+	return ep, nil
+}
+
+// discard closes an unpublished or failed endpoint and removes what it created.
+func (ep *ownedEndpoint) discard() error {
+	err := ep.listener.Close()
+	if errors.Is(err, net.ErrClosed) {
+		err = nil
+	}
+	return errors.Join(err, ep.remove())
+}
+
+// remove deletes recorded files in order and records each success, so a
+// later failure never repeats or forgets a completed removal.
+func (ep *ownedEndpoint) remove() error {
+	for i := range ep.files {
+		file := &ep.files[i]
+		if file.removed {
+			continue
+		}
+		if err := removeOwnedFile(*file); err != nil {
+			return err
+		}
+		file.removed = true
+	}
+	return nil
 }
 
 func (s *ownerState) reclaimEndpoints(ctx context.Context, paths config.BrokerEndpoints) error {
@@ -96,7 +142,7 @@ func (s *ownerState) reclaimEndpoints(ctx context.Context, paths config.BrokerEn
 		if path == paths.Socket && info.Mode()&os.ModeSocket == 0 || path == paths.PID && !info.Mode().IsRegular() {
 			return fmt.Errorf("unexpected file type at broker endpoint %s", path)
 		}
-		leftovers = append(leftovers, ownedFile{path, info})
+		leftovers = append(leftovers, ownedFile{path: path, identity: info})
 	}
 	if len(leftovers) == 0 {
 		return nil
@@ -147,29 +193,27 @@ func removeOwnedFile(file ownedFile) error {
 
 func (s *ownerState) closeListener() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.endpoint == nil {
-		return nil
-	} // Maintenance ownership has no IPC endpoint.
-	err := s.endpoint.listener.Close()
+	ep := s.endpoint
+	s.mu.Unlock()
+	if ep == nil {
+		return nil // Maintenance ownership has no IPC endpoint.
+	}
+	err := ep.listener.Close()
 	if errors.Is(err, net.ErrClosed) {
 		return nil
 	}
 	return err
 }
 
+// removeEndpoints runs after quiescence; nothing else touches the endpoint.
 func (s *ownerState) removeEndpoints() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.endpoint == nil {
+	ep := s.endpoint
+	s.mu.Unlock()
+	if ep == nil {
 		return nil
 	}
-	for _, file := range s.endpoint.files {
-		if err := removeOwnedFile(file); err != nil {
-			return err
-		}
-	}
-	return nil
+	return ep.remove()
 }
 
 // Serve owns every accepted connection until its handler returns. Shutdown
@@ -184,7 +228,7 @@ func (o *Owner) Serve(ctx context.Context, handle func(net.Conn)) error {
 			s.mu.Unlock()
 			return fmt.Errorf("broker service may start only once per ownership generation")
 		}
-		if ep == nil || !ep.ready || handle == nil {
+		if ep == nil || handle == nil {
 			s.mu.Unlock()
 			return fmt.Errorf("broker service requires ready endpoints and a handler")
 		}
@@ -205,7 +249,7 @@ func (o *Owner) Serve(ctx context.Context, handle func(net.Conn)) error {
 			conn, err := ep.listener.Accept()
 			if err != nil {
 				select {
-				case <-s.stopping:
+				case <-s.stop:
 					return nil
 				default:
 					return fmt.Errorf("accept broker connection: %w", err)

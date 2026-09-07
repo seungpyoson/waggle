@@ -179,9 +179,12 @@ func Acquire(ctx context.Context, cfg config.OwnershipConfig, inspector ProcessI
 		return nil, fmt.Errorf("acquire canonical store: %w", err)
 	}
 	keep = true
+	interrupt, interruptCancel := context.WithCancelCause(context.Background())
 	return &Owner{state: &ownerState{
 		db: db, identity: instance, generation: generation, config: cfg, phase: serving,
-		drained: make(chan struct{}), stopping: make(chan struct{}), shutdownDone: make(chan struct{}),
+		workers: make(map[string]struct{}),
+		drained: make(chan struct{}), stop: make(chan struct{}), finalDone: make(chan struct{}), failed: make(chan struct{}),
+		interrupt: interrupt, cancel: interruptCancel,
 		predecessor: predecessor, inspector: inspector,
 	}}, nil
 }

@@ -4,7 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"io"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -36,8 +36,9 @@ func newOwner(t *testing.T) (*Owner, config.OwnershipConfig) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if err := o.Shutdown(context.Background()); err != nil {
-			t.Errorf("shutdown fixture owner: %v", err)
+		o.BeginShutdown(nil)
+		if err := o.Wait(context.Background()); err != nil {
+			t.Errorf("release fixture owner: %v", err)
 		}
 	})
 	return o, cfg
@@ -76,7 +77,8 @@ func TestAcquireExcludesLiveAndUnverifiablePredecessors(t *testing.T) {
 func TestOrderlyReleaseIncrementsGeneration(t *testing.T) {
 	o, cfg := newOwner(t)
 	old := o.state.generation
-	if err := o.Shutdown(t.Context()); err != nil {
+	o.BeginShutdown(nil)
+	if err := o.Wait(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	cfg.Action = config.OpenStore
@@ -84,7 +86,12 @@ func TestOrderlyReleaseIncrementsGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer next.Shutdown(context.Background())
+	defer func() {
+		next.BeginShutdown(nil)
+		if err := next.Wait(context.Background()); err != nil {
+			t.Error(err)
+		}
+	}()
 	if next.state.generation != old+1 {
 		t.Fatalf("generation = %d, want %d", next.state.generation, old+1)
 	}
@@ -121,7 +128,8 @@ func TestStaleOpenConnectionCannotWriteOrRelease(t *testing.T) {
 	if !errors.Is(err, ErrFenced) || called {
 		t.Fatalf("stale write = %v, callback ran = %v", err, called)
 	}
-	if err := o.Shutdown(t.Context()); !errors.Is(err, ErrFenced) {
+	o.BeginShutdown(nil)
+	if err := o.Wait(t.Context()); !errors.Is(err, ErrFenced) {
 		t.Fatalf("stale release = %v", err)
 	}
 	var rows int
@@ -231,7 +239,6 @@ func TestShutdownWaiterTimeoutPreservesFinalization(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 			defer cancel()
 			cfg := config.NewOwnershipConfig(filepath.Join(t.TempDir(), "state.db"), config.CreateStore)
-			cfg.ShutdownTimeout = 50 * time.Millisecond
 			o, err := Acquire(ctx, cfg, processFixture{status: ProcessAlive})
 			if err != nil {
 				t.Fatal(err)
@@ -250,27 +257,29 @@ func TestShutdownWaiterTimeoutPreservesFinalization(t *testing.T) {
 			release := sync.OnceFunc(func() { close(join) })
 			defer release()
 			var closes atomic.Int32
-			workDone := make(chan error, 1)
-			go func() {
-				workDone <- o.Do(ctx, func(op *Operation) error {
-					_, err := op.Open(ctx, func() (io.Closer, error) {
-						return closeFunc(func() error {
-							closes.Add(1)
-							close(closing)
-							<-join
-							return tc.closeErr
-						}), nil
-					})
-					return err
-				})
-			}()
+			err = o.StartWork(ctx, "worker", ManagedWork{Run: func(lifetime WorkLifetime, reportFatal func(error)) {
+				<-lifetime.Stop
+				closes.Add(1)
+				close(closing)
+				<-join
+				if tc.closeErr != nil {
+					reportFatal(tc.closeErr)
+				}
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			o.BeginShutdown(errors.New("test stop"))
 			select {
 			case <-closing:
 			case <-ctx.Done():
-				t.Fatal("resource did not reach close")
+				t.Fatal("worker did not observe Stop")
 			}
-			if err := o.Shutdown(ctx); !errors.Is(err, context.DeadlineExceeded) {
-				t.Fatalf("unjoined resource must produce a bounded wait error: %v", err)
+			waitCtx, cancelWait := context.WithTimeout(ctx, 50*time.Millisecond)
+			err = o.Wait(waitCtx)
+			cancelWait()
+			if !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, ErrShutdownIncomplete) {
+				t.Fatalf("unjoined worker must produce a bounded wait error: %v", err)
 			}
 			if err := o.Do(ctx, func(*Operation) error { return nil }); !errors.Is(err, ErrAdmissionClosed) {
 				t.Fatalf("timeout reopened admission: %v", err)
@@ -278,26 +287,13 @@ func TestShutdownWaiterTimeoutPreservesFinalization(t *testing.T) {
 			cfg.Action = config.OpenStore
 			if next, err := Acquire(ctx, cfg, processFixture{status: ProcessAlive}); !errors.Is(err, ErrOwnerAlive) {
 				if next != nil {
-					_ = next.Shutdown(ctx)
+					next.BeginShutdown(nil)
+					_ = next.Wait(ctx)
 				}
-				t.Fatalf("unjoined resource allowed takeover: %v", err)
+				t.Fatalf("unjoined worker allowed takeover: %v", err)
 			}
 			release()
-			select {
-			case err := <-workDone:
-				if !errors.Is(err, tc.closeErr) {
-					t.Fatalf("resource close result: %v, want %v", err, tc.closeErr)
-				}
-			case <-ctx.Done():
-				t.Fatal("resource close did not join")
-			}
-			// Finalization must finish without a second shutdown request to restart it.
-			select {
-			case <-o.state.shutdownDone:
-			case <-ctx.Done():
-				t.Fatal("finalization did not finish after the resource joined")
-			}
-			finalErr := o.Shutdown(ctx)
+			finalErr := o.Wait(ctx)
 			if tc.closeErr == nil && !tc.releaseFailure {
 				if finalErr != nil {
 					t.Fatalf("waiter timeout permanently abandoned finalization: %v", finalErr)
@@ -306,16 +302,17 @@ func TestShutdownWaiterTimeoutPreservesFinalization(t *testing.T) {
 				if err != nil {
 					t.Fatalf("completed finalization did not permit a successor: %v", err)
 				}
-				if err := next.Shutdown(ctx); err != nil {
+				next.BeginShutdown(nil)
+				if err := next.Wait(ctx); err != nil {
 					t.Fatal(err)
 				}
 				return
 			}
-			if finalErr == nil || errors.Is(finalErr, context.DeadlineExceeded) {
+			if finalErr == nil || errors.Is(finalErr, context.DeadlineExceeded) || !errors.Is(finalErr, ErrFinalizationFailed) {
 				t.Fatalf("actual finalization failure was lost behind waiter timeout: %v", finalErr)
 			}
 			if tc.closeErr != nil && !errors.Is(finalErr, tc.closeErr) {
-				t.Fatalf("resource error was not preserved: %v", finalErr)
+				t.Fatalf("worker error was not preserved: %v", finalErr)
 			}
 			if tc.releaseFailure {
 				if !strings.Contains(finalErr.Error(), "release denied by test") {
@@ -326,15 +323,153 @@ func TestShutdownWaiterTimeoutPreservesFinalization(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if err := o.Shutdown(ctx); err != finalErr || closes.Load() != 1 {
+			if err := o.Wait(ctx); !errors.Is(err, ErrFinalizationFailed) || closes.Load() != 1 {
 				t.Fatalf("waiter retried failed finalization: err=%v closes=%d", err, closes.Load())
 			}
 			if next, err := Acquire(ctx, cfg, processFixture{status: ProcessAlive}); !errors.Is(err, ErrOwnerAlive) {
 				if next != nil {
-					_ = next.Shutdown(ctx)
+					next.BeginShutdown(nil)
+					_ = next.Wait(ctx)
 				}
 				t.Fatalf("failed finalization allowed takeover: %v", err)
 			}
 		})
+	}
+}
+
+func TestStartWorkRejectsDuplicatesAndLosesToDraining(t *testing.T) {
+	o, _ := newOwner(t)
+	started := make(chan struct{})
+	run := func(lifetime WorkLifetime, _ func(error)) { close(started); <-lifetime.Stop }
+	if err := o.StartWork(t.Context(), "a", ManagedWork{Run: run}); err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	if err := o.StartWork(t.Context(), "a", ManagedWork{Run: func(WorkLifetime, func(error)) { t.Error("duplicate worker ran") }}); !errors.Is(err, ErrDuplicateWork) {
+		t.Fatalf("duplicate registration: %v", err)
+	}
+	o.BeginShutdown(nil)
+	if err := o.StartWork(t.Context(), "b", ManagedWork{Run: func(WorkLifetime, func(error)) { t.Error("worker admitted during draining") }}); !errors.Is(err, ErrAdmissionClosed) {
+		t.Fatalf("draining registration: %v", err)
+	}
+	if err := o.Wait(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWorkerCompletionRunsAfterJoinAndFailureRetainsOwnership(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(fmt.Sprint("fail=", fail), func(t *testing.T) {
+			cfg := config.NewOwnershipConfig(filepath.Join(t.TempDir(), "state.db"), config.CreateStore)
+			o, err := Acquire(t.Context(), cfg, processFixture{status: ProcessAlive})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer o.state.db.Close()
+			if err := write(o, func(tx *WriteTx) error { _, err := tx.Exec("CREATE TABLE completion (joined INTEGER)"); return err }); err != nil {
+				t.Fatal(err)
+			}
+			joined := make(chan struct{})
+			completion := errors.New("completion denied")
+			err = o.StartWork(t.Context(), "w", ManagedWork{
+				Run: func(lifetime WorkLifetime, _ func(error)) { <-lifetime.Stop; close(joined) },
+				Complete: func(tx *WriteTx) error {
+					select {
+					case <-joined:
+					default:
+						t.Error("completion ran before Run joined")
+					}
+					if fail {
+						return completion
+					}
+					_, err := tx.Exec("INSERT INTO completion VALUES (1)")
+					return err
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			o.BeginShutdown(nil)
+			err = o.Wait(t.Context())
+			cfg.Action = config.OpenStore
+			if fail {
+				if !errors.Is(err, ErrFinalizationFailed) || !errors.Is(err, completion) {
+					t.Fatalf("completion failure not reported: %v", err)
+				}
+				if _, err := Acquire(t.Context(), cfg, processFixture{status: ProcessAlive}); !errors.Is(err, ErrOwnerAlive) {
+					t.Fatalf("failed completion allowed takeover: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			next, err := Acquire(t.Context(), cfg, processFixture{status: ProcessAlive})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var n int
+			if err := write(next, func(tx *WriteTx) error { return tx.Scan("SELECT count(*) FROM completion", nil, &n) }); err != nil || n != 1 {
+				t.Fatalf("completion not committed before release: n=%d err=%v", n, err)
+			}
+			next.BeginShutdown(nil)
+			if err := next.Wait(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestInterruptCancelsNativeContextWithoutStopCancellingIt(t *testing.T) {
+	o, _ := newOwner(t)
+	observed := make(chan error, 1)
+	if err := o.StartWork(t.Context(), "w", ManagedWork{Run: func(lifetime WorkLifetime, _ func(error)) {
+		<-lifetime.Stop
+		observed <- lifetime.Interrupt.Err()
+		<-lifetime.Interrupt.Done()
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	o.BeginShutdown(nil)
+	if err := <-observed; err != nil {
+		t.Fatalf("orderly draining cancelled the native context: %v", err)
+	}
+	waitCtx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	if err := o.Wait(waitCtx); !errors.Is(err, ErrShutdownIncomplete) {
+		t.Fatalf("worker waiting on Interrupt should still be draining: %v", err)
+	}
+	cause := errors.New("operator escalation")
+	o.Interrupt(cause)
+	if err := o.Wait(t.Context()); err != nil {
+		t.Fatalf("interrupted worker that joined cleanly must release: %v", err)
+	}
+}
+
+func TestReportFatalInterruptsAndRetainsOwnership(t *testing.T) {
+	cfg := config.NewOwnershipConfig(filepath.Join(t.TempDir(), "state.db"), config.CreateStore)
+	o, err := Acquire(t.Context(), cfg, processFixture{status: ProcessAlive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer o.state.db.Close()
+	fatal := errors.New("canonical persistence failed")
+	if err := o.StartWork(t.Context(), "w", ManagedWork{Run: func(lifetime WorkLifetime, reportFatal func(error)) {
+		reportFatal(fatal)
+		<-lifetime.Interrupt.Done()
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	err = o.Wait(t.Context())
+	if !errors.Is(err, ErrFinalizationFailed) || !errors.Is(err, fatal) {
+		t.Fatalf("fatal report lost: %v", err)
+	}
+	if err := o.Do(t.Context(), func(*Operation) error { return nil }); !errors.Is(err, ErrAdmissionClosed) {
+		t.Fatalf("fatal report left admission open: %v", err)
+	}
+	select {
+	case <-o.Draining():
+	default:
+		t.Fatal("fatal report did not begin draining")
 	}
 }

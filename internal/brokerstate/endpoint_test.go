@@ -101,7 +101,8 @@ func TestOwnerShutdownDrainsUnnamedConnectionsBeforeRemovingEndpoints(t *testing
 	if err := o.Serve(t.Context(), func(net.Conn) {}); err == nil {
 		t.Error("second service loop admitted")
 	}
-	if err := o.Shutdown(t.Context()); err != nil {
+	o.BeginShutdown(nil)
+	if err := o.Wait(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	<-returned
@@ -121,7 +122,8 @@ func TestOwnerShutdownDrainsUnnamedConnectionsBeforeRemovingEndpoints(t *testing
 	if next.state.generation != o.state.generation+1 {
 		t.Fatal("generation did not advance")
 	}
-	if err := next.Shutdown(t.Context()); err != nil {
+	next.BeginShutdown(nil)
+	if err := next.Wait(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -136,5 +138,30 @@ func TestCleanupRequiresRecordedFileIdentity(t *testing.T) {
 	}
 	if got, err := os.ReadFile(path); err != nil || string(got) != "keep" {
 		t.Fatalf("unverified file changed: %q %v", got, err)
+	}
+}
+
+func TestBindLosingToDrainingClosesUnpublishedEndpoint(t *testing.T) {
+	o, _ := newOwner(t)
+	if err := write(o, func(tx *WriteTx) error {
+		_, err := tx.Exec("UPDATE cutover SET state='active' WHERE singleton=1")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// endpointPaths keeps the socket inside the 104-byte sun_path limit.
+	socket, pid := endpointPaths(t)
+	paths := config.BrokerEndpoints{Socket: socket, PID: pid}
+	o.state.beforePublish = func() { o.BeginShutdown(errors.New("race")) }
+	if err := o.Bind(t.Context(), paths); !errors.Is(err, ErrAdmissionClosed) {
+		t.Fatalf("bind published after draining began: %v", err)
+	}
+	for _, path := range []string{paths.Socket, paths.PID} {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Fatalf("unpublished endpoint left %s: %v", path, err)
+		}
+	}
+	if err := o.Wait(t.Context()); err != nil {
+		t.Fatal(err)
 	}
 }

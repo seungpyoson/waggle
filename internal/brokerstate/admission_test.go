@@ -43,17 +43,11 @@ func TestAdmissionDrainIncludesWorkAdmittedBeforeShutdown(t *testing.T) {
 		})
 	}()
 	<-entered
+	o.BeginShutdown(nil)
+	<-o.Draining()
 	ctx, cancel := context.WithCancel(context.Background())
-	shutdown := make(chan error, 1)
-	go func() { shutdown <- o.Shutdown(ctx) }()
-	<-o.state.stopping
-	select {
-	case <-o.state.drained:
-		t.Error("drained while work still running")
-	default:
-	}
 	cancel()
-	if err := <-shutdown; !errors.Is(err, context.Canceled) {
+	if err := o.Wait(ctx); !errors.Is(err, context.Canceled) || !errors.Is(err, ErrShutdownIncomplete) {
 		t.Error(err)
 	}
 	if err := o.Do(t.Context(), func(*Operation) error { t.Error("admitted during shutdown"); return nil }); !errors.Is(err, ErrAdmissionClosed) {
@@ -63,7 +57,7 @@ func TestAdmissionDrainIncludesWorkAdmittedBeforeShutdown(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	if err := o.Shutdown(t.Context()); err != nil {
+	if err := o.Wait(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	cfg.Action = config.OpenStore
@@ -72,7 +66,8 @@ func TestAdmissionDrainIncludesWorkAdmittedBeforeShutdown(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() {
-		if err := next.Shutdown(context.Background()); err != nil {
+		next.BeginShutdown(nil)
+		if err := next.Wait(context.Background()); err != nil {
 			t.Error(err)
 		}
 	}()
@@ -83,12 +78,14 @@ func TestAdmissionDrainIncludesWorkAdmittedBeforeShutdown(t *testing.T) {
 		t.Fatalf("cleanup was not committed before ownership release: finished=%d err=%v", finished, err)
 	}
 }
+
 func TestConcurrentShutdownClosesAdmissionOnlyOnce(t *testing.T) {
 	o, _ := newOwner(t)
 	var wg sync.WaitGroup
 	for range 24 {
 		wg.Go(func() {
-			if err := o.Shutdown(t.Context()); err != nil {
+			o.BeginShutdown(nil)
+			if err := o.Wait(t.Context()); err != nil {
 				t.Error(err)
 			}
 		})
