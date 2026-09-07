@@ -25,9 +25,9 @@ func TestBrokerShutdownRequeuesClaimsBeforeRelease(t *testing.T) {
 		t.Fatal(err)
 	}
 	serving := make(chan error, 1)
-	go func() { serving <- b.Serve() }()
+	go func() { serving <- b.Serve(t.Context()) }()
 	t.Cleanup(func() {
-		if err := b.Shutdown(); err != nil {
+		if err := b.Shutdown(context.Background()); err != nil {
 			t.Error(err)
 		}
 	})
@@ -53,7 +53,7 @@ func TestBrokerShutdownRequeuesClaimsBeforeRelease(t *testing.T) {
 
 	// Leave the worker connected. Shutdown closes admission before closing
 	// that connection; its cleanup must still commit before ownership release.
-	if err := b.Shutdown(); err != nil {
+	if err := b.Shutdown(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if err := <-serving; err != nil {
@@ -66,7 +66,8 @@ func TestBrokerShutdownRequeuesClaimsBeforeRelease(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if err := next.Shutdown(context.Background()); err != nil {
+		next.BeginShutdown(nil)
+		if err := next.Wait(context.Background()); err != nil {
 			t.Error(err)
 		}
 	})
@@ -88,7 +89,7 @@ func TestBrokerStartupRequiresTaskSchemaBeforeBinding(t *testing.T) {
 	owner := statetest.New(t, "UPDATE cutover SET state = 'active' WHERE singleton = 1")
 	dir := t.TempDir()
 	endpoints := config.BrokerEndpoints{Socket: filepath.Join(dir, "broker.sock"), PID: filepath.Join(dir, "broker.pid")}
-	b, err := New(t.Context(), owner, config.NewBrokerConfig(endpoints), newNativeFixture())
+	b, err := newWithConnector(t.Context(), owner, config.NewBrokerConfig(endpoints), config.NewNativeConfig(), newNativeFixture())
 	if b != nil || err == nil || !strings.HasPrefix(err.Error(), "recover task claims:") {
 		t.Fatalf("startup did not reject incomplete canonical schema before binding: %v", err)
 	}

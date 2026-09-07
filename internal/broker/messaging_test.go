@@ -84,7 +84,7 @@ func TestMessagingRPCAuthenticatesEveryCallAndDoesNotUseConnectionNames(t *testi
 	if sendRequest(t, c, request).OK {
 		t.Fatal("name substituted for enrollment credential")
 	}
-	d := b.native.(*nativeFixture).receive(t)
+	d := b.native().receive(t)
 	if d.Message.ID != stored.ID || d.Acknowledgement == "" {
 		t.Fatal("first native input lost message identity or acknowledgement instruction")
 	}
@@ -116,7 +116,7 @@ func TestMessagingRPCPendingDirectFailureAndExplicitOfflineEnqueue(t *testing.T)
 	socket, b, shutdown := startTestBroker(t)
 	defer shutdown()
 	a := boundFixture(t, b, "sender")
-	b.native.(*nativeFixture).block("pending", true)
+	b.native().block("pending", true)
 	pending := enrollFixture(t, b, "pending")
 	c := connectClient(t, socket)
 	defer c.Close()
@@ -124,9 +124,9 @@ func TestMessagingRPCPendingDirectFailureAndExplicitOfflineEnqueue(t *testing.T)
 	if sendRequest(t, c, req).OK {
 		t.Fatal("direct send accepted an unverified target")
 	}
-	b.native.(*nativeFixture).block("pending", false)
+	b.native().block("pending", false)
 	waitEnrollment(t, b, pending.Enrollment.ID, "bound")
-	b.native.(*nativeFixture).block("pending", true)
+	b.native().block("pending", true)
 	waitEnrollment(t, b, pending.Enrollment.ID, "disconnected")
 	if sendRequest(t, c, req).OK {
 		t.Fatal("direct send silently queued offline")
@@ -141,9 +141,9 @@ func TestMessagingRPCPendingDirectFailureAndExplicitOfflineEnqueue(t *testing.T)
 	if queued.Possession != "stored" || queued.Attempt != "" {
 		t.Fatal("offline enqueue reported native acceptance")
 	}
-	b.native.(*nativeFixture).block("pending", false)
+	b.native().block("pending", false)
 	waitEnrollment(t, b, pending.Enrollment.ID, "bound")
-	if received := b.native.(*nativeFixture).receive(t); received.Message.ID != queued.ID {
+	if received := b.native().receive(t); received.Message.ID != queued.ID {
 		t.Fatal("canonical queue did not resume the stored message")
 	}
 }

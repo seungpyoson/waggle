@@ -34,5 +34,9 @@ const (
 
 // NewConnector selects the configured production provider mechanics.
 func NewConnector(cfg config.ProviderConfig) (Connector, error) {
-	return native.New(cfg)
+	connector, err := native.New(cfg)
+	if err != nil {
+		return nil, err // never a typed-nil interface a caller could mistake for support
+	}
+	return connector, nil
 }

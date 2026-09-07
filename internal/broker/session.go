@@ -27,6 +27,10 @@ type Session struct {
 	cleanDisconnect atomic.Bool // Set to true when disconnect command is received
 	streams         sync.WaitGroup
 	writeMu         sync.Mutex // protects enc writes
+	// stopCause is set by an ordinary broker-stop request and consumed by this
+	// connection's read loop after the acknowledgement is written. Only that
+	// single read-loop goroutine touches it.
+	stopCause error
 }
 
 // newSession creates a new session
@@ -73,6 +77,14 @@ func (s *Session) readLoop(lifetime *brokerstate.Operation) {
 		s.writeMu.Lock()
 		err = s.enc.Encode(resp)
 		s.writeMu.Unlock()
+		// An accepted stop request drains after its acknowledgement, whether or
+		// not that acknowledgement reached the operator: draining closes this
+		// connection, so it can never run before the reply is written.
+		if s.stopCause != nil {
+			cause := s.stopCause
+			s.stopCause = nil
+			s.broker.owner.BeginShutdown(cause)
+		}
 		if err != nil {
 			// Suppress errors after disconnect — client may have already closed
 			if !s.cleanDisconnect.Load() {

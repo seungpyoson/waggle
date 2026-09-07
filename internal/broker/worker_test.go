@@ -7,22 +7,22 @@ import (
 	"testing"
 	"time"
 
+	"github.com/seungpyoson/waggle/internal/broker/enrollment"
 	"github.com/seungpyoson/waggle/internal/brokerstate"
 	"github.com/seungpyoson/waggle/internal/brokerstate/statetest"
 	"github.com/seungpyoson/waggle/internal/config"
-	"github.com/seungpyoson/waggle/internal/driver"
 	"github.com/seungpyoson/waggle/internal/messages"
 	"github.com/seungpyoson/waggle/internal/protocol"
 )
 
-func TestSchedulerFindsCommittedWorkWithoutWakeup(t *testing.T) {
+func TestWorkerFindsCommittedWorkWithoutWakeup(t *testing.T) {
 	_, b, shutdown := startTestBroker(t)
 	defer shutdown()
 	a := boundFixture(t, b, "sender")
 	recipient := boundFixture(t, b, "recipient")
 	var stored messages.Result
 	// Inject interruption exactly after canonical commit: omit the RPC
-	// wakeup. The production periodic scheduler must discover this row.
+	// wakeup. The recipient worker's own periodic check must discover this row.
 	if err := statetest.Write(b.owner, func(tx *brokerstate.WriteTx) error {
 		var err error
 		stored, err = messages.NewStore(tx, b.config.Messaging, time.Now()).Apply(messages.Enqueue{Credential: a.Credential, Recipient: recipient.Enrollment.ID, RequestID: "lost-wakeup", Body: "committed work", Hops: b.config.Messaging.DefaultHops})
@@ -30,12 +30,12 @@ func TestSchedulerFindsCommittedWorkWithoutWakeup(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if got := b.native.(*nativeFixture).receive(t); got.Message.ID != stored.Message.ID {
-		t.Fatal("periodic scheduler did not discover committed work")
+	if got := b.native().receive(t); got.Message.ID != stored.Message.ID {
+		t.Fatal("periodic worker check did not discover committed work")
 	}
 }
 
-func TestSchedulerRetainsUncertainAttemptAcrossRestart(t *testing.T) {
+func TestWorkerRetainsUncertainAttemptAcrossRestart(t *testing.T) {
 	database := filepath.Join(t.TempDir(), "state.db")
 	socket := shortBrokerSocketPath(t, "waggle-restart-*")
 	b, err := newOwnedTestBroker(t, database, config.CreateStore, config.NewBrokerConfig(config.BrokerEndpoints{Socket: socket, PID: socket + ".pid"}))
@@ -44,9 +44,9 @@ func TestSchedulerRetainsUncertainAttemptAcrossRestart(t *testing.T) {
 	}
 	shutdown := serveTestBroker(t, b)
 	defer shutdown()
-	fake := b.native.(*nativeFixture)
+	fake := b.native()
 	fake.mu.Lock()
-	fake.outcome = driver.Uncertain
+	fake.outcome = enrollment.Uncertain
 	fake.mu.Unlock()
 	a := boundFixture(t, b, "sender")
 	recipient := boundFixture(t, b, "recipient")
@@ -67,7 +67,7 @@ func TestSchedulerRetainsUncertainAttemptAcrossRestart(t *testing.T) {
 		t.Fatal("wrong first submission")
 	}
 	second := send(recipient.Enrollment.ID, "second")
-	if err := b.Shutdown(); err != nil {
+	if err := b.Shutdown(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	// Reacquire the same explicit store without resubmitting its intent.
@@ -83,7 +83,7 @@ func TestSchedulerRetainsUncertainAttemptAcrossRestart(t *testing.T) {
 	c = connectClient(t, socket)
 	defer c.Close()
 	marker := send(other.Enrollment.ID, "independent")
-	if got := next.native.(*nativeFixture).receive(t); got.Message.ID != marker.ID {
+	if got := next.native().receive(t); got.Message.ID != marker.ID {
 		t.Fatal("restart resubmitted retained input or crossed its barrier")
 	}
 	if err := statetest.Write(next.owner, func(tx *brokerstate.WriteTx) error {
@@ -101,7 +101,7 @@ func TestSchedulerRetainsUncertainAttemptAcrossRestart(t *testing.T) {
 	}
 }
 
-func TestSchedulerShutdownRetainsOwnershipUntilDriverCloseJoins(t *testing.T) {
+func TestShutdownRetainsOwnershipUntilDriverCloseJoins(t *testing.T) {
 	database := filepath.Join(t.TempDir(), "state.db")
 	socket := shortBrokerSocketPath(t, "waggle-close-*")
 	b, err := newOwnedTestBroker(t, database, config.CreateStore, config.NewBrokerConfig(config.BrokerEndpoints{Socket: socket, PID: socket + ".pid"}))
@@ -112,7 +112,7 @@ func TestSchedulerShutdownRetainsOwnershipUntilDriverCloseJoins(t *testing.T) {
 	defer shutdown()
 	a := boundFixture(t, b, "sender")
 	recipient := boundFixture(t, b, "recipient")
-	fake := b.native.(*nativeFixture)
+	fake := b.native()
 	gate := make(chan struct{})
 	entered := make(chan struct{}, 1)
 	fake.mu.Lock()
@@ -130,7 +130,10 @@ func TestSchedulerShutdownRetainsOwnershipUntilDriverCloseJoins(t *testing.T) {
 	fake.receive(t)
 	deadline, cancel := context.WithTimeout(t.Context(), time.Millisecond)
 	defer cancel()
-	if err := b.owner.Shutdown(deadline); !errors.Is(err, context.DeadlineExceeded) {
+	b.owner.BeginShutdown(nil)
+	// A reporting deadline bounds only this caller; it never changes owner
+	// progress and is not the permanent finalization failure.
+	if err := b.owner.Wait(deadline); !errors.Is(err, brokerstate.ErrShutdownIncomplete) {
 		t.Fatalf("unjoined driver did not bound shutdown wait: %v", err)
 	}
 	waitCtx, cancelWait := context.WithTimeout(t.Context(), config.Defaults.StartupTimeout)

@@ -76,7 +76,7 @@ func (s *Store) Apply(command Command) (Result, error) {
 	case Reply:
 		return s.reply(c)
 	case Select:
-		return s.selectWork()
+		return s.selectWork(c)
 	case Observe:
 		switch c.Kind {
 		case "uncertain", "accepted", "held", "not_submitted", "refused", "dropped":
@@ -361,16 +361,21 @@ func (s *Store) reply(c Reply) (Result, error) {
 	return s.insert(sender.ID, original.Sender, original.Conversation, original.ID, c.RequestID, c.Body, hash)
 }
 
-func (s *Store) selectWork() (Result, error) {
+func (s *Store) selectWork(c Select) (Result, error) {
 	var ids []string
+	limit := s.limits.ScanLimit
+	if c.Recipient != "" {
+		limit = 1
+	}
 	err := s.tx.Query(`SELECT id FROM (
 	 SELECT m.id,m.sequence,row_number() OVER (PARTITION BY m.recipient ORDER BY m.sequence) AS position
 	 FROM messages m JOIN conversations c ON c.id=m.conversation_id
 	 JOIN enrollments e ON e.id=m.recipient JOIN broker_owner o ON o.singleton=1
 	 WHERE e.state='bound' AND e.verified_generation=o.generation AND c.stopped_reason='' AND c.deadline>? AND c.remaining_hops>0
+	 AND (?='' OR m.recipient=?)
 	 AND NOT EXISTS(SELECT 1 FROM attempts a WHERE a.message_id=m.id)
 	 AND NOT EXISTS(SELECT 1 FROM recipient_barrier b WHERE b.recipient=m.recipient)
-	) WHERE position=1 ORDER BY sequence LIMIT ?`, []any{s.now.UnixNano(), s.limits.ScanLimit}, func(rows *sql.Rows) error {
+	) WHERE position=1 ORDER BY sequence LIMIT ?`, []any{s.now.UnixNano(), c.Recipient, c.Recipient, limit}, func(rows *sql.Rows) error {
 		for rows.Next() {
 			var id string
 			if err := rows.Scan(&id); err != nil {

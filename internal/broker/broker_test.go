@@ -57,15 +57,17 @@ func startTestBroker(t *testing.T) (string, *Broker, func()) {
 
 func serveTestBroker(t *testing.T, b *Broker) func() {
 	t.Helper()
+	ctx, cancel := context.WithCancel(t.Context())
 	serving := make(chan error, 1)
-	go func() { serving <- b.Serve() }()
+	go func() { serving <- b.Serve(ctx) }()
 	probe := connectClient(t, b.config.Endpoints.Socket)
 	defer probe.Close()
 	if response := sendRequest(t, probe, protocol.Request{Cmd: protocol.CmdStatus}); !response.OK {
 		t.Fatal(response.Error)
 	}
 	return func() {
-		if err := b.Shutdown(); err != nil {
+		defer cancel()
+		if err := b.Shutdown(context.Background()); err != nil {
 			t.Error(err)
 			return
 		}
@@ -74,6 +76,9 @@ func serveTestBroker(t *testing.T, b *Broker) func() {
 		}
 	}
 }
+
+// native exposes the fixture mechanics this broker was constructed with.
+func (b *Broker) native() *nativeFixture { return b.enrollment.Connector().(*nativeFixture) }
 
 func connectClient(t *testing.T, sockPath string) *client.Client {
 	t.Helper()
@@ -795,10 +800,10 @@ func TestBroker_TaskTTLCheckerRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	go b.Serve()
+	go b.Serve(t.Context())
 	time.Sleep(100 * time.Millisecond)
 	defer func() {
-		b.Shutdown()
+		b.Shutdown(context.Background())
 	}()
 
 	c := connectClient(t, sockPath)
@@ -906,10 +911,10 @@ func TestBroker_TaskStaleEvent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	go b.Serve()
+	go b.Serve(t.Context())
 	time.Sleep(100 * time.Millisecond)
 	defer func() {
-		b.Shutdown()
+		b.Shutdown(context.Background())
 	}()
 
 	// Subscriber client
@@ -1242,7 +1247,8 @@ func newOwnedTestBroker(t *testing.T, database string, action config.StoreAction
 		return nil, err
 	}
 	t.Cleanup(func() {
-		if err := owner.Shutdown(context.Background()); err != nil {
+		owner.BeginShutdown(nil)
+		if err := owner.Wait(context.Background()); err != nil {
 			t.Error(err)
 		}
 	})
@@ -1251,7 +1257,7 @@ func newOwnedTestBroker(t *testing.T, database string, action config.StoreAction
 			return nil, err
 		}
 	}
-	return New(t.Context(), owner, cfg, newNativeFixture())
+	return newWithConnector(t.Context(), owner, cfg, config.NewNativeConfig(), newNativeFixture())
 }
 func readTask(b *Broker, id int64) (task *tasks.Task, err error) {
 	err = statetest.Write(b.owner, func(tx *brokerstate.WriteTx) error { task, err = tasks.NewStore(tx).Get(id); return err })

@@ -492,8 +492,12 @@ func handleStatus(s *taskCall) protocol.Response {
 	return protocol.OKResponse(data)
 }
 
+// handleStop records the operator's intent instead of draining inside the RPC.
+// Draining closes ingress and every accepted connection with it, so beginning
+// it here would destroy this connection before it could carry the
+// acknowledgement. The read loop begins draining once the reply has been written.
 func handleStop(s *call) protocol.Response {
-	go s.broker.Shutdown()
+	s.stopCause = fmt.Errorf("stop requested by %s", s.name)
 	return protocol.OKResponse(nil)
 }
 

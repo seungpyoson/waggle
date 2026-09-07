@@ -367,3 +367,25 @@ func TestCanonicalSchemaRejectsDanglingAndDuplicateAttempts(t *testing.T) {
 		t.Fatal("schema admitted a second attempt for one message")
 	}
 }
+
+func TestSelectScopedToRecipientLeavesOtherRecipientsUntouched(t *testing.T) {
+	f := newFixture(t)
+	a := f.enrolled("a")
+	b := f.enrolled("b")
+	c := f.enrolled("c")
+	// The unscoped candidate is enqueued first: a selection that only limited
+	// its page size, without scoping the recipient, would claim this one.
+	f.must(Enqueue{Credential: a.Credential, Recipient: c.Enrollment.ID, RequestID: "to-c", Body: "c", Hops: f.limits.DefaultHops})
+	f.must(Enqueue{Credential: a.Credential, Recipient: b.Enrollment.ID, RequestID: "to-b", Body: "b", Hops: f.limits.DefaultHops})
+	d := f.must(Select{Recipient: b.Enrollment.ID}).Dispatches
+	if len(d) != 1 || d[0].Recipient.ID != b.Enrollment.ID {
+		t.Fatalf("recipient-scoped selection: %+v", d)
+	}
+	if f.message(d[0].Envelope.Message.ID).Attempt == "" {
+		t.Fatal("intent not committed with selection")
+	}
+	rest := f.must(Select{}).Dispatches
+	if len(rest) != 1 || rest[0].Recipient.ID != c.Enrollment.ID {
+		t.Fatalf("scoped selection touched another recipient: %+v", rest)
+	}
+}

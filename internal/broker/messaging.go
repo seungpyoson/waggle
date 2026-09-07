@@ -23,7 +23,7 @@ func routeMessages(s *call, req protocol.Request) protocol.Response {
 				return fmt.Errorf("enrollment inputs are required")
 			}
 			e := req.Enrollment
-			if err := s.broker.native.Check(messages.Enrollment{Provider: e.Provider, Conversation: e.Conversation, Endpoint: e.Endpoint}); err != nil {
+			if err := s.broker.enrollment.Connector().Check(messages.Enrollment{Provider: e.Provider, Conversation: e.Conversation, Endpoint: e.Endpoint}); err != nil {
 				return err
 			}
 			result, err := store.Apply(messages.Enroll{Provider: e.Provider, Conversation: e.Conversation, Endpoint: e.Endpoint, Label: e.Label})
@@ -71,9 +71,15 @@ func routeMessages(s *call, req protocol.Request) protocol.Response {
 	if err != nil {
 		return protocol.ErrResponse(protocol.ErrInvalidRequest, err.Error())
 	}
+	// A wakeup carries no work: it only hints the worker that owns this
+	// recipient, or discovery when the change is about the enrollment set.
 	switch req.Cmd {
-	case protocol.CmdEnroll, protocol.CmdSend, protocol.CmdEnqueue, protocol.CmdReply, protocol.CmdAck, protocol.CmdConversationStop, protocol.CmdRetire:
-		s.broker.wakeup()
+	case protocol.CmdSend, protocol.CmdEnqueue, protocol.CmdReply, protocol.CmdAck:
+		if m, ok := data.(messages.Message); ok {
+			s.broker.enrollment.Wake(m.Recipient)
+		}
+	case protocol.CmdEnroll, protocol.CmdConversationStop, protocol.CmdRetire:
+		s.broker.enrollment.Wake("")
 	}
 	return protocol.OKResponse(mustMarshal(data))
 }

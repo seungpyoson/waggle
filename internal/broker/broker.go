@@ -8,10 +8,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/seungpyoson/waggle/internal/broker/enrollment"
 	"github.com/seungpyoson/waggle/internal/brokerstate"
-
 	"github.com/seungpyoson/waggle/internal/config"
-	"github.com/seungpyoson/waggle/internal/driver"
 	"github.com/seungpyoson/waggle/internal/events"
 	"github.com/seungpyoson/waggle/internal/locks"
 	"github.com/seungpyoson/waggle/internal/messages"
@@ -21,32 +20,31 @@ import (
 
 // Broker is the main broker orchestrator
 type Broker struct {
-	config   config.BrokerConfig
-	hub      *events.Hub
-	owner    *brokerstate.Owner
-	native   driver.Connector
-	wake     chan struct{}
-	lockMgr  *locks.Manager
-	sessions map[string]*Session
-	mu       sync.RWMutex
-	stopCh   <-chan struct{}
-	wg       sync.WaitGroup
+	config     config.BrokerConfig
+	hub        *events.Hub
+	owner      *brokerstate.Owner
+	enrollment *enrollment.Supervisor
+	lockMgr    *locks.Manager
+	sessions   map[string]*Session
+	mu         sync.RWMutex
 }
 
-// New attaches the broker to an acquired canonical owner. It has no database
+// New attaches the broker to an acquired canonical owner, binds its endpoints
+// and registers maintenance and enrollment work. It has no database
 // constructor and no endpoint cleanup authority of its own.
-func New(ctx context.Context, owner *brokerstate.Owner, cfg config.BrokerConfig, native driver.Connector) (*Broker, error) {
-	if native == nil {
-		return nil, fmt.Errorf("broker requires its native connector")
+func New(ctx context.Context, owner *brokerstate.Owner, cfg config.BrokerConfig, provider config.ProviderConfig) (*Broker, error) {
+	connector, err := enrollment.NewConnector(provider)
+	if err != nil {
+		return nil, err
 	}
+	return newWithConnector(ctx, owner, cfg, provider.Transport, connector)
+}
+
+func newWithConnector(ctx context.Context, owner *brokerstate.Owner, cfg config.BrokerConfig, transport config.NativeConfig, connector enrollment.Connector) (*Broker, error) {
 	if err := config.ValidateDefaults(); err != nil {
 		return nil, err
 	}
 	if err := cfg.Validate(); err != nil {
-		return nil, err
-	}
-	stopping, err := owner.Stopping()
-	if err != nil {
 		return nil, err
 	}
 	// Complete startup persistence before binding or reporting daemon readiness.
@@ -67,12 +65,19 @@ func New(ctx context.Context, owner *brokerstate.Owner, cfg config.BrokerConfig,
 	if err := owner.Bind(ctx, cfg.Endpoints); err != nil {
 		return nil, err
 	}
-	return &Broker{
-		native: native, wake: make(chan struct{}, 1),
+	b := &Broker{
 		config: cfg, owner: owner, hub: events.NewHub(), lockMgr: locks.NewManager(),
 		sessions: make(map[string]*Session),
-		stopCh:   stopping,
-	}, nil
+	}
+	if err := owner.StartWork(ctx, "maintenance", brokerstate.ManagedWork{Run: b.maintain}); err != nil {
+		return nil, err
+	}
+	supervisor, err := enrollment.Start(ctx, owner, connector, cfg.Messaging, transport)
+	if err != nil {
+		return nil, err
+	}
+	b.enrollment = supervisor
+	return b, nil
 }
 
 // Initialize creates domain tables and activates an explicitly prepared fresh
@@ -92,38 +97,23 @@ func Initialize(ctx context.Context, owner *brokerstate.Owner) error {
 	})
 }
 
-func (b *Broker) Serve() error {
-	return b.owner.Do(context.Background(), func(lifetime *brokerstate.Operation) error {
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		workers := []func(context.Context) error{b.maintain, b.schedule}
-		failures := make(chan error, len(workers))
-		for _, work := range workers {
-			b.wg.Add(1)
-			go func() {
-				defer b.wg.Done()
-				if err := work(ctx); err != nil {
-					failures <- err
-					go b.Shutdown()
-				}
-			}()
-		}
-		err := b.owner.Serve(ctx, func(conn net.Conn) { newSession(conn, b).readLoop(lifetime) })
-		if err != nil {
-			cancel()
-		}
-		b.wg.Wait()
-		close(failures)
-		for failure := range failures {
-			err = errors.Join(err, failure)
-		}
-		return err
+// Serve runs ingress until the owner closes the listener. Workers are
+// registered separately and joined by the owner, not by this call.
+func (b *Broker) Serve(ctx context.Context) error {
+	return b.owner.Serve(ctx, func(conn net.Conn) {
+		// Each connection holds its own admission so its cleanup transaction
+		// stays admitted until this read loop returns.
+		_ = b.owner.Do(ctx, func(lifetime *brokerstate.Operation) error { newSession(conn, b).readLoop(lifetime); return nil })
 	})
 }
 
-func (b *Broker) Shutdown() error { return b.owner.Shutdown(context.Background()) }
+// Shutdown begins orderly draining and waits under the caller's bound only.
+func (b *Broker) Shutdown(ctx context.Context) error {
+	b.owner.BeginShutdown(nil)
+	return b.owner.Wait(ctx)
+}
 
-func (b *Broker) maintain(ctx context.Context) error {
+func (b *Broker) maintain(lifetime brokerstate.WorkLifetime, reportFatal func(error)) {
 	lease := time.NewTicker(b.config.LeaseCheckPeriod)
 	taskTTL := time.NewTicker(b.config.TaskTTLCheckPeriod)
 	defer lease.Stop()
@@ -132,10 +122,8 @@ func (b *Broker) maintain(ctx context.Context) error {
 		var change func(*brokerstate.WriteTx) error
 		var effects []protocol.Event
 		select {
-		case <-ctx.Done():
-			return nil
-		case <-b.stopCh:
-			return nil
+		case <-lifetime.Stop:
+			return
 		case <-lease.C:
 			change = func(tx *brokerstate.WriteTx) error { _, err := tasks.NewStore(tx).RequeueExpiredLeases(); return err }
 		case <-taskTTL.C:
@@ -160,12 +148,18 @@ func (b *Broker) maintain(ctx context.Context) error {
 				return nil
 			}
 		}
-		err := b.owner.Do(ctx, func(op *brokerstate.Operation) error { return op.Write(ctx, change) })
+		err := b.owner.Do(lifetime.Interrupt, func(op *brokerstate.Operation) error { return op.Write(lifetime.Interrupt, change) })
 		if errors.Is(err, brokerstate.ErrAdmissionClosed) {
-			return nil
+			return
 		}
 		if err != nil {
-			return fmt.Errorf("canonical maintenance: %w", err)
+			// An owner interruption cancels admitted work; it is the owner's
+			// own signal, not a new maintenance failure to report back to it.
+			if cause := lifetime.Interrupt.Err(); cause != nil && errors.Is(err, cause) {
+				return
+			}
+			reportFatal(fmt.Errorf("canonical maintenance: %w", err))
+			return
 		}
 		for _, event := range effects {
 			b.hub.Publish(event.Topic, mustMarshal(event))

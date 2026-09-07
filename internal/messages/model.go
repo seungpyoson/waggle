@@ -88,7 +88,9 @@ type Reply struct{ Credential, MessageID, RequestID, Body string }
 
 func (Reply) messageCommand() {}
 
-type Select struct{}
+// Select claims at most one message per recipient. Recipient scopes the claim
+// to one enrollment worker; "" scans every bound recipient for inspection.
+type Select struct{ Recipient string }
 
 func (Select) messageCommand() {}
 
