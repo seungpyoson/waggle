@@ -30,7 +30,18 @@ func TestFatalWaitPersistsAnotherWorkersAcceptedOutcome(t *testing.T) {
 	if err := Initialize(t.Context(), owner); err != nil {
 		t.Fatal(err)
 	}
-	b, err := newWithConnector(t.Context(), owner, config.NewBrokerConfig(config.BrokerEndpoints{Socket: socket, PID: socket + ".pid"}), config.NewNativeConfig(), newNativeFixture())
+	waitBudget := config.Defaults.StartupTimeout
+	cfg := config.NewBrokerConfig(config.BrokerEndpoints{Socket: socket, PID: socket + ".pid"})
+	// Retirement wakes discovery, not an existing worker. Keep B's idle check
+	// and the deliberate held-operation wait inside A's native-call budget,
+	// leaving time for outcome persistence before the test's Wait expires.
+	cfg.Messaging.IdleCheckInterval = cfg.Messaging.QueueCheckInterval
+	transport := config.NewNativeConfig()
+	transport.RequestTimeout = waitBudget / 2
+	if cfg.Messaging.IdleCheckInterval+config.Defaults.StartupPollInterval >= transport.RequestTimeout || transport.RequestTimeout >= waitBudget {
+		t.Fatal("fixture requires idle check plus held wait < native request timeout < owner wait budget")
+	}
+	b, err := newWithConnector(t.Context(), owner, cfg, transport, newNativeFixture())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,11 +72,11 @@ func TestFatalWaitPersistsAnotherWorkersAcceptedOutcome(t *testing.T) {
 		t.Fatal(resp.Error)
 	}
 	envelope := fake.receive(t)
-	// Retirement deterministically closes B; no readiness timer seam is needed.
+	// B observes retirement on its next configured idle check and closes.
 	if resp := sendRequest(t, c, protocol.Request{Cmd: protocol.CmdRetire, Recipient: other.Enrollment.ID, Reason: "test"}); !resp.OK {
 		t.Fatal(resp.Error)
 	}
-	ctx, cancel := context.WithTimeout(t.Context(), config.Defaults.StartupTimeout)
+	ctx, cancel := context.WithTimeout(t.Context(), waitBudget)
 	defer cancel()
 	select {
 	case <-owner.Draining():
