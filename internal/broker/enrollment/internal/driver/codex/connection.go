@@ -90,10 +90,14 @@ func openConnection(ctx context.Context, path, version string, cfg config.Native
 	ws, _, err := websocket.Dial(connectCtx, config.AppServerWebSocketURL, &websocket.DialOptions{HTTPClient: httpClient})
 	if err != nil {
 		transport.CloseIdleConnections()
+		failure := errors.Join(ErrTransport, connectCtx.Err())
 		if errors.Is(err, driver.ErrPeerIdentity) {
-			return nil, driver.ErrPeerIdentity
+			failure = driver.ErrPeerIdentity
 		}
-		return nil, fmt.Errorf("connect registered App Server: %w", errors.Join(ErrTransport, connectCtx.Err()))
+		if errors.Is(err, driver.ErrCloseFailed) {
+			failure = errors.Join(failure, driver.ErrCloseFailed)
+		}
+		return nil, fmt.Errorf("connect registered App Server: %w", failure)
 	}
 	ws.SetReadLimit(cfg.MaxFrameBytes)
 	readCtx, cancelRead := context.WithCancel(ctx)
@@ -131,7 +135,10 @@ func openConnection(ctx context.Context, path, version string, cfg config.Native
 		err = c.notify(ctx, "initialized")
 	}
 	if err != nil {
-		return nil, errors.Join(fmt.Errorf("initialize App Server: %w", err), c.Close())
+		if closeErr := c.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("%w: %w", driver.ErrCloseFailed, closeErr))
+		}
+		return nil, fmt.Errorf("initialize App Server: %w", err)
 	}
 	return c, nil
 }

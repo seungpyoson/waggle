@@ -9,6 +9,9 @@ import (
 	"github.com/seungpyoson/waggle/internal/config"
 )
 
+// ErrCloseFailed identifies an unresolved transport owned by a failed Open.
+var ErrCloseFailed = driver.ErrCloseFailed
+
 type (
 	Connector    = driver.Connector
 	Driver       = driver.Driver

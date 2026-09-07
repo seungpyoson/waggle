@@ -59,7 +59,7 @@ func (w *worker) run(lifetime brokerstate.WorkLifetime, reportFatal func(error))
 			// An owner interruption cancels admitted native I/O and canonical
 			// reads. That cancellation is the owner's own signal, not a new
 			// failure to report back to it as fatal.
-			if cause := lifetime.Interrupt.Err(); cause != nil && errors.Is(err, cause) {
+			if cause := lifetime.Interrupt.Err(); cause != nil && errors.Is(err, cause) && !errors.Is(err, driver.ErrCloseFailed) {
 				return
 			}
 			reportFatal(err)
@@ -193,6 +193,9 @@ func (w *worker) observe(lifetime brokerstate.WorkLifetime, e messages.Enrollmen
 	w.lastProbe = time.Now()
 	if err != nil {
 		w.bound = false
+		if errors.Is(err, driver.ErrCloseFailed) {
+			return nil, err
+		}
 		var fatal *fatalError
 		if errors.As(err, &fatal) {
 			return nil, fatal.err

@@ -28,6 +28,7 @@ type nativeFixture struct {
 	openEntered  chan string
 	submitGate   map[string]chan struct{} // stall Submit for an enrollment
 	closeErr     map[string]error
+	openErr      map[string]error // fail Open for a conversation
 }
 
 func newNativeFixture() *nativeFixture {
@@ -48,6 +49,7 @@ func (f *nativeFixture) Open(ctx context.Context, e messages.Enrollment) (enroll
 	f.mu.Lock()
 	f.opens[e.ID]++
 	gate, entered := f.openGate[e.Conversation], f.openEntered
+	err := f.openErr[e.Conversation]
 	f.mu.Unlock()
 	if gate != nil {
 		if entered != nil {
@@ -58,6 +60,9 @@ func (f *nativeFixture) Open(ctx context.Context, e messages.Enrollment) (enroll
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
+	}
+	if err != nil {
+		return nil, err
 	}
 	return &fixtureConnection{nativeFixture: f, target: e}, nil
 }

@@ -42,7 +42,10 @@ func Attach(ctx context.Context, target messages.Enrollment, version string, cfg
 		}
 	}
 	if err != nil {
-		return nil, errors.Join(err, c.Close())
+		if closeErr := c.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("%w: %w", driver.ErrCloseFailed, closeErr))
+		}
+		return nil, err
 	}
 	return &thread{connection: c, target: target}, nil
 }

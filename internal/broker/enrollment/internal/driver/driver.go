@@ -10,6 +10,7 @@ import (
 )
 
 var ErrPeerIdentity = errors.New("native peer ownership could not be verified")
+var ErrCloseFailed = errors.New("native transport close failed")
 
 // Connector validates configured provider support before enrollment. Open
 // binds one driver to the exact enrollment; it must never create or resume a

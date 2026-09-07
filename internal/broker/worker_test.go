@@ -3,7 +3,9 @@ package broker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,6 +16,68 @@ import (
 	"github.com/seungpyoson/waggle/internal/messages"
 	"github.com/seungpyoson/waggle/internal/protocol"
 )
+
+func TestWorkerOpenFailureClassification(t *testing.T) {
+	for _, unresolved := range []bool{false, true} {
+		t.Run(fmt.Sprint(unresolved), func(t *testing.T) {
+			socket := shortBrokerSocketPath(t, "waggle-openfail-*")
+			owner, err := brokerstate.Acquire(t.Context(), config.NewOwnershipConfig(filepath.Join(t.TempDir(), "state.db"), config.CreateStore), statetest.Process{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := Initialize(t.Context(), owner); err != nil {
+				t.Fatal(err)
+			}
+			b, err := newWithConnector(t.Context(), owner, config.NewBrokerConfig(config.BrokerEndpoints{Socket: socket, PID: socket + ".pid"}), config.NewNativeConfig(), newNativeFixture())
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), config.Defaults.StartupTimeout)
+			defer cancel()
+			serving := make(chan error, 1)
+			go func() { serving <- b.Serve(ctx) }()
+			defer func() { b.owner.BeginShutdown(nil); _ = b.owner.Wait(ctx); <-serving }()
+			openErr := errors.New("subscription failed")
+			if unresolved {
+				openErr = fmt.Errorf("failed attach: %w", errors.Join(openErr, enrollment.ErrCloseFailed))
+			}
+			fake := b.native()
+			fake.mu.Lock()
+			fake.openErr = map[string]error{"broken": openErr}
+			fake.mu.Unlock()
+			e := enrollFixture(t, b, "broken")
+			if !unresolved {
+				// An initial Open failure preserves pending (only previously bound
+				// enrollments disconnect). Wait for its actual observation.
+				for {
+					current := waitEnrollment(t, b, e.Enrollment.ID, "pending")
+					if strings.Contains(current.Evidence, "subscription failed") {
+						break
+					}
+					select {
+					case <-ctx.Done():
+						t.Fatal("Open error was not observed")
+					case <-time.After(config.Defaults.StartupPollInterval):
+					}
+				}
+				select {
+				case <-b.owner.Draining():
+					t.Fatal("ordinary Open failure drained broker")
+				default:
+				}
+				return
+			}
+			select {
+			case <-b.owner.Draining():
+			case <-ctx.Done():
+				t.Fatal("unresolved Open close did not drain broker")
+			}
+			if err := b.owner.Wait(ctx); !errors.Is(err, brokerstate.ErrFinalizationFailed) || !errors.Is(err, enrollment.ErrCloseFailed) {
+				t.Fatalf("unresolved Open close released ownership: %v", err)
+			}
+		})
+	}
+}
 
 func TestWorkerFindsCommittedWorkWithoutWakeup(t *testing.T) {
 	_, b, shutdown := startTestBroker(t)

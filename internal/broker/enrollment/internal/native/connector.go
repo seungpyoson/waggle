@@ -48,10 +48,10 @@ func (c *Connector) Open(ctx context.Context, e messages.Enrollment) (driver.Dri
 		}
 		peer, ok := conn.(*net.UnixConn)
 		if !ok {
-			return nil, errors.Join(driver.ErrPeerIdentity, conn.Close())
+			return nil, closeFailedPeer(conn, driver.ErrPeerIdentity)
 		}
 		if err := verifyPeer(peer); err != nil {
-			return nil, errors.Join(driver.ErrPeerIdentity, err, conn.Close())
+			return nil, closeFailedPeer(conn, errors.Join(driver.ErrPeerIdentity, err))
 		}
 		return conn, nil
 	}
@@ -61,4 +61,11 @@ func (c *Connector) Open(ctx context.Context, e messages.Enrollment) (driver.Dri
 		// obligation; this connection sends no approval response.
 		return ctx.Err()
 	})
+}
+
+func closeFailedPeer(conn net.Conn, err error) error {
+	if closeErr := conn.Close(); closeErr != nil {
+		return errors.Join(err, fmt.Errorf("%w: %w", driver.ErrCloseFailed, closeErr))
+	}
+	return err
 }

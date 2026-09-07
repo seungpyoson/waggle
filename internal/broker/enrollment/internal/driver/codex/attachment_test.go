@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"sync/atomic"
 	"testing"
@@ -13,6 +14,43 @@ import (
 	"github.com/seungpyoson/waggle/internal/config"
 	"github.com/seungpyoson/waggle/internal/messages"
 )
+
+// The wrapper closes the byte stream and reports failure without leaking
+// fixture resources or adding a production injection seam.
+type failingCloseConn struct {
+	net.Conn
+	err error
+}
+
+func (c failingCloseConn) Close() error { return errors.Join(c.Conn.Close(), c.err) }
+
+func TestFailedAttachmentClassifiesCleanupClose(t *testing.T) {
+	for _, closeErr := range []error{nil, errors.New("fixture close failure")} {
+		t.Run(fmt.Sprint(closeErr), func(t *testing.T) {
+			target, _ := fixtureEnvelope()
+			dial := protocolPeer(t, func(ws *websocket.Conn) {
+				request := readSubscription(t, ws, target.Conversation)
+				peerWrite(t, ws, wireMessage{ID: request.ID, Error: &rpcError{Code: -32601}})
+				_, _, _ = ws.Read(t.Context())
+			})
+			wrapped := func(ctx context.Context, network, address string) (net.Conn, error) {
+				conn, err := dial(ctx, network, address)
+				if err != nil {
+					return nil, err
+				}
+				return failingCloseConn{Conn: conn, err: closeErr}, nil
+			}
+			c, err := Attach(t.Context(), target, "test-build", config.NewNativeConfig(), wrapped, func(context.Context, Event) error { return nil })
+			if c != nil {
+				c.Close()
+				t.Fatal("failed subscription returned a driver")
+			}
+			if err == nil || errors.Is(err, driver.ErrCloseFailed) != (closeErr != nil) {
+				t.Fatalf("cleanup classification: close=%v attach=%v", closeErr, err)
+			}
+		})
+	}
+}
 
 func readSubscription(t *testing.T, ws *websocket.Conn, threadID string) wireMessage {
 	t.Helper()
