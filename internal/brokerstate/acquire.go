@@ -183,7 +183,7 @@ func Acquire(ctx context.Context, cfg config.OwnershipConfig, inspector ProcessI
 	return &Owner{state: &ownerState{
 		db: db, identity: instance, generation: generation, config: cfg, phase: serving,
 		workers: make(map[string]struct{}),
-		drained: make(chan struct{}), stop: make(chan struct{}), finalDone: make(chan struct{}), failed: make(chan struct{}),
+		drained: make(chan struct{}), idle: make(chan struct{}), stop: make(chan struct{}), finalDone: make(chan struct{}), failed: make(chan struct{}),
 		interrupt: interrupt, cancel: interruptCancel,
 		predecessor: predecessor, inspector: inspector,
 	}}, nil

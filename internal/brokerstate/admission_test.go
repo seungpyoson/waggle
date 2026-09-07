@@ -3,11 +3,71 @@ package brokerstate
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"sync"
 	"testing"
 
 	"github.com/seungpyoson/waggle/internal/config"
 )
+
+// Adapted adversarial Probe D: final failure cannot abandon an admitted write,
+// but an unresolved registered closer must not prevent reporting that failure.
+func TestFatalFinalizationWaitsForAdmittedOperation(t *testing.T) {
+	o, err := Acquire(t.Context(), config.NewOwnershipConfig(filepath.Join(t.TempDir(), "state.db"), config.CreateStore), processFixture{status: ProcessAlive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer o.state.db.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), config.Defaults.StartupTimeout)
+	defer cancel()
+	entered, release := make(chan struct{}), make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- o.Do(ctx, func(op *Operation) error {
+			close(entered)
+			<-release
+			return op.Write(context.WithoutCancel(ctx), func(tx *WriteTx) error {
+				_, err := tx.Exec("CREATE TABLE final_outcome (value TEXT); INSERT INTO final_outcome VALUES ('accepted')")
+				return err
+			})
+		})
+	}()
+	<-entered
+	var releaseOnce sync.Once
+	finish := func() { releaseOnce.Do(func() { close(release) }) }
+	defer finish()
+	closer, closerDone := make(chan struct{}), make(chan struct{})
+	fatal := errors.New("unresolved close")
+	if err := o.StartWork(ctx, "failed-closer", ManagedWork{Run: func(_ WorkLifetime, report func(error)) {
+		defer close(closerDone)
+		report(fatal)
+		<-closer
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { close(closer); <-closerDone }()
+	select {
+	case <-o.Draining():
+	case <-ctx.Done():
+		t.Fatal("fatal did not drain")
+	}
+	short, stop := context.WithTimeout(ctx, config.Defaults.StartupPollInterval)
+	defer stop()
+	if err := o.Wait(short); !errors.Is(err, ErrShutdownIncomplete) {
+		t.Errorf("Wait abandoned admitted operation: %v", err)
+	}
+	finish()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if err := o.Wait(ctx); !errors.Is(err, ErrFinalizationFailed) || !errors.Is(err, fatal) {
+		t.Fatal(err)
+	}
+	var outcome string
+	if err := o.state.db.QueryRow("SELECT value FROM final_outcome").Scan(&outcome); err != nil || outcome != "accepted" {
+		t.Fatalf("final result missing: %q %v", outcome, err)
+	}
+}
 
 func TestAdmissionRejectsZeroAndExpiredCapabilities(t *testing.T) {
 	var zero Owner

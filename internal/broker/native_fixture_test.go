@@ -27,6 +27,7 @@ type nativeFixture struct {
 	openGate     map[string]chan struct{} // stall Open for a conversation
 	openEntered  chan string
 	submitGate   map[string]chan struct{} // stall Submit for an enrollment
+	ignoreCancel map[string]bool          // model an admitted call that only honors its request deadline
 	closeErr     map[string]error
 	openErr      map[string]error // fail Open for a conversation
 }
@@ -118,7 +119,17 @@ func (f *nativeFixture) Submit(ctx context.Context, e messages.Enrollment, envel
 	}
 	f.mu.Lock()
 	gate := f.submitGate[e.ID]
+	ignoreCancel := f.ignoreCancel[e.ID]
 	f.mu.Unlock()
+	if ignoreCancel {
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			panic("fixture Submit requires production request deadline")
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(context.WithoutCancel(ctx), deadline)
+		defer cancel()
+	}
 	if gate != nil {
 		select {
 		case <-gate:

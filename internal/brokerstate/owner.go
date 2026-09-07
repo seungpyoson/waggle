@@ -56,6 +56,7 @@ type ownerState struct {
 	operations     int
 	workers        map[string]struct{}
 	drained        chan struct{}
+	idle           chan struct{}
 	stop           chan struct{}
 	interrupt      context.Context
 	cancel         context.CancelCauseFunc
@@ -182,10 +183,19 @@ func (s *ownerState) runWork(key string, work ManagedWork, lifetime WorkLifetime
 	s.mu.Unlock()
 }
 
-// settle closes drained once nothing admitted remains during draining.
+// settle closes idle once admitted operations finish, and drained once workers
+// also finish. Admission is already closed, so neither count can grow again.
 // The caller holds s.mu.
 func (s *ownerState) settle() {
-	if s.phase != draining || s.operations != 0 || len(s.workers) != 0 {
+	if s.phase != draining || s.operations != 0 {
+		return
+	}
+	select {
+	case <-s.idle:
+	default:
+		close(s.idle)
+	}
+	if len(s.workers) != 0 {
 		return
 	}
 	select {
@@ -286,11 +296,6 @@ func (o *Owner) Wait(ctx context.Context) error {
 	select {
 	case <-s.finalDone:
 		return s.finalErr
-	case <-s.failed:
-		s.mu.Lock()
-		fatal := s.fatal
-		s.mu.Unlock()
-		return fmt.Errorf("%w: %w", ErrFinalizationFailed, fatal)
 	case <-ctx.Done():
 		return fmt.Errorf("%w: %w", ErrShutdownIncomplete, ctx.Err())
 	}
@@ -303,6 +308,10 @@ func (s *ownerState) finalize() {
 	select {
 	case <-s.drained:
 	case <-s.failed:
+		// A failed closer may never join, but every admitted workflow still
+		// owns its bounded final outcome transaction. Let those commit before
+		// Wait can permit the supervising process to exit. No owner deadline.
+		<-s.idle
 	}
 	s.mu.Lock()
 	fatal := s.fatal

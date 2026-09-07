@@ -2,6 +2,7 @@ package broker
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -16,6 +17,90 @@ import (
 	"github.com/seungpyoson/waggle/internal/messages"
 	"github.com/seungpyoson/waggle/internal/protocol"
 )
+
+// Adapted adversarial Probe 4: worker A's admitted accepted result must commit
+// before worker B's fatal permits the supervising command to exit.
+func TestFatalWaitPersistsAnotherWorkersAcceptedOutcome(t *testing.T) {
+	database := filepath.Join(t.TempDir(), "state.db")
+	socket := shortBrokerSocketPath(t, "waggle-fatal-*")
+	owner, err := brokerstate.Acquire(t.Context(), config.NewOwnershipConfig(database, config.CreateStore), statetest.Process{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Initialize(t.Context(), owner); err != nil {
+		t.Fatal(err)
+	}
+	b, err := newWithConnector(t.Context(), owner, config.NewBrokerConfig(config.BrokerEndpoints{Socket: socket, PID: socket + ".pid"}), config.NewNativeConfig(), newNativeFixture())
+	if err != nil {
+		t.Fatal(err)
+	}
+	serving := make(chan error, 1)
+	go func() { serving <- b.Serve(t.Context()) }()
+	defer func() { owner.BeginShutdown(nil); <-serving }()
+	sender := boundFixture(t, b, "sender")
+	a := boundFixture(t, b, "a")
+	other := boundFixture(t, b, "b")
+	fake := b.native()
+	gate := fake.holdSubmit(a.Enrollment.ID)
+	released := false
+	release := func() {
+		if !released {
+			released = true
+			close(gate)
+		}
+	}
+	defer release()
+	fake.mu.Lock()
+	fake.ignoreCancel = map[string]bool{a.Enrollment.ID: true}
+	fake.closeErr[other.Enrollment.ID] = errors.New("fixture unresolved close")
+	fake.mu.Unlock()
+	c := connectClient(t, socket)
+	defer c.Close()
+	resp := sendRequest(t, c, protocol.Request{Cmd: protocol.CmdSend, Credential: sender.Credential, Recipient: a.Enrollment.ID, Message: "in-flight", IdempotencyKey: "in-flight", Hops: b.config.Messaging.DefaultHops})
+	if !resp.OK {
+		t.Fatal(resp.Error)
+	}
+	envelope := fake.receive(t)
+	// Retirement deterministically closes B; no readiness timer seam is needed.
+	if resp := sendRequest(t, c, protocol.Request{Cmd: protocol.CmdRetire, Recipient: other.Enrollment.ID, Reason: "test"}); !resp.OK {
+		t.Fatal(resp.Error)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), config.Defaults.StartupTimeout)
+	defer cancel()
+	select {
+	case <-owner.Draining():
+	case <-ctx.Done():
+		t.Fatal("close failure never drained broker")
+	}
+	short, stop := context.WithTimeout(ctx, config.Defaults.StartupPollInterval)
+	defer stop()
+	if err := owner.Wait(short); !errors.Is(err, brokerstate.ErrShutdownIncomplete) {
+		t.Errorf("Wait returned before A's outcome: %v", err)
+	}
+	release()
+	if err := owner.Wait(ctx); !errors.Is(err, brokerstate.ErrFinalizationFailed) {
+		t.Fatal(err)
+	}
+	raw, err := sql.Open("sqlite", "file:"+database+"?mode=ro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	var possession, attempt string
+	if err := raw.QueryRowContext(ctx, "SELECT possession, attempt_id FROM message_status WHERE id=?", envelope.Message.ID).Scan(&possession, &attempt); err != nil {
+		t.Fatal(err)
+	}
+	if possession != "accepted" || attempt != envelope.Message.Attempt {
+		t.Errorf("accepted result not persisted before Wait: %s %s", possession, attempt)
+	}
+	var barrier string
+	if err := raw.QueryRowContext(ctx, "SELECT attempt_id FROM recipient_barrier WHERE recipient=?", a.Enrollment.ID).Scan(&barrier); err != nil {
+		t.Fatal(err)
+	}
+	if barrier != attempt {
+		t.Fatalf("acceptance changed receipt barrier: %s != %s", barrier, attempt)
+	}
+}
 
 func TestWorkerOpenFailureClassification(t *testing.T) {
 	for _, unresolved := range []bool{false, true} {
