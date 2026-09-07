@@ -42,6 +42,9 @@ func (f *nativeFixture) Check(e messages.Enrollment) error {
 }
 
 func (f *nativeFixture) Open(ctx context.Context, e messages.Enrollment) (enrollment.Driver, error) {
+	if err := f.Check(e); err != nil {
+		return nil, err // production Open verifies support before dialing
+	}
 	f.mu.Lock()
 	f.opens[e.ID]++
 	gate, entered := f.openGate[e.Conversation], f.openEntered

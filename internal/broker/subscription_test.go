@@ -59,7 +59,6 @@ func TestWorkerUsesOneTransportUntilRetirement(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	b.enrollment.Wake("")
 	awaitTransport(t, fake, r.Enrollment.ID, "retirement did not close exactly one transport",
 		func(opens, closes, _ int) bool { return opens == 1 && closes <= 1 },
 		func(_, closes, _ int) bool { return closes == 1 })
