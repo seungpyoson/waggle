@@ -43,6 +43,7 @@ internal/
 ├── tasks/       # SQLite task store, dependencies, lease management
 ├── locks/       # Advisory lock manager
 ├── broker/      # Socket listener, session management, command routing
+│   └── enrollment/ # Owner-registered per-enrollment workers; provider mechanics under internal/
 └── client/      # Shared client for CLI commands
 
 cmd/             # Cobra CLI commands
