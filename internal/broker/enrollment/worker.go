@@ -151,13 +151,20 @@ func (w *worker) check(lifetime brokerstate.WorkLifetime) (done bool, err error)
 			return err
 		}
 		// Cancelling native I/O must not cancel persistence of what was observed.
-		return op.Write(context.WithoutCancel(lifetime.Interrupt), func(tx *brokerstate.WriteTx) error {
+		err = op.Write(context.WithoutCancel(lifetime.Interrupt), func(tx *brokerstate.WriteTx) error {
 			_, err := messages.NewStore(tx, w.limits, time.Now()).Apply(messages.Observe{
 				Attempt: d.Envelope.Message.Attempt, Recipient: w.id,
 				Kind: kind, ProviderRef: outcome.ProviderRef, Evidence: outcome.Evidence,
 			})
 			return err
 		})
+		if errors.Is(err, messages.ErrConflict) {
+			// The canonical store rejected contradictory evidence: the recipient's
+			// own authenticated receipt already decided this attempt while the call
+			// was in flight. Its decision stands and the intent is never resubmitted.
+			return nil
+		}
+		return err
 	})
 	return done, err
 }
@@ -193,6 +200,11 @@ func (w *worker) observe(lifetime brokerstate.WorkLifetime, e messages.Enrollmen
 		if errors.Is(err, errBackoff) {
 			return nil, nil // nothing observed; nothing to write
 		}
+		// A call the owner cancelled itself is the owner's own signal. Recording
+		// it would attribute the broker's shutdown to the provider.
+		if cause := lifetime.Interrupt.Err(); cause != nil && errors.Is(err, cause) {
+			return nil, err
+		}
 		evidence := "native readiness verification failed before input submission: " + err.Error()
 		if e.State != "bound" && e.Evidence == evidence {
 			return nil, nil // unchanged observation: no write
@@ -200,8 +212,7 @@ func (w *worker) observe(lifetime brokerstate.WorkLifetime, e messages.Enrollmen
 		return messages.Unavailable{ID: e.ID, Evidence: evidence}, nil
 	}
 	if view.Conversation != e.Conversation || view.Evidence == "" {
-		w.bound = false
-		return nil, fmt.Errorf("native driver returned uncorrelated readiness for %s", e.ID)
+		return w.unusable(e, "native readiness uncorrelated with the enrolled conversation")
 	}
 	switch view.Availability {
 	case driver.Idle, driver.Busy:
@@ -217,7 +228,25 @@ func (w *worker) observe(lifetime brokerstate.WorkLifetime, e messages.Enrollmen
 		}
 		return messages.Unavailable{ID: e.ID, Evidence: view.Evidence}, nil
 	}
-	return nil, fmt.Errorf("native driver returned invalid availability for %s", e.ID)
+	return w.unusable(e, "native readiness reported an invalid availability")
+}
+
+// unusable turns a readiness answer this worker cannot act on into an
+// observation of unavailability. A provider that answers for another thread, or
+// with a value outside the pinned contract, is a provider-side condition, not a
+// canonical persistence, fence or unresolved-close failure: the enrollment
+// becomes disconnected with diagnostics and the broker keeps serving. The
+// transport is dropped under the same reconnect backoff a failed probe uses, so
+// a persistent anomaly cannot become a reconnect loop.
+func (w *worker) unusable(e messages.Enrollment, evidence string) (messages.Command, error) {
+	w.bound = false
+	if err := w.dropTransport("an unusable readiness answer"); err != nil {
+		return nil, err
+	}
+	if e.State != "bound" && e.Evidence == evidence {
+		return nil, nil // unchanged observation: no write
+	}
+	return messages.Unavailable{ID: e.ID, Evidence: evidence}, nil
 }
 
 func (w *worker) probe(lifetime brokerstate.WorkLifetime, e messages.Enrollment) (driver.Readiness, error) {
@@ -236,14 +265,28 @@ func (w *worker) probe(lifetime brokerstate.WorkLifetime, e messages.Enrollment)
 	defer cancel()
 	view, err := w.native.Probe(ctx)
 	if err != nil {
-		w.nextOpen = time.Now().Add(w.limits.ReconnectBackoff)
-		closeErr := w.native.Close()
-		w.native = nil
-		if closeErr != nil {
-			return driver.Readiness{}, &fatalError{fmt.Errorf("close native transport for %s after failed probe: %w", w.id, closeErr)}
+		if closeErr := w.dropTransport("a failed probe"); closeErr != nil {
+			return driver.Readiness{}, &fatalError{closeErr}
 		}
 	}
 	return view, err
+}
+
+// dropTransport applies the reconnect backoff and joins this worker's transport
+// after an anomaly. It is the single path back to reconnection, so no anomaly
+// can reopen sooner than a failed probe would. An unresolved close is the only
+// fatal outcome: the owner retains ownership rather than claiming quiescence.
+func (w *worker) dropTransport(reason string) error {
+	w.nextOpen = time.Now().Add(w.limits.ReconnectBackoff)
+	if w.native == nil {
+		return nil
+	}
+	err := w.native.Close()
+	w.native = nil
+	if err != nil {
+		return fmt.Errorf("close native transport for %s after %s: %w", w.id, reason, err)
+	}
+	return nil
 }
 
 // fatalError marks an unresolved physical cleanup failure. It is never

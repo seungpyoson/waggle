@@ -153,6 +153,109 @@ func TestShutdownRetainsOwnershipUntilDriverCloseJoins(t *testing.T) {
 	}
 }
 
+// A readiness answer that names another native thread is a provider-side
+// condition, not a canonical persistence, fence or close failure. It withdraws
+// exactly one enrollment's binding, with diagnostics, and the broker keeps
+// serving every other enrollment.
+func TestUncorrelatedReadinessDisconnectsOnlyThatEnrollment(t *testing.T) {
+	_, b, shutdown := startTestBroker(t)
+	defer shutdown()
+	sender := boundFixture(t, b, "sender")
+	broken := boundFixture(t, b, "broken")
+	healthy := boundFixture(t, b, "healthy")
+	fake := b.native()
+	fake.uncorrelate("broken")
+	e := waitEnrollment(t, b, broken.Enrollment.ID, "disconnected")
+	if e.Evidence != "native readiness uncorrelated with the enrolled conversation" {
+		t.Fatalf("provider anomaly recorded without its diagnostics: %q", e.Evidence)
+	}
+	select {
+	case <-b.owner.Draining():
+		t.Fatal("a provider anomaly closed broker admission")
+	default:
+	}
+	before := b.owner.Stats()
+	var stored messages.Result
+	if err := statetest.Write(b.owner, func(tx *brokerstate.WriteTx) error {
+		var err error
+		stored, err = messages.NewStore(tx, b.config.Messaging, time.Now()).Apply(messages.Enqueue{Credential: sender.Credential, Recipient: healthy.Enrollment.ID, RequestID: "unaffected", Body: "still serving", Hops: b.config.Messaging.DefaultHops})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := fake.receive(t); got.Message.ID != stored.Message.ID {
+		t.Fatal("a second bound enrollment stopped receiving after the anomaly")
+	}
+	if after := b.owner.Stats(); after.Writes <= before.Writes || after.Reads <= before.Reads {
+		t.Fatalf("owner admitted no work after the anomaly: %+v then %+v", before, after)
+	}
+}
+
+// The recipient can acknowledge from its inbox while the submission is still in
+// flight. When the provider then reports refusal, the canonical store rejects
+// the contradiction and keeps its own decision. That rejection is a domain
+// outcome: the intent is never resubmitted and the broker keeps serving.
+func TestEarlyReceiptRacingRefusedOutcomeKeepsBrokerServing(t *testing.T) {
+	socket, b, shutdown := startTestBroker(t)
+	defer shutdown()
+	sender := boundFixture(t, b, "sender")
+	recipient := boundFixture(t, b, "recipient")
+	fake := b.native()
+	gate := fake.holdSubmit(recipient.Enrollment.ID)
+	var released bool
+	release := func() {
+		if !released {
+			released = true
+			close(gate)
+		}
+	}
+	defer release()
+	c := connectClient(t, socket)
+	defer c.Close()
+	send := func(key string) messages.Message {
+		resp := sendRequest(t, c, protocol.Request{Cmd: protocol.CmdSend, Credential: sender.Credential, Recipient: recipient.Enrollment.ID, Message: key, IdempotencyKey: key, Hops: b.config.Messaging.DefaultHops})
+		if !resp.OK {
+			release()
+			t.Fatal(resp.Error)
+		}
+		var m messages.Message
+		unmarshalResponse(t, resp, &m)
+		return m
+	}
+	first := send("early receipt")
+	envelope := fake.receive(t) // the attempt is committed; Submit is held
+	ack := sendRequest(t, c, protocol.Request{Cmd: protocol.CmdAck, Credential: recipient.Credential, MessageID: first.ID, AttemptID: envelope.Message.Attempt})
+	if !ack.OK {
+		release()
+		t.Fatal(ack.Error)
+	}
+	fake.answer(enrollment.Refused)
+	release()
+	// The worker keeps selecting for this recipient, which it can only do after
+	// the rejected observation returned it to its loop.
+	second := send("after the conflict")
+	if got := fake.receive(t); got.Message.ID != second.ID {
+		t.Fatal("worker stopped serving after the canonical store rejected the outcome")
+	}
+	select {
+	case <-b.owner.Draining():
+		t.Fatal("a rejected observation closed broker admission")
+	default:
+	}
+	if err := statetest.Write(b.owner, func(tx *brokerstate.WriteTx) error {
+		m, err := messages.NewStore(tx, b.config.Messaging, time.Now()).Message(first.ID)
+		if err != nil {
+			return err
+		}
+		if m.Possession != "consumed" || m.Attempt != envelope.Message.Attempt {
+			t.Errorf("store did not keep its own decision: %+v", m)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestIdleBoundWorkerIssuesNoWriteTransactions holds the design's idle contract:
 // an idle broker with one bound enrollment observes through read snapshots and
 // enters no write transaction at all, from its worker or from discovery, yet

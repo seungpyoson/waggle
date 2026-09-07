@@ -16,6 +16,7 @@ import (
 type nativeFixture struct {
 	mu           sync.Mutex
 	blocked      map[string]bool
+	uncorrelated map[string]bool // answer with another thread's readiness
 	opens        map[string]int
 	closes       map[string]int
 	probes       map[string]int
@@ -25,11 +26,12 @@ type nativeFixture struct {
 	closeGate    <-chan struct{}
 	openGate     map[string]chan struct{} // stall Open for a conversation
 	openEntered  chan string
+	submitGate   map[string]chan struct{} // stall Submit for an enrollment
 	closeErr     map[string]error
 }
 
 func newNativeFixture() *nativeFixture {
-	return &nativeFixture{blocked: make(map[string]bool), opens: make(map[string]int), closes: make(map[string]int), probes: make(map[string]int), submitted: make(chan messages.Envelope, config.NewMessagingConfig().ScanLimit), outcome: enrollment.Accepted, openGate: make(map[string]chan struct{}), closeErr: make(map[string]error)}
+	return &nativeFixture{blocked: make(map[string]bool), uncorrelated: make(map[string]bool), opens: make(map[string]int), closes: make(map[string]int), probes: make(map[string]int), submitted: make(chan messages.Envelope, config.NewMessagingConfig().ScanLimit), outcome: enrollment.Accepted, openGate: make(map[string]chan struct{}), submitGate: make(map[string]chan struct{}), closeErr: make(map[string]error)}
 }
 
 func (f *nativeFixture) Check(e messages.Enrollment) error {
@@ -93,14 +95,28 @@ func (f *nativeFixture) Probe(_ context.Context, e messages.Enrollment) (enrollm
 	if f.blocked[e.Conversation] {
 		availability = enrollment.Unavailable
 	}
-	return enrollment.Readiness{Conversation: e.Conversation, Availability: availability, Evidence: "deterministic native input availability"}, nil
+	conversation := e.Conversation
+	if f.uncorrelated[e.Conversation] {
+		conversation += "-another-thread"
+	}
+	return enrollment.Readiness{Conversation: conversation, Availability: availability, Evidence: "deterministic native input availability"}, nil
 }
 
-func (f *nativeFixture) Submit(ctx context.Context, _ messages.Enrollment, envelope messages.Envelope) enrollment.Outcome {
+func (f *nativeFixture) Submit(ctx context.Context, e messages.Enrollment, envelope messages.Envelope) enrollment.Outcome {
 	select {
 	case f.submitted <- envelope:
 	case <-ctx.Done():
 		return enrollment.Outcome{Possession: enrollment.NotSubmitted, Evidence: "fixture input cancelled before submission"}
+	}
+	f.mu.Lock()
+	gate := f.submitGate[e.ID]
+	f.mu.Unlock()
+	if gate != nil {
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return enrollment.Outcome{Possession: enrollment.NotSubmitted, Evidence: "fixture input cancelled before submission"}
+		}
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -111,6 +127,30 @@ func (f *nativeFixture) block(conversation string, blocked bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.blocked[conversation] = blocked
+}
+
+// uncorrelate makes readiness for this conversation name a different native
+// thread, the shape a driver bug or a re-hosted App Server socket produces.
+func (f *nativeFixture) uncorrelate(conversation string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.uncorrelated[conversation] = true
+}
+
+// holdSubmit stalls Submit for one enrollment after its envelope is observable,
+// so a test can act on the committed attempt while the call is still in flight.
+func (f *nativeFixture) holdSubmit(id string) chan struct{} {
+	gate := make(chan struct{})
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.submitGate[id] = gate
+	return gate
+}
+
+func (f *nativeFixture) answer(p enrollment.Possession) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.outcome = p
 }
 
 func (f *nativeFixture) receive(t *testing.T) messages.Envelope {
