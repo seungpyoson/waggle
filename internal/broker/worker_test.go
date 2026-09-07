@@ -421,7 +421,12 @@ func TestEarlyReceiptRacingRefusedOutcomeKeepsBrokerServing(t *testing.T) {
 func TestIdleBoundWorkerIssuesNoWriteTransactions(t *testing.T) {
 	socket := shortBrokerSocketPath(t, "waggle-idle-*")
 	cfg := config.NewBrokerConfig(config.BrokerEndpoints{Socket: socket, PID: socket + ".pid"})
-	idle := 3 * max(cfg.Messaging.QueueCheckInterval, cfg.Messaging.DiscoveryInterval)
+	// Keep the measurement fast while exercising distinct scheduling periods.
+	cfg.Messaging.QueueCheckInterval = config.Defaults.StartupPollInterval / 2
+	cfg.Messaging.IdleCheckInterval = 4 * cfg.Messaging.QueueCheckInterval
+	cfg.Messaging.DiscoveryInterval = 2 * cfg.Messaging.IdleCheckInterval
+	cfg.Messaging.ProbeInterval = cfg.Messaging.IdleCheckInterval
+	idle := 3 * max(cfg.Messaging.IdleCheckInterval, cfg.Messaging.DiscoveryInterval)
 	b, err := newOwnedTestBroker(t, filepath.Join(t.TempDir(), "state.db"), config.CreateStore, cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -444,6 +449,13 @@ func TestIdleBoundWorkerIssuesNoWriteTransactions(t *testing.T) {
 	if after.Reads < before.Reads+2 {
 		t.Fatalf("idle broker took %d read snapshots in %v, want at least 2", after.Reads-before.Reads, idle)
 	}
+	// One worker snapshot per idle check, two snapshots per discovery pass.
+	// Include one boundary check from each loop; a queue-floor timer exceeds
+	// this bound even though it still produces no writes.
+	readBound := uint64(idle/cfg.Messaging.IdleCheckInterval+1) + 2*uint64(idle/cfg.Messaging.DiscoveryInterval+1)
+	if reads := after.Reads - before.Reads; reads > readBound {
+		t.Fatalf("idle timer used wake floor: %d reads, bound %d", reads, readBound)
+	}
 	// The hint must still carry committed work into the intent transaction. This
 	// row is committed without an RPC wakeup, so only the snapshot can find it.
 	sender := boundFixture(t, b, "sender")
@@ -457,5 +469,81 @@ func TestIdleBoundWorkerIssuesNoWriteTransactions(t *testing.T) {
 	}
 	if got := fake.receive(t); got.Message.ID != stored.Message.ID {
 		t.Fatal("pending hint did not enter the intent transaction")
+	}
+}
+
+func TestBoundRecipientWakeDeliversBeforeIdlePoll(t *testing.T) {
+	socket := shortBrokerSocketPath(t, "waggle-wake-*")
+	cfg := config.NewBrokerConfig(config.BrokerEndpoints{Socket: socket, PID: socket + ".pid"})
+	b, err := newOwnedTestBroker(t, filepath.Join(t.TempDir(), "state.db"), config.CreateStore, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shutdown := serveTestBroker(t, b)
+	defer shutdown()
+	sender := boundFixture(t, b, "sender")
+	recipient := boundFixture(t, b, "recipient")
+	c := connectClient(t, socket)
+	defer c.Close()
+	allowance := config.Defaults.StartupPollInterval
+	bound := cfg.Messaging.QueueCheckInterval + allowance
+	if bound >= cfg.Messaging.IdleCheckInterval/2 {
+		t.Fatal("delivery bound does not distinguish wakes from idle polling")
+	}
+	for _, key := range []string{"first wake", "wake after receipt", "another wake"} {
+		start := time.Now()
+		resp := sendRequest(t, c, protocol.Request{Cmd: protocol.CmdSend, Credential: sender.Credential, Recipient: recipient.Enrollment.ID, Message: key, IdempotencyKey: key, Hops: cfg.Messaging.DefaultHops})
+		if !resp.OK {
+			t.Fatal(resp.Error)
+		}
+		select {
+		case envelope := <-b.native().submitted:
+			t.Logf("wake delivered in %v (bound %v, idle %v)", time.Since(start), bound, cfg.Messaging.IdleCheckInterval)
+			if time.Since(start) > bound {
+				t.Fatal("wake delivery exceeded floor plus transport allowance")
+			}
+			if resp := sendRequest(t, c, protocol.Request{Cmd: protocol.CmdAck, Credential: recipient.Credential, MessageID: envelope.Message.ID, AttemptID: envelope.Message.Attempt}); !resp.OK {
+				t.Fatal(resp.Error)
+			}
+		case <-time.After(bound):
+			t.Fatal("bound recipient waited for idle poll instead of wake")
+		}
+	}
+}
+
+func TestWorkerWakeStormRespectsQueueCheckFloor(t *testing.T) {
+	socket := shortBrokerSocketPath(t, "waggle-floor-*")
+	cfg := config.NewBrokerConfig(config.BrokerEndpoints{Socket: socket, PID: socket + ".pid"})
+	b, err := newOwnedTestBroker(t, filepath.Join(t.TempDir(), "state.db"), config.CreateStore, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shutdown := serveTestBroker(t, b)
+	defer shutdown()
+	r := boundFixture(t, b, "recipient")
+	window := 4 * cfg.Messaging.QueueCheckInterval
+	tick := time.NewTicker(cfg.Messaging.QueueCheckInterval / 10)
+	defer tick.Stop()
+	timer := time.NewTimer(window)
+	defer timer.Stop()
+	before, started := b.owner.Stats(), time.Now()
+storm:
+	for {
+		b.enrollment.Wake(r.Enrollment.ID)
+		select {
+		case <-tick.C:
+		case <-timer.C:
+			break storm
+		}
+	}
+	elapsed := time.Since(started)
+	reads := b.owner.Stats().Reads - before.Reads
+	// Worker checks plus discovery's two snapshots, including boundary passes.
+	bound := uint64(elapsed/cfg.Messaging.QueueCheckInterval+2) + 2*uint64(elapsed/cfg.Messaging.DiscoveryInterval+1)
+	if reads > bound {
+		t.Fatalf("coalesced wakes bypassed floor: %d reads, bound %d in %v", reads, bound, elapsed)
+	}
+	if reads < 2 {
+		t.Fatalf("wake storm starved checks: %d reads in %v", reads, elapsed)
 	}
 }

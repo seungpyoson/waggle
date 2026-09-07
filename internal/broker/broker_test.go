@@ -47,7 +47,12 @@ func startTestBroker(t *testing.T) (string, *Broker, func()) {
 	sockPath := shortBrokerSocketPath(t, "waggle-test-*")
 	dbPath := fmt.Sprintf("%s/db", tmpDir)
 
-	b, err := newOwnedTestBroker(t, dbPath, config.CreateStore, config.NewBrokerConfig(config.BrokerEndpoints{Socket: sockPath, PID: sockPath + ".pid"}))
+	cfg := config.NewBrokerConfig(config.BrokerEndpoints{Socket: sockPath, PID: sockPath + ".pid"})
+	// These lifecycle fixtures must re-observe and recover lost wakes within
+	// the startup test budget. Scheduling-default tests construct their own cfg.
+	cfg.Messaging.IdleCheckInterval = cfg.Messaging.DiscoveryInterval
+	cfg.Messaging.ProbeInterval = cfg.Messaging.DiscoveryInterval
+	b, err := newOwnedTestBroker(t, dbPath, config.CreateStore, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

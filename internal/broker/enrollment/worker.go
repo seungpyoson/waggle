@@ -40,15 +40,17 @@ func (w *worker) run(lifetime brokerstate.WorkLifetime, reportFatal func(error))
 		case <-lifetime.Stop:
 			return
 		case <-w.wake:
-			// Coalesced hint. The minimum interval still applies.
-			if wait := w.limits.QueueCheckInterval - time.Since(w.lastCheck); wait > 0 {
-				select {
-				case <-lifetime.Stop:
-					return
-				case <-time.After(wait):
-				}
-			}
 		case <-timer.C:
+		}
+		// Both sources use the same floor. A pending timer and coalesced wake
+		// cannot produce adjacent checks, and further wakes cannot restart this
+		// fixed wait or postpone the check indefinitely.
+		if wait := time.Until(w.lastCheck.Add(w.limits.QueueCheckInterval)); wait > 0 {
+			select {
+			case <-lifetime.Stop:
+				return
+			case <-time.After(wait):
+			}
 		}
 		w.lastCheck = time.Now()
 		done, err := w.check(lifetime)
@@ -65,7 +67,7 @@ func (w *worker) run(lifetime brokerstate.WorkLifetime, reportFatal func(error))
 			reportFatal(err)
 			return
 		}
-		timer.Reset(w.limits.QueueCheckInterval)
+		timer.Reset(w.limits.IdleCheckInterval)
 	}
 }
 
