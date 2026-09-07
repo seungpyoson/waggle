@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/seungpyoson/waggle/internal/config"
@@ -163,5 +164,65 @@ func TestBindLosingToDrainingClosesUnpublishedEndpoint(t *testing.T) {
 	}
 	if err := o.Wait(t.Context()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A losing Bind that cannot remove what it created leaves stray endpoint files.
+// Releasing the row anyway would leave a successor refusing to start, because
+// leftovers after an orderly release have no recorded predecessor. The failure
+// is therefore permanent: ownership is retained and the successor reclaims by
+// process-exit evidence instead.
+func TestBindLosingToDrainingRetainsOwnershipWhenDiscardFails(t *testing.T) {
+	o, err := Acquire(t.Context(), config.NewOwnershipConfig(filepath.Join(t.TempDir(), "state.db"), config.CreateStore), processFixture{status: ProcessAlive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	activateFixture(t, o)
+	socket, pid := endpointPaths(t)
+	// Remove the socket this Bind just created, so its discard can no longer
+	// verify the identity it recorded, then lose the publication race.
+	o.state.beforePublish = func() {
+		if err := os.Remove(socket); err != nil {
+			t.Error(err)
+		}
+		o.BeginShutdown(errors.New("race"))
+	}
+	err = o.Bind(t.Context(), config.BrokerEndpoints{Socket: socket, PID: pid})
+	if !errors.Is(err, ErrAdmissionClosed) || !strings.Contains(err.Error(), socket) {
+		t.Fatalf("failed discard was not reported with its endpoint: %v", err)
+	}
+	if err := o.Wait(t.Context()); !errors.Is(err, ErrFinalizationFailed) {
+		t.Fatalf("ownership released while endpoint files were left behind: %v", err)
+	}
+	if _, err := os.Lstat(pid); err != nil {
+		t.Fatalf("stray endpoint the successor must reclaim was not left recorded: %v", err)
+	}
+}
+
+// createEndpoint records every file it creates before any step that can fail,
+// so the deferred discard removes whatever a partial failure left behind.
+func TestCreatedEndpointRecordsEveryFileItCreated(t *testing.T) {
+	socket, pid := endpointPaths(t)
+	ep, err := createEndpoint(config.BrokerEndpoints{Socket: socket, PID: pid})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorded := make([]string, 0, len(ep.files))
+	for _, file := range ep.files {
+		if file.identity == nil {
+			t.Fatalf("endpoint file recorded without creation evidence: %s", file.path)
+		}
+		recorded = append(recorded, file.path)
+	}
+	if len(recorded) != 2 || recorded[0] != socket || recorded[1] != pid {
+		t.Fatalf("createEndpoint recorded %v, want the socket then the PID file", recorded)
+	}
+	if err := ep.discard(); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range recorded {
+		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("discard left %s behind: %v", path, err)
+		}
 	}
 }

@@ -56,7 +56,16 @@ func (o *Owner) Bind(ctx context.Context, paths config.BrokerEndpoints) error {
 		s.mu.Lock()
 		if s.phase != serving || s.endpoint != nil {
 			s.mu.Unlock()
-			return errors.Join(ErrAdmissionClosed, ep.discard())
+			derr := ep.discard()
+			if derr == nil {
+				return ErrAdmissionClosed
+			}
+			// Files this Bind created are still on disk. Releasing the row would
+			// leave a successor refusing to start, because leftovers after an
+			// orderly release have no recorded predecessor. Retaining ownership
+			// lets the successor reclaim them by process-exit evidence instead.
+			s.recordFatal(derr)
+			return errors.Join(ErrAdmissionClosed, derr)
 		}
 		s.endpoint = ep
 		s.mu.Unlock()
@@ -88,9 +97,13 @@ func createEndpoint(paths config.BrokerEndpoints) (_ *ownedEndpoint, err error) 
 	if err != nil {
 		return nil, fmt.Errorf("create broker PID file: %w", err)
 	}
+	// Identity comes from the descriptor this process created exclusively, and
+	// is recorded before any further fallible step so the deferred discard
+	// removes the file. If even that fails there is nothing recorded to remove,
+	// so this branch removes the exclusively created path itself.
 	info, statErr := pid.Stat()
 	if statErr != nil {
-		return nil, errors.Join(statErr, pid.Close())
+		return nil, errors.Join(fmt.Errorf("record broker PID file identity: %w", statErr), pid.Close(), os.Remove(paths.PID))
 	}
 	ep.files = append(ep.files, ownedFile{path: paths.PID, identity: info})
 	_, writeErr := fmt.Fprintln(pid, os.Getpid())
