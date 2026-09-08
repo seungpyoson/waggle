@@ -2,9 +2,12 @@ package broker
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"net"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -85,7 +88,10 @@ func newWithConnector(ctx context.Context, owner *brokerstate.Owner, cfg config.
 func Initialize(ctx context.Context, owner *brokerstate.Owner) error {
 	return owner.Do(ctx, func(op *brokerstate.Operation) error {
 		return op.Write(ctx, func(tx *brokerstate.WriteTx) error {
-			if err := domainSchema(tx, tasks.Schema()); err != nil {
+			if err := domainSchema(tx, func(tx *brokerstate.WriteTx) error {
+				_, err := tx.Exec(tasks.Schema())
+				return err
+			}); err != nil {
 				return err
 			}
 			return tx.Activate()
@@ -93,19 +99,82 @@ func Initialize(ctx context.Context, owner *brokerstate.Owner) error {
 	})
 }
 
+// legacyMessagesTable is the retired broker's name-addressed message table. The
+// native schema takes that name for a different table, so conversion moves the
+// old one aside under retiredMessagesTable. Nothing in the native runtime reads
+// it: it is kept only so an operator can still see what the old store held, and
+// a rollback restores the snapshot regardless.
+const (
+	legacyMessagesTable  = "messages"
+	retiredMessagesTable = "legacy_messages"
+)
+
+// legacyStorageTables are the records a schema-v1 store legitimately carries
+// besides its domain tables: the shared version row, and SQLite's own tables.
+var legacyStorageTables = []string{"schema_version", "tasks"}
+
 // UpgradeDomain is the domain half of offline conversion: brokerstate owns the
-// transaction and the version record, this package owns what the schema is. The
-// store it leaves behind is prepared, so activation remains a separate decision.
-func UpgradeDomain(tx *brokerstate.WriteTx) error { return domainSchema(tx, tasks.UpgradeFromV1()) }
+// transaction and the version record, this package owns what the schema is. It
+// refuses a store containing anything it does not recognize rather than run
+// CREATE statements into unknown state, and reports the legacy tables it moved
+// aside. The store it leaves behind is prepared, so activation remains separate.
+func UpgradeDomain(tx *brokerstate.WriteTx) ([]string, error) {
+	tables, err := userTables(tx)
+	if err != nil {
+		return nil, err
+	}
+	legacyMessages := false
+	for _, name := range tables {
+		switch {
+		case slices.Contains(legacyStorageTables, name):
+		case name == legacyMessagesTable:
+			legacyMessages = true
+		case strings.HasPrefix(name, "sqlite_"):
+			// SQLite's own bookkeeping (sqlite_sequence, sqlite_stat1).
+		default:
+			return nil, fmt.Errorf("legacy store carries unrecognized table %q; conversion refuses a store it cannot account for", name)
+		}
+	}
+	var preserved []string
+	if legacyMessages {
+		// Renaming carries the legacy index with the table, so the native
+		// schema's own index names stay free.
+		if _, err := tx.Exec("ALTER TABLE " + legacyMessagesTable + " RENAME TO " + retiredMessagesTable); err != nil {
+			return nil, fmt.Errorf("retire legacy messages table: %w", err)
+		}
+		preserved = append(preserved, retiredMessagesTable)
+	}
+	if err := domainSchema(tx, tasks.UpgradeFromV1); err != nil {
+		return nil, err
+	}
+	return preserved, nil
+}
 
 // domainSchema is the one statement of what a native store's domain tables are.
-// Fresh initialization passes the tasks schema; conversion passes its upgrade.
-func domainSchema(tx *brokerstate.WriteTx, tasksDDL string) error {
-	if _, err := tx.Exec(tasksDDL); err != nil {
+// Fresh initialization creates the tasks table; conversion rebuilds it.
+func domainSchema(tx *brokerstate.WriteTx, installTasks func(*brokerstate.WriteTx) error) error {
+	if err := installTasks(tx); err != nil {
 		return err
 	}
 	_, err := tx.Exec(messages.Schema)
 	return err
+}
+
+func userTables(tx *brokerstate.WriteTx) ([]string, error) {
+	var names []string
+	if err := tx.Query("SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name", nil, func(rows *sql.Rows) error {
+		for rows.Next() {
+			var name string
+			if err := rows.Scan(&name); err != nil {
+				return err
+			}
+			names = append(names, name)
+		}
+		return nil
+	}); err != nil {
+		return nil, fmt.Errorf("read legacy store catalogue: %w", err)
+	}
+	return names, nil
 }
 
 // Serve runs ingress until the owner closes the listener. Workers are

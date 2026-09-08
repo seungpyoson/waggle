@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -112,27 +113,71 @@ func Schema() string {
 	`, int(config.Defaults.LeaseDuration.Seconds()), config.Defaults.MaxRetries)
 }
 
+// legacyColumns is the schema-v1 tasks table as it was created. The retired
+// broker also added ttl to it at runtime, on every open, so a real v1 store has
+// these columns with ttl appended, or exactly these when that broker never ran.
+// Any other column set belongs to a store this package does not recognize.
+var legacyColumns = []string{
+	"id", "idempotency_key", "type", "tags", "payload", "priority", "state", "blocked", "depends_on",
+	"claim_token", "claimed_by", "claimed_at", "lease_expires_at", "lease_duration", "max_retries",
+	"retry_count", "result", "failure_reason", "created_at", "updated_at",
+}
+
+// legacyTTLColumn is the column the retired broker appended at runtime.
+const legacyTTLColumn = "ttl"
+
 // UpgradeFromV1 rebuilds a schema-v1 tasks table as the table Schema() defines,
-// used only by offline conversion. The v1 table lacks ttl, and a column added by
-// ALTER TABLE lands last, so a converted store would carry a different table
-// from a fresh one forever. Rebuilding through Schema() keeps exactly one
-// definition of this table: every v1 column is copied and ttl is left NULL,
-// which is what "no expiry" already means.
-func UpgradeFromV1() string {
-	return `
+// inside the caller's offline conversion transaction.
+//
+// A rebuild, not an ALTER: Schema() places ttl in the middle and an added column
+// lands last, so an altered store would carry a different table from a fresh one
+// forever. The rebuild copies every column the source actually has, so a store
+// the retired broker had already migrated keeps its ttl values, and one it never
+// touched gets NULL, which is what "no expiry" already means. The AUTOINCREMENT
+// sequence is carried across explicitly: dropping the renamed table would
+// otherwise discard it and let a later task reuse a retired id.
+func UpgradeFromV1(tx *brokerstate.WriteTx) error {
+	var found []string
+	if err := tx.Query("SELECT name FROM pragma_table_info('tasks') ORDER BY cid", nil, func(rows *sql.Rows) error {
+		for rows.Next() {
+			var name string
+			if err := rows.Scan(&name); err != nil {
+				return err
+			}
+			found = append(found, name)
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("read legacy tasks columns: %w", err)
+	}
+	if !isLegacyShape(found) {
+		return fmt.Errorf("unrecognized legacy tasks table: columns are [%s], expected [%s] with an optional trailing %s",
+			strings.Join(found, " "), strings.Join(legacyColumns, " "), legacyTTLColumn)
+	}
+	columns := strings.Join(found, ", ")
+	_, err := tx.Exec(`
 	ALTER TABLE tasks RENAME TO tasks_v1;
 	DROP INDEX idx_tasks_claimable;
 	DROP INDEX idx_tasks_idempotency;
 	` + Schema() + `
-	INSERT INTO tasks (id, idempotency_key, type, tags, payload, priority, state, blocked, depends_on,
-		claim_token, claimed_by, claimed_at, lease_expires_at, lease_duration, max_retries, retry_count,
-		result, failure_reason, created_at, updated_at)
-	SELECT id, idempotency_key, type, tags, payload, priority, state, blocked, depends_on,
-		claim_token, claimed_by, claimed_at, lease_expires_at, lease_duration, max_retries, retry_count,
-		result, failure_reason, created_at, updated_at FROM tasks_v1;
+	INSERT INTO tasks (` + columns + `) SELECT ` + columns + ` FROM tasks_v1;
+	DELETE FROM sqlite_sequence WHERE name = 'tasks';
+	UPDATE sqlite_sequence SET name = 'tasks' WHERE name = 'tasks_v1';
 	DROP TABLE tasks_v1;
-	`
+	`)
+	return err
 }
+
+// isLegacyShape accepts the two shapes a real v1 store has: as created, and as
+// the retired broker's runtime migration left it.
+func isLegacyShape(found []string) bool {
+	if len(found) == len(legacyColumns)+1 && found[len(found)-1] == legacyTTLColumn {
+		found = found[:len(legacyColumns)]
+	}
+	return slices.Equal(found, legacyColumns)
+}
+
+// nullableInt converts 0 to SQL NULL
 
 // nullableInt converts 0 to SQL NULL
 func nullableInt(v int) interface{} {

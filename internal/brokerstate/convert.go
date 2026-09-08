@@ -61,14 +61,29 @@ type WriterCensus interface {
 	WaggleProcesses(ctx context.Context) ([]Handle, error)
 }
 
-// Report is what an operator sees after a conversion or a rollback.
+// DomainUpgrade upgrades the domain schema inside the conversion transaction,
+// through the same scoped capability every other domain transaction gets. It
+// returns the legacy tables it moved aside under a retired name, which the
+// report names for the operator. It must refuse a store it cannot account for.
+type DomainUpgrade func(*WriteTx) ([]string, error)
+
+// Report is what an operator sees after a conversion or a rollback. A rollback
+// restores the snapshot as VACUUM INTO wrote it, so the store it leaves behind
+// is in SQLite's default journal mode, which the retired broker set to WAL on
+// its next open.
 type Report struct {
 	Database    string
 	Snapshot    string
 	FromVersion int
 	ToVersion   int
-	Tasks       int
-	ConvertedAt time.Time
+	// Tasks counts the rows carried across. The task table is the one domain
+	// detail this package names, because preserving those rows is the stated
+	// purpose of the conversion and of the rollback that undoes it.
+	Tasks int
+	// PreservedLegacyTables names retired tables the conversion kept under a new
+	// name. They are never read by the native runtime.
+	PreservedLegacyTables []string
+	ConvertedAt           time.Time
 }
 
 // Provenance records where a prepared store came from, in the conversion
@@ -81,9 +96,13 @@ type Provenance struct {
 
 // Inspection is the read-only operator view of one project's storage.
 type Inspection struct {
-	Database            string
-	Exists              bool
+	Database string
+	Exists   bool
+	// SchemaVersion is the highest version row found, and VersionRows how many
+	// there are. Conversion requires exactly one, so an operator can see a
+	// duplicate-row store here instead of meeting the refusal later.
 	SchemaVersion       int
+	VersionRows         int
 	Cutover             string
 	Provenance          *Provenance
 	LegacyPIDPresent    bool
@@ -103,7 +122,7 @@ type Inspection struct {
 // leaves the source untouched and the snapshot present. The converted store is
 // prepared, never active: activation stays a separate, ownership-guarded
 // decision.
-func Convert(ctx context.Context, cfg ConversionConfig, census WriterCensus, inspector ProcessInspector, upgrade func(*WriteTx) error) (_ Report, err error) {
+func Convert(ctx context.Context, cfg ConversionConfig, census WriterCensus, inspector ProcessInspector, upgrade DomainUpgrade) (_ Report, err error) {
 	if err := cfg.Validate(); err != nil {
 		return Report{}, err
 	}
@@ -159,16 +178,19 @@ func Convert(ctx context.Context, cfg ConversionConfig, census WriterCensus, ins
 		if err := legacyVersion(deadline, conn); err != nil {
 			return err
 		}
-		if _, err := conn.ExecContext(deadline, ownershipTables); err != nil {
-			return err
-		}
-		// The upgrade runs on a capability that expires with this callback. It
-		// carries no ownership fence: exclusive access here was proven by the
+		// The upgrade runs first, on a capability that expires with this
+		// callback, so the catalogue it inspects is the legacy store's alone.
+		// It carries no ownership fence: exclusive access here was proven by the
 		// census, since no incarnation owns a legacy store.
 		tx := &WriteTx{state: &transactionState{conn: conn, ctx: deadline, active: true}}
 		defer func() { tx.state.mu.Lock(); tx.state.active = false; tx.state.mu.Unlock() }()
-		if err := upgrade(tx); err != nil {
+		preserved, err := upgrade(tx)
+		if err != nil {
 			return fmt.Errorf("upgrade domain schema: %w", err)
+		}
+		report.PreservedLegacyTables = preserved
+		if _, err := conn.ExecContext(deadline, ownershipTables); err != nil {
+			return err
 		}
 		if err := claimOwnership(deadline, conn, rand.Text(), self,
 			sql.NullString{String: converted.Format(time.RFC3339Nano), Valid: true}); err != nil {
@@ -252,9 +274,8 @@ func Rollback(ctx context.Context, cfg ConversionConfig, census WriterCensus) (_
 }
 
 // Inspect reports what an operator needs before deciding, and changes nothing.
-// It opens the database read-only and never creates it. Reading a native store
-// materializes SQLite's own -wal/-shm sidecars, as any reader does; the
-// database file itself is never written.
+// It opens the database read-only, never creates it, and leaves no journal
+// sidecar behind that it did not find (see readOnly).
 func Inspect(ctx context.Context, cfg ConversionConfig, paths config.Paths) (Inspection, error) {
 	if err := cfg.Validate(); err != nil {
 		return Inspection{}, err
@@ -288,7 +309,8 @@ func Inspect(ctx context.Context, cfg ConversionConfig, paths config.Paths) (Ins
 			return err
 		}
 		if present["schema_version"] {
-			if err := db.QueryRowContext(ctx, "SELECT coalesce(max(version), 0) FROM schema_version").Scan(&view.SchemaVersion); err != nil {
+			if err := db.QueryRowContext(ctx, "SELECT count(*), coalesce(max(version), 0) FROM schema_version").
+				Scan(&view.VersionRows, &view.SchemaVersion); err != nil {
 				return fmt.Errorf("read schema version: %w", err)
 			}
 		}
@@ -413,7 +435,7 @@ func preparedProvenance(ctx context.Context, cfg ConversionConfig) (Provenance, 
 			return fmt.Errorf("%w: cutover state is %q", ErrNotPrepared, state)
 		}
 		if !source.Valid || !snapshot.Valid {
-			return fmt.Errorf("prepared store records no conversion provenance; nothing to roll back to")
+			return ErrNoProvenance
 		}
 		origin = Provenance{SourceSchema: int(source.Int64), ConvertedAt: at.String, Snapshot: snapshot.String}
 		return nil
@@ -470,28 +492,73 @@ func listSnapshots(cfg ConversionConfig) ([]string, error) {
 }
 
 // readOnly runs one read against the canonical store through a connection that
-// cannot create or change it.
+// cannot create or change it, and leaves the directory as it found it.
+//
+// Reading a WAL store materializes SQLite's -wal and -shm sidecars, and a
+// read-only connection cannot remove them again on close. So when this pass is
+// what created them, it hands the cleanup back to SQLite: a connection that can
+// write removes both when it closes, and only when it is the last one, which is
+// exactly the decision that keeps a broker that started meanwhile untouched.
+// Nothing is executed through that connection and nothing is removed by hand.
 func readOnly(ctx context.Context, cfg ConversionConfig, view func(context.Context, *sql.DB) error) (err error) {
+	untouched := noSidecars(cfg.Database)
 	db, err := openCanonical(cfg.Database, "ro", cfg.TransactionTimeout)
 	if err != nil {
 		return err
 	}
-	defer func() { err = errors.Join(err, db.Close()) }()
+	defer func() {
+		err = errors.Join(err, db.Close())
+		if untouched && !noSidecars(cfg.Database) {
+			// A cleanup that cannot run leaves only SQLite's own sidecars, and
+			// the read it follows already succeeded, so its failure is not the
+			// caller's answer.
+			_ = releaseSidecars(cfg)
+		}
+	}()
 	deadline, cancel := context.WithTimeout(ctx, cfg.TransactionTimeout)
 	defer cancel()
 	return view(deadline, db)
 }
 
+// noSidecars reports whether the store currently has neither journal sidecar.
+func noSidecars(database string) bool {
+	for _, sidecar := range sidecars(database) {
+		if exists(sidecar) {
+			return false
+		}
+	}
+	return true
+}
+
+func releaseSidecars(cfg ConversionConfig) error {
+	db, err := openCanonical(cfg.Database, "rw", cfg.TransactionTimeout)
+	if err != nil {
+		return err
+	}
+	return errors.Join(db.Ping(), db.Close())
+}
+
 // replaceFile installs source at target through a temporary file in the target
-// directory, so a partial copy can never be left in place of the store.
+// directory, so a partial copy can never be left in place of the store. The
+// restored store keeps the permissions of the one it replaces.
 func replaceFile(source, target string) (err error) {
+	mode := os.FileMode(0600)
+	if info, statErr := os.Lstat(target); statErr == nil {
+		mode = info.Mode().Perm()
+	}
 	in, err := os.Open(source)
 	if err != nil {
 		return fmt.Errorf("open snapshot: %w", err)
 	}
 	defer func() { err = errors.Join(err, in.Close()) }()
 	staged := target + ".restoring"
-	out, err := os.OpenFile(staged, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	// A restore interrupted between staging and rename leaves this file behind.
+	// The census proved nothing holds this store, so the leftover is this
+	// package's to clear; keeping it would block every later rollback.
+	if err := os.Remove(staged); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("clear interrupted restore: %w", err)
+	}
+	out, err := os.OpenFile(staged, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
 	if err != nil {
 		return fmt.Errorf("stage restored store: %w", err)
 	}

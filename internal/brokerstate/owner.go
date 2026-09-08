@@ -22,6 +22,7 @@ var (
 	ErrSchemaVersion       = errors.New("canonical schema requires explicit offline conversion")
 	ErrPrepared            = errors.New("canonical store is prepared; activation is required")
 	ErrNotPrepared         = errors.New("store is not in the prepared cutover state")
+	ErrNoProvenance        = errors.New("prepared store records no conversion provenance; nothing to roll back to")
 	ErrNotLegacy           = errors.New("store is not a schema-v1 legacy store")
 	ErrCensusUnavailable   = errors.New("writer census unavailable; conversion blocked")
 	ErrWritersPresent      = errors.New("old Waggle writers or open handles present; conversion blocked")
