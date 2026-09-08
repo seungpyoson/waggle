@@ -16,11 +16,16 @@ import (
 	"github.com/seungpyoson/waggle/internal/config"
 )
 
-// ConversionConfig locates the one canonical store and the snapshots taken
-// before it is changed. Every value comes from resolved project paths.
+// ConversionConfig locates the one canonical store, the snapshots taken before
+// it is changed, and the retired broker's endpoints a conversion leaves behind.
+// Every value comes from resolved project paths.
 type ConversionConfig struct {
-	Database           string
-	SnapshotDir        string
+	Database    string
+	SnapshotDir string
+	// LegacyPID and LegacySocket are the retired broker's endpoints, which a
+	// committed conversion removes. They are never served, opened or dialled.
+	LegacyPID          string
+	LegacySocket       string
 	TransactionTimeout time.Duration
 }
 
@@ -28,6 +33,8 @@ func NewConversionConfig(paths config.Paths) ConversionConfig {
 	return ConversionConfig{
 		Database:           paths.DB,
 		SnapshotDir:        paths.SnapshotDir,
+		LegacyPID:          paths.LegacyPID,
+		LegacySocket:       paths.LegacySocket,
 		TransactionTimeout: config.Defaults.BusyTimeout,
 	}
 }
@@ -35,6 +42,23 @@ func NewConversionConfig(paths config.Paths) ConversionConfig {
 func (c ConversionConfig) Validate() error {
 	if !filepath.IsAbs(c.Database) || !filepath.IsAbs(c.SnapshotDir) {
 		return fmt.Errorf("conversion requires absolute database and snapshot paths")
+	}
+	if !filepath.IsAbs(c.LegacyPID) || !filepath.IsAbs(c.LegacySocket) {
+		return fmt.Errorf("conversion requires absolute legacy endpoint paths")
+	}
+	// Retirement removes files, so what may be removed is decided here, once,
+	// against the only place the retired broker's names are defined. A native
+	// endpoint carries a different name, so it can never be named here, and
+	// these two names must stay distinct from the native ones for that to hold.
+	if config.Defaults.LegacyPIDFile == config.Defaults.PIDFile ||
+		config.Defaults.LegacySocketFile == config.Defaults.SocketFile {
+		return fmt.Errorf("the retired broker's endpoint names must differ from the native ones")
+	}
+	if filepath.Base(c.LegacyPID) != config.Defaults.LegacyPIDFile ||
+		filepath.Base(c.LegacySocket) != config.Defaults.LegacySocketFile {
+		return fmt.Errorf("conversion retires only %s and %s, not %s and %s",
+			config.Defaults.LegacyPIDFile, config.Defaults.LegacySocketFile,
+			filepath.Base(c.LegacyPID), filepath.Base(c.LegacySocket))
 	}
 	if c.TransactionTimeout <= 0 {
 		return fmt.Errorf("conversion deadline must be positive")
@@ -52,9 +76,12 @@ type Handle struct {
 
 // WriterCensus is the OS-level proof that the offline state actually holds.
 // Both methods must fail loudly rather than report an empty partial listing.
+// Errors are returned as the tools gave them; Convert and Rollback are what
+// classify an unanswered census as ErrCensusUnavailable.
 type WriterCensus interface {
 	// OpenHandles lists processes holding any of paths (or their -wal/-shm
-	// siblings) open.
+	// siblings) open, the caller included: which holders matter is the caller's
+	// judgement, not the census's.
 	OpenHandles(ctx context.Context, paths []string) ([]Handle, error)
 	// WaggleProcesses lists running processes whose executable basename is the
 	// Waggle binary, excluding self.
@@ -83,7 +110,11 @@ type Report struct {
 	// PreservedLegacyTables names retired tables the conversion kept under a new
 	// name. They are never read by the native runtime.
 	PreservedLegacyTables []string
-	ConvertedAt           time.Time
+	// RetiredEndpoints names the retired broker's socket and PID file that this
+	// conversion removed. A rollback restores the store, not these: they are a
+	// dead process's leftovers, and the retired broker writes its own on start.
+	RetiredEndpoints []string
+	ConvertedAt      time.Time
 }
 
 // Provenance records where a prepared store came from, in the conversion
@@ -219,7 +250,45 @@ func Convert(ctx context.Context, cfg ConversionConfig, census WriterCensus, ins
 	if journal != config.CanonicalJournalMode {
 		return Report{}, fmt.Errorf("canonical journal stayed %s (store is converted; roll it back)", journal)
 	}
+	// Last, and only once the store is wholly converted: the retired broker's
+	// endpoints outlived it, and nothing may find them again. A conversion that
+	// stopped anywhere above leaves them where they are.
+	retired, err := retireLegacyEndpoints(cfg)
+	if err != nil {
+		return Report{}, fmt.Errorf("%w (store is converted; roll it back to undo the conversion)", err)
+	}
+	report.RetiredEndpoints = retired
 	return report, nil
+}
+
+// retireLegacyEndpoints removes the retired broker's socket and PID file, in
+// that fixed order, and reports what it removed. It runs only after a
+// conversion has committed: the census proved no process holds the store, the
+// store now refuses the retired broker, and the names it may remove were fixed
+// by ConversionConfig.Validate, which accepts only the retired broker's own
+// names. The native broker's endpoints are never named here.
+func retireLegacyEndpoints(cfg ConversionConfig) ([]string, error) {
+	var retired []string
+	for _, endpoint := range []string{cfg.LegacyPID, cfg.LegacySocket} {
+		info, err := os.Lstat(endpoint)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return retired, fmt.Errorf("inspect legacy endpoint: %w", err)
+		}
+		// A PID file and a socket are all the retired broker left here. Anything
+		// else under these names was put there by something this package does not
+		// know, and is not this package's to remove.
+		if !info.Mode().IsRegular() && info.Mode().Type() != os.ModeSocket {
+			return retired, fmt.Errorf("legacy endpoint %s is neither a file nor a socket (%s)", endpoint, info.Mode())
+		}
+		if err := os.Remove(endpoint); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return retired, fmt.Errorf("retire legacy endpoint: %w", err)
+		}
+		retired = append(retired, endpoint)
+	}
+	return retired, nil
 }
 
 // Rollback restores the snapshot a prepared store records as its origin. It
@@ -360,6 +429,12 @@ func tablesPresent(ctx context.Context, db *sql.DB, names ...string) (_ map[stri
 // survey is one full census: running old executables and open handles on the
 // canonical store. Any uncertainty blocks, and an empty partial listing is not
 // proof, so an error is never downgraded to "nothing found".
+//
+// The census reports every holder of the store, including this process, which
+// holds it open from the moment it takes the snapshot until the conversion is
+// done. The writers a conversion has to wait for are the other ones, so its own
+// handles are set aside here rather than in the census, which stays a plain
+// report of what the operating system sees.
 func survey(ctx context.Context, census WriterCensus, database string) error {
 	processes, err := census.WaggleProcesses(ctx)
 	if err != nil {
@@ -372,10 +447,21 @@ func survey(ctx context.Context, census WriterCensus, database string) error {
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrCensusUnavailable, err)
 	}
-	if len(handles) > 0 {
-		return fmt.Errorf("%w: open handles held by %s", ErrWritersPresent, describe(handles))
+	if foreign := heldElsewhere(handles, os.Getpid()); len(foreign) > 0 {
+		return fmt.Errorf("%w: open handles held by %s", ErrWritersPresent, describe(foreign))
 	}
 	return nil
+}
+
+// heldElsewhere drops the handles this process holds itself.
+func heldElsewhere(handles []Handle, self int) []Handle {
+	foreign := make([]Handle, 0, len(handles))
+	for _, h := range handles {
+		if h.PID != self {
+			foreign = append(foreign, h)
+		}
+	}
+	return foreign
 }
 
 func describe(handles []Handle) string {

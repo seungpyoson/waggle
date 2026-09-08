@@ -71,6 +71,12 @@ var Defaults = struct {
 	// SnapshotDir holds pre-conversion database copies, under DataDir.
 	SnapshotDir string
 
+	// CensusTimeout bounds one command of the offline writer census. The census
+	// walks every process on the machine, so it is far longer than any timeout
+	// on the broker's own path; a command that outruns it is uncertainty, and
+	// uncertainty blocks conversion rather than reporting an empty machine.
+	CensusTimeout time.Duration
+
 	ShutdownTimeout      time.Duration
 	MaxMessageSize       int64
 	LeaseDuration        time.Duration
@@ -106,6 +112,8 @@ var Defaults = struct {
 	LegacySocketFile: "broker.sock",
 
 	SnapshotDir: "rollback",
+
+	CensusTimeout: 30 * time.Second,
 
 	ShutdownTimeout:      5 * time.Second,
 	MaxMessageSize:       1024 * 1024, // 1MB buffer for large AI agent payloads

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -264,9 +265,38 @@ func testPaths(t *testing.T, dir string) config.Paths {
 	return config.Paths{
 		DataDir:      dir,
 		DB:           filepath.Join(dir, config.Defaults.DBFile),
+		PID:          filepath.Join(dir, config.Defaults.PIDFile),
+		Socket:       filepath.Join(dir, config.Defaults.SocketFile),
 		LegacyPID:    filepath.Join(dir, config.Defaults.LegacyPIDFile),
 		LegacySocket: filepath.Join(dir, config.Defaults.LegacySocketFile),
 		SnapshotDir:  filepath.Join(dir, config.Defaults.SnapshotDir),
+	}
+}
+
+// shortDir is a directory short enough to hold a real unix socket: the names
+// go test builds for a temporary directory outrun the 104-byte socket limit.
+func shortDir(t *testing.T) string {
+	t.Helper()
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, err := os.MkdirTemp(cwd, ".convert-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(dir); err != nil {
+			t.Error(err)
+		}
+	})
+	return dir
+}
+
+func mustExist(t *testing.T, path string) {
+	t.Helper()
+	if _, err := os.Lstat(path); err != nil {
+		t.Fatalf("expected %s to be present: %v", path, err)
 	}
 }
 
@@ -669,6 +699,125 @@ func TestConvertBlocksOnCensus(t *testing.T) {
 				mustNotExist(t, paths.SnapshotDir)
 			})
 		})
+	}
+}
+
+// legacyEndpoints creates the retired broker's leftovers beside the native
+// broker's endpoints of the same generation: a PID file and a real unix socket
+// for each. Only the retired pair may ever be removed.
+func legacyEndpoints(t *testing.T, paths config.Paths) {
+	t.Helper()
+	for _, pid := range []string{paths.LegacyPID, paths.PID} {
+		if err := os.WriteFile(pid, []byte("4242\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, socket := range []string{paths.LegacySocket, paths.Socket} {
+		listener, err := net.Listen("unix", socket)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// The file outlives the listener: it is the leftover of a dead broker.
+		listener.(*net.UnixListener).SetUnlinkOnClose(false)
+		if err := listener.Close(); err != nil {
+			t.Fatal(err)
+		}
+		info, err := os.Lstat(socket)
+		if err != nil || info.Mode().Type() != os.ModeSocket {
+			t.Fatalf("socket fixture %s: mode %v, %v", socket, info.Mode(), err)
+		}
+	}
+}
+
+// TestConvertRetiresLegacyEndpoints proves the retired broker's socket and PID
+// file are gone once the store is converted, that the report names them, and
+// that the native broker's endpoints of the same generation are untouched.
+func TestConvertRetiresLegacyEndpoints(t *testing.T) {
+	for _, shape := range fieldShapes() {
+		t.Run(shape.name, func(t *testing.T) {
+			dir := shortDir(t)
+			paths := testPaths(t, dir)
+			newLegacyStore(t, dir, shape)
+			legacyEndpoints(t, paths)
+
+			report, err := brokerstate.Convert(t.Context(), brokerstate.NewConversionConfig(paths), &censusFixture{}, statetest.Process{}, broker.UpgradeDomain)
+			if err != nil {
+				t.Fatalf("convert: %v", err)
+			}
+			if len(report.RetiredEndpoints) != 2 ||
+				report.RetiredEndpoints[0] != paths.LegacyPID || report.RetiredEndpoints[1] != paths.LegacySocket {
+				t.Fatalf("retired endpoints = %v, want %s and %s", report.RetiredEndpoints, paths.LegacyPID, paths.LegacySocket)
+			}
+			mustNotExist(t, paths.LegacyPID)
+			mustNotExist(t, paths.LegacySocket)
+			mustExist(t, paths.PID)
+			mustExist(t, paths.Socket)
+		})
+	}
+}
+
+// TestConvertRetiresNothingItDidNotConvert keeps retirement tied to a committed
+// conversion: a refused or blocked conversion leaves the endpoints in place,
+// and a store with no leftovers reports none.
+func TestConvertRetiresNothingItDidNotConvert(t *testing.T) {
+	t.Run("blocked census", func(t *testing.T) {
+		dir := shortDir(t)
+		paths := testPaths(t, dir)
+		newLegacyStore(t, dir, fieldShapes()[1])
+		legacyEndpoints(t, paths)
+		census := &censusFixture{processes: []censusResult{{handles: []brokerstate.Handle{{PID: 4242, Command: "waggle", Path: "/usr/local/bin/waggle"}}}}}
+
+		if _, err := brokerstate.Convert(t.Context(), brokerstate.NewConversionConfig(paths), census, statetest.Process{}, broker.UpgradeDomain); !errors.Is(err, brokerstate.ErrWritersPresent) {
+			t.Fatalf("convert = %v, want ErrWritersPresent", err)
+		}
+		for _, endpoint := range []string{paths.LegacyPID, paths.LegacySocket, paths.PID, paths.Socket} {
+			mustExist(t, endpoint)
+		}
+	})
+
+	t.Run("refused store", func(t *testing.T) {
+		dir := shortDir(t)
+		paths := testPaths(t, dir)
+		newNativeStore(t, dir)
+		legacyEndpoints(t, paths)
+
+		if _, err := brokerstate.Convert(t.Context(), brokerstate.NewConversionConfig(paths), &censusFixture{}, statetest.Process{}, broker.UpgradeDomain); !errors.Is(err, brokerstate.ErrNotLegacy) {
+			t.Fatalf("convert = %v, want ErrNotLegacy", err)
+		}
+		for _, endpoint := range []string{paths.LegacyPID, paths.LegacySocket, paths.PID, paths.Socket} {
+			mustExist(t, endpoint)
+		}
+	})
+
+	t.Run("no leftovers", func(t *testing.T) {
+		dir := t.TempDir()
+		paths := testPaths(t, dir)
+		newLegacyStore(t, dir, fieldShapes()[0])
+
+		report, err := brokerstate.Convert(t.Context(), brokerstate.NewConversionConfig(paths), &censusFixture{}, statetest.Process{}, broker.UpgradeDomain)
+		if err != nil {
+			t.Fatalf("convert: %v", err)
+		}
+		if len(report.RetiredEndpoints) != 0 {
+			t.Fatalf("retired endpoints = %v on a store with none", report.RetiredEndpoints)
+		}
+	})
+}
+
+// TestConvertIgnoresTheHandleItHoldsItself is the difference between a census
+// of foreign writers and a census of every writer: the converting process holds
+// the store open to snapshot it, and its own handle must not block it.
+func TestConvertIgnoresTheHandleItHoldsItself(t *testing.T) {
+	dir := t.TempDir()
+	paths := testPaths(t, dir)
+	source := newLegacyStore(t, dir, fieldShapes()[1])
+	census := &censusFixture{handles: []censusResult{{handles: []brokerstate.Handle{
+		{PID: os.Getpid(), Command: "waggle", Path: source},
+		{PID: os.Getpid(), Command: "waggle", Path: source + "-wal"},
+	}}}}
+
+	if _, err := brokerstate.Convert(t.Context(), brokerstate.NewConversionConfig(paths), census, statetest.Process{}, broker.UpgradeDomain); err != nil {
+		t.Fatalf("convert with only its own handle open: %v", err)
 	}
 }
 
