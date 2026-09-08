@@ -32,7 +32,43 @@ const (
 	// With one file per run it has exactly one item to locate, so this status
 	// means that file has no open instances, and nothing else.
 	nothingFound = 1
+	// censusScope is how far these two tools actually see, in the words an
+	// operator reads in a conversion report. It is not a promise of a
+	// machine-wide census: see the OSWriterCensus documentation for what an
+	// unprivileged open-file census cannot see.
+	censusScope = "same-user open files; all users' processes by executable name"
 )
+
+// Scope reports the reach of the answers this census gives, so a conversion
+// records what its proof actually covered.
+func (OSWriterCensus) Scope() string { return censusScope }
+
+// resolveCensusTools finds both tools once, before any store is examined, so
+// missing tooling is a refusal at construction rather than a failure discovered
+// halfway through a survey.
+func resolveCensusTools() (openFiles, processes string, err error) {
+	if openFiles, err = exec.LookPath(openFilesCommand); err != nil {
+		return "", "", fmt.Errorf("%w: locate %s: %w", ErrCensusUnavailable, openFilesCommand, err)
+	}
+	if processes, err = exec.LookPath(processesCommand); err != nil {
+		return "", "", fmt.Errorf("%w: locate %s: %w", ErrCensusUnavailable, processesCommand, err)
+	}
+	return openFiles, processes, nil
+}
+
+// ready refuses a census that cannot run: one without the executable name and
+// deadline every census needs, or one built by hand rather than by
+// NewOSWriterCensus and so carrying no tools to run.
+func (c OSWriterCensus) ready() error {
+	if err := c.usable(); err != nil {
+		return err
+	}
+	if c.OpenFiles == "" || c.Processes == "" {
+		return fmt.Errorf("writer census has no resolved %s and %s; build it with NewOSWriterCensus",
+			openFilesCommand, processesCommand)
+	}
+	return nil
+}
 
 // OpenHandles reports every process holding one of these stores, or a journal
 // sidecar of one, open.
@@ -42,7 +78,7 @@ const (
 // them or all but one, and this census may not confuse "nothing holds these
 // files" with "one of these files was not visible to me".
 func (c OSWriterCensus) OpenHandles(ctx context.Context, paths []string) ([]Handle, error) {
-	if err := c.usable(); err != nil {
+	if err := c.ready(); err != nil {
 		return nil, err
 	}
 	subjects, err := censusSubjects(paths)
@@ -61,41 +97,46 @@ func (c OSWriterCensus) OpenHandles(ctx context.Context, paths []string) ([]Hand
 }
 
 func (c OSWriterCensus) holdersOf(ctx context.Context, path string) ([]Handle, error) {
-	stdout, stderr, err := c.run(ctx, openFilesCommand, openFilesFields, "--", path)
+	stdout, stderr, err := c.run(ctx, c.OpenFiles, openFilesFields, "--", path)
 	if err != nil {
 		var exit *exec.ExitError
 		if errors.As(err, &exit) && exit.ExitCode() == nothingFound && len(stdout) == 0 && len(stderr) == 0 {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("%s %s: %w%s", openFilesCommand, path, err, reported(stderr))
+		return nil, fmt.Errorf("%s %s: %w%s", c.OpenFiles, path, err, reported(stderr))
 	}
 	handles, err := parseOpenFiles(stdout)
 	if err != nil {
-		return nil, fmt.Errorf("%s %s: %w", openFilesCommand, path, err)
+		return nil, fmt.Errorf("%s %s: %w", c.OpenFiles, path, err)
 	}
 	if len(handles) == 0 {
 		// Success means every search item was located, which cannot be true of a
 		// run that listed nothing. Reporting an idle file here would be reporting
 		// an answer the tool did not give.
-		return nil, fmt.Errorf("%s %s: reported success and listed nothing%s", openFilesCommand, path, reported(stderr))
+		return nil, fmt.Errorf("%s %s: reported success and listed nothing%s", c.OpenFiles, path, reported(stderr))
 	}
 	return handles, nil
 }
 
 // WaggleProcesses reports every running process whose executable carries the
-// Waggle basename, except this one: the process taking the census is not a
-// writer it has to wait for.
+// Waggle basename, whichever user started it, except this one: the process
+// taking the census is not a writer it has to wait for.
+//
+// A process that has exited but has not been reaped is still listed, under its
+// name, and so still counts. That is the conservative direction: a conversion
+// waits for an operator to clear it rather than deciding for itself that a
+// process it can still see has gone.
 func (c OSWriterCensus) WaggleProcesses(ctx context.Context) ([]Handle, error) {
-	if err := c.usable(); err != nil {
+	if err := c.ready(); err != nil {
 		return nil, err
 	}
-	stdout, stderr, err := c.run(ctx, processesCommand, processesFormat, processesFields)
+	stdout, stderr, err := c.run(ctx, c.Processes, processesFormat, processesFields)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w%s", processesCommand, err, reported(stderr))
+		return nil, fmt.Errorf("%s: %w%s", c.Processes, err, reported(stderr))
 	}
 	processes, err := parseProcesses(stdout, c.Binary, os.Getpid())
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", processesCommand, err)
+		return nil, fmt.Errorf("%s: %w", c.Processes, err)
 	}
 	return processes, nil
 }
@@ -110,11 +151,22 @@ func (c OSWriterCensus) run(ctx context.Context, name string, args ...string) (s
 	var out, errs bytes.Buffer
 	command.Stdout = &out
 	command.Stderr = &errs
+	// A census tool forks children of its own for calls that can block, and they
+	// inherit the pipes feeding these buffers, so waiting for the output to close
+	// can outlast the command that was killed. WaitDelay bounds that wait too,
+	// which is the whole point of having a deadline.
+	command.WaitDelay = c.Timeout
 	err = command.Run()
 	if expired := deadline.Err(); expired != nil {
-		// A killed command's exit status says nothing about the machine, so the
-		// deadline is reported instead of a status this census cannot read.
-		err = fmt.Errorf("did not answer within %v: %w", c.Timeout, expired)
+		// A killed command's exit status says nothing about the machine, so why
+		// it was killed is reported instead of a status this census cannot read.
+		// Whose decision ended it matters to the operator: their own interruption
+		// is not a slow tool.
+		reason := fmt.Sprintf("did not answer within %v", c.Timeout)
+		if ctx.Err() != nil {
+			reason = "was stopped before answering"
+		}
+		err = fmt.Errorf("%s: %w", reason, expired)
 	}
 	return out.Bytes(), errs.Bytes(), err
 }

@@ -3,6 +3,7 @@ package brokerstate
 import (
 	"bufio"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -106,9 +107,16 @@ func censusBinaryName(t *testing.T) string {
 	return "waggle-census-" + strings.ToLower(rand.Text()[:10])
 }
 
+// testCensus is the real census, built the only way production builds one, with
+// the executable name it looks for replaced by one nothing else carries.
 func testCensus(t *testing.T) OSWriterCensus {
 	t.Helper()
-	return OSWriterCensus{Binary: censusBinaryName(t), Timeout: config.Defaults.CensusTimeout}
+	census, err := NewOSWriterCensus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	census.Binary = censusBinaryName(t)
+	return census
 }
 
 // holds reports whether the census saw pid holding path.
@@ -225,6 +233,9 @@ func TestOSWriterCensusRefusesWhenUnconfigured(t *testing.T) {
 		{},
 		{Binary: "waggle"},
 		{Timeout: config.Defaults.CensusTimeout},
+		// Named and bounded, but assembled by hand rather than by the
+		// constructor, so it never resolved the tools it would have to run.
+		{Binary: "waggle", Timeout: config.Defaults.CensusTimeout},
 	} {
 		if handles, err := census.OpenHandles(t.Context(), []string{path}); err == nil {
 			t.Fatalf("%+v reported open handles %+v", census, handles)
@@ -239,8 +250,8 @@ func TestOSWriterCensusRefusesWhenUnconfigured(t *testing.T) {
 // a running executable with the Waggle basename is found by name alone, with no
 // PID file involved, and is gone from the listing once it exits.
 func TestOSWriterCensusDetectsRunningBinary(t *testing.T) {
-	binary := censusBinaryName(t)
-	census := OSWriterCensus{Binary: binary, Timeout: config.Defaults.CensusTimeout}
+	census := testCensus(t)
+	binary := census.Binary
 	pid, executable, stop := censusHelper(t, binary, "")
 
 	processes, err := census.WaggleProcesses(t.Context())
@@ -312,6 +323,18 @@ func TestNewOSWriterCensusNamesThisBinaryAndExcludesIt(t *testing.T) {
 	if census.Timeout != config.Defaults.CensusTimeout {
 		t.Fatalf("census timeout = %v, want %v", census.Timeout, config.Defaults.CensusTimeout)
 	}
+	// The tools are found once, here, rather than at the moment an answer is
+	// needed, and both are named so an error can say which one answered.
+	for _, tool := range []string{census.OpenFiles, census.Processes} {
+		if !filepath.IsAbs(tool) {
+			t.Fatalf("census tool %q was not resolved to a pathname", tool)
+		}
+	}
+	// A census that cannot see everything must say so, and the conversion
+	// report carries those words to the operator.
+	if !strings.Contains(census.Scope(), "same-user") {
+		t.Fatalf("census scope = %q, want it to state the same-user limit", census.Scope())
+	}
 	processes, err := census.WaggleProcesses(t.Context())
 	if err != nil {
 		t.Fatalf("process census: %v", err)
@@ -320,6 +343,16 @@ func TestNewOSWriterCensusNamesThisBinaryAndExcludesIt(t *testing.T) {
 		if p.PID == os.Getpid() {
 			t.Fatalf("census counted itself: %+v", p)
 		}
+	}
+}
+
+// TestNewOSWriterCensusRefusesMissingTooling proves missing tooling is refused
+// while the census is being built, before any store has been examined.
+func TestNewOSWriterCensusRefusesMissingTooling(t *testing.T) {
+	t.Setenv("PATH", "")
+	census, err := NewOSWriterCensus()
+	if !errors.Is(err, ErrCensusUnavailable) {
+		t.Fatalf("census built without its tools: %+v, %v", census, err)
 	}
 }
 

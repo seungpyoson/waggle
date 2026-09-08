@@ -138,6 +138,11 @@ type censusFixture struct {
 	asked     [][]string
 }
 
+// fixtureScope is what a scripted census can honestly claim to have seen.
+const fixtureScope = "scripted fixture"
+
+func (c *censusFixture) Scope() string { return fixtureScope }
+
 func (c *censusFixture) WaggleProcesses(context.Context) ([]brokerstate.Handle, error) {
 	c.calls.processes++
 	return scripted(c.processes, c.calls.processes)
@@ -461,6 +466,10 @@ func TestConvertUpgradesLegacyStoreAndPreservesTasks(t *testing.T) {
 			}
 			if report.ConvertedAt.IsZero() {
 				t.Fatal("report carries no conversion time")
+			}
+			// What the census could see is part of what the operator is told.
+			if report.CensusScope != fixtureScope {
+				t.Fatalf("report census scope = %q, want %q", report.CensusScope, fixtureScope)
 			}
 			if info, err := os.Lstat(report.Snapshot); err != nil || !info.Mode().IsRegular() {
 				t.Fatalf("snapshot %s: %v", report.Snapshot, err)

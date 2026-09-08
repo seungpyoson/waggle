@@ -86,6 +86,10 @@ type WriterCensus interface {
 	// WaggleProcesses lists running processes whose executable basename is the
 	// Waggle binary, excluding self.
 	WaggleProcesses(ctx context.Context) ([]Handle, error)
+	// Scope describes, for an operator, how far these two answers actually
+	// reach. A census that cannot see everything is still worth taking, but what
+	// it could not see is part of its answer and is recorded with the result.
+	Scope() string
 }
 
 // DomainUpgrade upgrades the domain schema inside the conversion transaction,
@@ -114,7 +118,12 @@ type Report struct {
 	// conversion removed. A rollback restores the store, not these: they are a
 	// dead process's leftovers, and the retired broker writes its own on start.
 	RetiredEndpoints []string
-	ConvertedAt      time.Time
+	// CensusScope is how far the census that cleared this change could see, in
+	// the census's own words. It is reported rather than assumed, because an
+	// operator deciding whether the proof was enough needs to know what it
+	// covered, and no census here claims to cover everything.
+	CensusScope string
+	ConvertedAt time.Time
 }
 
 // Provenance records where a prepared store came from, in the conversion
@@ -201,6 +210,7 @@ func Convert(ctx context.Context, cfg ConversionConfig, census WriterCensus, ins
 		Snapshot:    snapshot,
 		FromVersion: config.LegacySchemaVersion,
 		ToVersion:   config.NativeSchemaVersion,
+		CensusScope: census.Scope(),
 		ConvertedAt: converted,
 	}
 	deadline, cancel := context.WithTimeout(ctx, cfg.TransactionTimeout)
@@ -328,6 +338,7 @@ func Rollback(ctx context.Context, cfg ConversionConfig, census WriterCensus) (_
 		Database:    cfg.Database,
 		Snapshot:    origin.Snapshot,
 		FromVersion: config.NativeSchemaVersion,
+		CensusScope: census.Scope(),
 		ConvertedAt: time.Now().UTC(),
 	}
 	if err := readOnly(ctx, cfg, func(ctx context.Context, db *sql.DB) error {

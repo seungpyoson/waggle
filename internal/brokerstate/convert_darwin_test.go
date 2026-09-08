@@ -36,4 +36,7 @@ func TestConvertPassesTheRealOSCensus(t *testing.T) {
 	if report.ToVersion != config.NativeSchemaVersion || report.Tasks != legacyTaskCount {
 		t.Fatalf("report = %+v", report)
 	}
+	if report.CensusScope != census.Scope() || report.CensusScope == "" {
+		t.Fatalf("report census scope = %q, want the census's own %q", report.CensusScope, census.Scope())
+	}
 }
