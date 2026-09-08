@@ -854,6 +854,9 @@ func TestRollbackRestoresSnapshotWhilePrepared(t *testing.T) {
 			}
 			mustHaveNoSidecars(t, source)
 			mustNotExist(t, staged)
+			if fileHash(t, source) != fileHash(t, converted.Snapshot) {
+				t.Fatal("restored store is not byte-identical to the snapshot")
+			}
 			info, err := os.Lstat(source)
 			if err != nil {
 				t.Fatal(err)
@@ -922,6 +925,49 @@ func TestRollbackRestoresSnapshotWhilePrepared(t *testing.T) {
 			blocked := &censusFixture{handles: []censusResult{{handles: []brokerstate.Handle{{PID: 99, Command: "waggle", Path: source}}}}}
 			if _, err := brokerstate.Rollback(t.Context(), cfg, blocked); !errors.Is(err, brokerstate.ErrWritersPresent) {
 				t.Fatalf("rollback with an open handle = %v, want ErrWritersPresent", err)
+			}
+		})
+	}
+}
+
+// A damaged undo copy must never replace the still-readable native store.
+func TestRollbackVerifiesSnapshotBeforeReplacingStore(t *testing.T) {
+	for _, damage := range []string{"truncated", "wrong version", "missing tasks"} {
+		t.Run(damage, func(t *testing.T) {
+			dir := t.TempDir()
+			paths := testPaths(t, dir)
+			newLegacyStore(t, dir, fieldShapes()[1])
+			cfg := brokerstate.NewConversionConfig(paths)
+			converted, err := brokerstate.Convert(t.Context(), cfg, &censusFixture{}, statetest.Process{}, broker.UpgradeDomain)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if damage == "truncated" {
+				info, err := os.Stat(converted.Snapshot)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Truncate(converted.Snapshot, info.Size()/2); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				db := openDB(t, converted.Snapshot, "rw")
+				if damage == "wrong version" {
+					exec(t, db, "UPDATE schema_version SET version = ?", config.NativeSchemaVersion)
+				} else {
+					exec(t, db, "DROP TABLE tasks")
+				}
+				if err := db.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before := fileHash(t, paths.DB)
+			_, err = brokerstate.Rollback(t.Context(), cfg, &censusFixture{})
+			if err == nil || !strings.Contains(err.Error(), "verify recorded snapshot") {
+				t.Errorf("rollback = %v, want a snapshot verification error", err)
+			}
+			if fileHash(t, paths.DB) != before {
+				t.Error("refused rollback changed the store before verifying its snapshot")
 			}
 		})
 	}

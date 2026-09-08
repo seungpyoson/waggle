@@ -324,6 +324,10 @@ func Rollback(ctx context.Context, cfg ConversionConfig, census WriterCensus) (_
 	if err := requireRegularFile(origin.Snapshot); err != nil {
 		return Report{}, fmt.Errorf("recorded snapshot: %w", err)
 	}
+	tasks, err := verifySnapshot(ctx, cfg, origin.Snapshot, origin.SourceSchema)
+	if err != nil {
+		return Report{}, fmt.Errorf("verify recorded snapshot: %w", err)
+	}
 	// The census proved nothing holds this store, so the sidecars belong to no
 	// live reader and would otherwise be applied to the restored file.
 	for _, sidecar := range sidecars(cfg.Database) {
@@ -338,17 +342,10 @@ func Rollback(ctx context.Context, cfg ConversionConfig, census WriterCensus) (_
 		Database:    cfg.Database,
 		Snapshot:    origin.Snapshot,
 		FromVersion: config.NativeSchemaVersion,
+		ToVersion:   origin.SourceSchema,
+		Tasks:       tasks,
 		CensusScope: census.Scope(),
 		ConvertedAt: time.Now().UTC(),
-	}
-	if err := readOnly(ctx, cfg, func(ctx context.Context, db *sql.DB) error {
-		return db.QueryRowContext(ctx, "SELECT (SELECT version FROM schema_version), (SELECT count(*) FROM tasks)").
-			Scan(&report.ToVersion, &report.Tasks)
-	}); err != nil {
-		return Report{}, fmt.Errorf("verify restored store: %w", err)
-	}
-	if report.ToVersion != origin.SourceSchema {
-		return Report{}, fmt.Errorf("restored store reports schema %d, expected %d", report.ToVersion, origin.SourceSchema)
 	}
 	return report, nil
 }
@@ -551,7 +548,60 @@ func takeSnapshot(ctx context.Context, cfg ConversionConfig, db *sql.DB) (string
 	if _, err := db.ExecContext(ctx, "VACUUM INTO ?", snapshot); err != nil {
 		return "", fmt.Errorf("snapshot canonical store: %w", err)
 	}
+	// VACUUM INTO does not sync its output. Persist the copy and its directory
+	// entry before the conversion can commit provenance pointing to it.
+	for _, path := range []string{snapshot, cfg.SnapshotDir, filepath.Dir(cfg.SnapshotDir)} {
+		if err := syncPath(path); err != nil {
+			return "", fmt.Errorf("persist snapshot: %w", err)
+		}
+	}
+	if _, err := verifySnapshot(ctx, cfg, snapshot, config.LegacySchemaVersion); err != nil {
+		return "", fmt.Errorf("verify new snapshot: %w", err)
+	}
 	return snapshot, nil
+}
+
+// verifySnapshot reads the undo copy before any destructive restore step. A
+// readable version alone is insufficient: SQLite must also validate the file
+// and read the tasks this snapshot promises to preserve.
+func verifySnapshot(ctx context.Context, cfg ConversionConfig, snapshot string, version int) (tasks int, err error) {
+	cfg.Database = snapshot
+	err = readOnly(ctx, cfg, func(ctx context.Context, db *sql.DB) error {
+		var check string
+		if err := db.QueryRowContext(ctx, "PRAGMA quick_check").Scan(&check); err != nil {
+			return fmt.Errorf("quick_check: %w", err)
+		}
+		if check != "ok" {
+			return fmt.Errorf("quick_check: %s", check)
+		}
+		var count, low, high int
+		if err := db.QueryRowContext(ctx, "SELECT count(*), coalesce(min(version), 0), coalesce(max(version), 0) FROM schema_version").
+			Scan(&count, &low, &high); err != nil {
+			return fmt.Errorf("read snapshot schema: %w", err)
+		}
+		if count != 1 || low != version || high != version {
+			return fmt.Errorf("snapshot reports %d schema rows (%d..%d), expected one at %d", count, low, high, version)
+		}
+		if err := db.QueryRowContext(ctx, "SELECT count(*) FROM tasks").Scan(&tasks); err != nil {
+			return fmt.Errorf("read snapshot tasks: %w", err)
+		}
+		if tasks < 0 {
+			return fmt.Errorf("snapshot reports negative task count: %d", tasks)
+		}
+		return nil
+	})
+	return tasks, err
+}
+
+func syncPath(path string) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("open %s for sync: %w", path, err)
+	}
+	if err := errors.Join(file.Sync(), file.Close()); err != nil {
+		return fmt.Errorf("sync %s: %w", path, err)
+	}
+	return nil
 }
 
 // listSnapshots reports the snapshots belonging to this database, newest first
@@ -661,7 +711,9 @@ func replaceFile(source, target string) (err error) {
 	}
 	defer func() {
 		if err != nil {
-			err = errors.Join(err, os.Remove(staged))
+			if cleanupErr := os.Remove(staged); !errors.Is(cleanupErr, os.ErrNotExist) {
+				err = errors.Join(err, cleanupErr)
+			}
 		}
 	}()
 	if _, err = io.Copy(out, in); err != nil {
@@ -673,7 +725,7 @@ func replaceFile(source, target string) (err error) {
 	if err = os.Rename(staged, target); err != nil {
 		return fmt.Errorf("install restored store: %w", err)
 	}
-	return nil
+	return syncPath(filepath.Dir(target))
 }
 
 func sidecars(database string) []string {
