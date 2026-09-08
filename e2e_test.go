@@ -335,6 +335,14 @@ func TestE2E_LegacyStoreConvertsActivatesAndServes(t *testing.T) {
 		if !strings.Contains(refusal, brokerstate.ErrPrepared.Error()) {
 			t.Fatalf("prepared store refused for the wrong reason: %s", refusal)
 		}
+		// This refusal came after ownership was acquired, so it is the one that
+		// could have left endpoints behind. It binds none: a start that will not
+		// serve leaves nothing for anyone to discover or clean up.
+		for _, endpoint := range []string{paths.Socket, paths.PID} {
+			if _, err := os.Lstat(endpoint); !os.IsNotExist(err) {
+				t.Fatalf("refused start on a prepared store left %s behind: %v", endpoint, err)
+			}
+		}
 
 		out, refusal, err := env.runCLI(t, config.Defaults.ShutdownTimeout+config.Defaults.StartupTimeout,
 			"store", "activate")
