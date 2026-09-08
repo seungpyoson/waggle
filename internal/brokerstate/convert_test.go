@@ -503,13 +503,13 @@ func TestConvertUpgradesLegacyStoreAndPreservesTasks(t *testing.T) {
 			if err := statetest.Write(owner, func(tx *brokerstate.WriteTx) error { return tx.RequireActive() }); !errors.Is(err, brokerstate.ErrPrepared) {
 				t.Fatalf("RequireActive before activation = %v, want ErrPrepared", err)
 			}
-			if err := owner.Activate(t.Context()); err != nil {
+			if _, err := owner.Activate(t.Context(), brokerstate.NewConversionConfig(paths)); err != nil {
 				t.Fatalf("activate: %v", err)
 			}
 			if err := statetest.Write(owner, func(tx *brokerstate.WriteTx) error { return tx.RequireActive() }); err != nil {
 				t.Fatalf("RequireActive after activation = %v", err)
 			}
-			if err := owner.Activate(t.Context()); err != nil {
+			if _, err := owner.Activate(t.Context(), brokerstate.NewConversionConfig(paths)); err != nil {
 				t.Fatalf("second activation = %v, want a repeatable transition", err)
 			}
 		})
@@ -943,7 +943,7 @@ func TestRollbackRestoresSnapshotWhilePrepared(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := owner.Activate(t.Context()); err != nil {
+			if _, err := owner.Activate(t.Context(), brokerstate.NewConversionConfig(paths)); err != nil {
 				t.Fatal(err)
 			}
 			owner.BeginShutdown(nil)

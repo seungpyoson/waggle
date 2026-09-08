@@ -255,32 +255,39 @@ func Convert(ctx context.Context, cfg ConversionConfig, census WriterCensus, ins
 	}); err != nil {
 		return Report{}, fmt.Errorf("convert canonical store: %w", err)
 	}
-	// The journal mode is part of what makes the store native, and it can only
-	// be set outside a transaction. SQLite reports a refused change by returning
-	// the unchanged mode rather than an error, so the result is read back: a
-	// converted store that keeps the old journal is one Acquire would reject.
-	var journal string
-	if err := db.QueryRowContext(ctx, "PRAGMA journal_mode="+config.CanonicalJournalMode).Scan(&journal); err != nil {
-		return Report{}, fmt.Errorf("initialize canonical journal (store is converted; roll it back): %w", err)
-	}
-	if journal != config.CanonicalJournalMode {
-		return Report{}, fmt.Errorf("canonical journal stayed %s (store is converted; roll it back)", journal)
+	// These post-commit steps are idempotent. Activate resumes them under
+	// ownership if conversion was interrupted after preparing the store.
+	if err := ensureWALJournal(deadline, db); err != nil {
+		return Report{}, fmt.Errorf("%w (store is prepared; run store activate to finish conversion)", err)
 	}
 	// Last, and only once the store is wholly converted: the retired broker's
 	// endpoints outlived it, and nothing may find them again. A conversion that
 	// stopped anywhere above leaves them where they are.
 	retired, err := retireLegacyEndpoints(cfg)
 	if err != nil {
-		return Report{}, fmt.Errorf("%w (store is converted; roll it back to undo the conversion)", err)
+		return Report{}, fmt.Errorf("%w (store is prepared; run store activate to finish conversion)", err)
 	}
 	report.RetiredEndpoints = retired
 	return report, nil
 }
 
+// ensureWALJournal must run outside a transaction. SQLite may report a refused
+// switch by returning the unchanged mode, so success requires reading it back.
+func ensureWALJournal(ctx context.Context, db scanner) error {
+	var journal string
+	if err := db.QueryRowContext(ctx, "PRAGMA journal_mode="+config.CanonicalJournalMode).Scan(&journal); err != nil {
+		return fmt.Errorf("initialize canonical journal: %w", err)
+	}
+	if journal != config.CanonicalJournalMode {
+		return fmt.Errorf("canonical journal stayed %s, expected %s", journal, config.CanonicalJournalMode)
+	}
+	return nil
+}
+
 // retireLegacyEndpoints removes the retired broker's socket and PID file, in
-// that fixed order, and reports what it removed. It runs only after a
-// conversion has committed: the census proved no process holds the store, the
-// store now refuses the retired broker, and the names it may remove were fixed
+// that fixed order, and reports what it removed. It runs after conversion has
+// committed, or under activation ownership: the native schema refuses the
+// retired broker, and the names it may remove were fixed
 // by ConversionConfig.Validate, which accepts only the retired broker's own
 // names. The native broker's endpoints are never named here.
 func retireLegacyEndpoints(cfg ConversionConfig) ([]string, error) {

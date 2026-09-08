@@ -31,6 +31,17 @@ const (
 // internal/brokerstate.
 func writeLegacyStore(t *testing.T, path string) {
 	t.Helper()
+	db := openStoreFixture(t, path)
+	populateLegacyStore(t, db)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// openStoreFixture is the existing raw test-only connection, shared with
+// interrupted-conversion probes. Production still has one open site.
+func openStoreFixture(t *testing.T, path string) *sql.DB {
+	t.Helper()
 	u := url.URL{Scheme: "file", Path: path}
 	q := u.Query()
 	q.Set("mode", "rwc")
@@ -41,6 +52,16 @@ func writeLegacyStore(t *testing.T, path string) {
 		t.Fatal(err)
 	}
 	db.SetMaxOpenConns(config.CanonicalConnections)
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	return db
+}
+
+func populateLegacyStore(t *testing.T, db *sql.DB) {
+	t.Helper()
 	run := func(query string, args ...any) {
 		t.Helper()
 		if _, err := db.Exec(query, args...); err != nil {
@@ -70,8 +91,5 @@ func writeLegacyStore(t *testing.T, path string) {
 		run(`INSERT INTO messages(from_name, to_name, body, state, created_at, pushed_at, seen_at, acked_at, priority, ttl)
 			VALUES (?, ?, ?, 'queued', '2026-01-01T00:00:00Z', NULL, NULL, NULL, 'normal', ?)`,
 			"alice", "bob", fmt.Sprintf("body %d", i), 60*i)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
 	}
 }

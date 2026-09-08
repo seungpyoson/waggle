@@ -132,8 +132,8 @@ func Acquire(ctx context.Context, cfg config.OwnershipConfig, inspector ProcessI
 	// Journal initialization belongs to explicit creation. Opening existing
 	// storage must never change its journal mode before ownership is acquired.
 	if cfg.Action == config.CreateStore {
-		if _, err := db.ExecContext(ctx, "PRAGMA journal_mode="+config.CanonicalJournalMode); err != nil {
-			return nil, fmt.Errorf("initialize canonical journal: %w", err)
+		if err := ensureWALJournal(ctx, db); err != nil {
+			return nil, err
 		}
 	}
 	instance := rand.Text()
@@ -142,9 +142,6 @@ func Acquire(ctx context.Context, cfg config.OwnershipConfig, inspector ProcessI
 		var journal string
 		if err := conn.QueryRowContext(ctx, "PRAGMA journal_mode").Scan(&journal); err != nil {
 			return err
-		}
-		if journal != config.CanonicalJournalMode {
-			return fmt.Errorf("%w: expected canonical journal mode %s, got %s", ErrSchemaVersion, config.CanonicalJournalMode, journal)
 		}
 		if cfg.Action == config.CreateStore {
 			if _, err := conn.ExecContext(ctx, schemaVersionDDL+ownershipTables); err != nil {
@@ -162,6 +159,18 @@ func Acquire(ctx context.Context, cfg config.OwnershipConfig, inspector ProcessI
 		}
 		if count != 1 || minVersion != config.NativeSchemaVersion || maxVersion != config.NativeSchemaVersion {
 			return ErrSchemaVersion
+		}
+		if journal != config.CanonicalJournalMode {
+			var state string
+			if err := conn.QueryRowContext(ctx, "SELECT state FROM cutover WHERE singleton = 1").Scan(&state); err != nil {
+				return fmt.Errorf("read cutover for pending journal switch: %w", err)
+			}
+			// Prepared native storage permits maintenance ownership so Activate
+			// can finish an interrupted conversion. RequireActive still refuses
+			// service; no journal change happens before ownership is acquired.
+			if state != "prepared" {
+				return fmt.Errorf("expected canonical journal mode %s for %s store, got %s", config.CanonicalJournalMode, state, journal)
+			}
 		}
 		var oldID string
 		var old ProcessIdentity
@@ -267,10 +276,52 @@ func (tx *WriteTx) Activate() error {
 	return nil
 }
 
-// Activate performs the transition as its own owned transaction, for callers
-// that hold ownership only to activate a converted store.
-func (o *Owner) Activate(ctx context.Context) error {
-	return o.Do(ctx, func(op *Operation) error {
-		return op.Write(ctx, func(tx *WriteTx) error { return tx.Activate() })
+// Activation reports the transition and any legacy endpoints retired while
+// finishing a conversion's post-commit work.
+type Activation struct {
+	AlreadyActive    bool
+	RetiredEndpoints []string
+}
+
+// Activate finishes the post-commit tail before the owned transition. The
+// journal switch cannot run inside a transaction, so it reserves a connection
+// and checks the fence first. Admission keeps ownership held until both the
+// switch and the fenced retirement/transition transaction finish.
+func (o *Owner) Activate(ctx context.Context, cfg ConversionConfig) (result Activation, err error) {
+	if err := cfg.Validate(); err != nil {
+		return Activation{}, err
+	}
+	err = o.Do(ctx, func(op *Operation) error {
+		s := op.state.owner
+		if cfg.Database != s.config.Database {
+			return fmt.Errorf("activation paths name a different store from the acquired owner")
+		}
+		ctx, cancel := context.WithTimeout(ctx, s.config.TransactionTimeout)
+		defer cancel()
+		conn, err := s.db.Conn(ctx)
+		if err != nil {
+			return fmt.Errorf("reserve activation connection: %w", err)
+		}
+		err = s.fence(ctx, conn)
+		if err == nil {
+			err = ensureWALJournal(ctx, conn)
+		}
+		if err = errors.Join(err, conn.Close()); err != nil {
+			return err
+		}
+		return op.Write(ctx, func(tx *WriteTx) error {
+			if err := tx.RequireActive(); err == nil {
+				result.AlreadyActive = true
+			} else if !errors.Is(err, ErrPrepared) {
+				return err
+			}
+			var err error
+			result.RetiredEndpoints, err = retireLegacyEndpoints(cfg)
+			if err != nil {
+				return err
+			}
+			return tx.Activate()
+		})
 	})
+	return result, err
 }

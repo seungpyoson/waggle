@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -553,4 +554,74 @@ func TestStoreHelpNeedsNothing(t *testing.T) {
 			t.Fatalf("waggle %s printed %q", strings.Join(args, " "), stdout)
 		}
 	}
+}
+
+func TestStoreActivateFinishesInterruptedConversion(t *testing.T) {
+	resolved := legacyProject(t)
+	if _, code, err := clearCensus().convert(t.Context()); err != nil {
+		t.Fatal(code, err)
+	}
+	db := openStoreFixture(t, resolved.DB)
+	var journal string
+	if err := db.QueryRow("PRAGMA journal_mode=delete").Scan(&journal); err != nil || journal != "delete" {
+		t.Fatalf("interrupt journal switch: %s, %v", journal, err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, endpoint := range []string{resolved.LegacyPID, resolved.LegacySocket} {
+		if err := os.WriteFile(endpoint, nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, code, err := clearCensus().convert(t.Context()); code != "NOT_LEGACY" || !errors.Is(err, brokerstate.ErrNotLegacy) {
+		t.Fatalf("repeat convert = %s: %v", code, err)
+	}
+	result := decode[struct {
+		OK               bool
+		RetiredEndpoints []string
+	}](t, runStore(t, refusedCensus(), "activate"))
+	if !result.OK || !slices.Equal(result.RetiredEndpoints, []string{resolved.LegacyPID, resolved.LegacySocket}) {
+		t.Fatalf("activation did not finish retirement: %+v", result)
+	}
+	view := decode[inspectionView](t, runStore(t, refusedCensus(), "inspect"))
+	if view.Cutover != "active" || view.LegacyPIDPresent || view.LegacySocketPresent {
+		t.Fatalf("incomplete activation: %+v", view)
+	}
+	db = openStoreFixture(t, resolved.DB)
+	if err := db.QueryRow("PRAGMA journal_mode").Scan(&journal); err != nil || journal != config.CanonicalJournalMode {
+		t.Fatalf("activated journal = %s, %v", journal, err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	again := decode[struct {
+		OK               bool
+		Message          string
+		RetiredEndpoints []string
+	}](t, runStore(t, refusedCensus(), "activate"))
+	if !again.OK || again.Message != "store already active" || len(again.RetiredEndpoints) != 0 {
+		t.Fatalf("repeated activation = %+v", again)
+	}
+}
+
+func TestStoreActivateKeepsPreparedOnRetirementFailure(t *testing.T) {
+	resolved := legacyProject(t)
+	if _, code, err := clearCensus().convert(t.Context()); err != nil {
+		t.Fatal(code, err)
+	}
+	if err := os.Mkdir(resolved.LegacySocket, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, code, err := refusedCensus().activate(t.Context()); code != "ACTIVATION_FAILED" || err == nil {
+		t.Fatalf("activation with a foreign endpoint = %s: %v", code, err)
+	}
+	view := decode[inspectionView](t, runStore(t, refusedCensus(), "inspect"))
+	if view.Cutover != "prepared" || !view.LegacySocketPresent {
+		t.Fatalf("failed activation changed cutover or removed foreign endpoint: %+v", view)
+	}
+	if err := os.Rename(resolved.LegacySocket, filepath.Join(t.TempDir(), filepath.Base(resolved.LegacySocket))); err != nil {
+		t.Fatal(err)
+	}
+	runStore(t, refusedCensus(), "activate")
 }

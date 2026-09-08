@@ -74,8 +74,9 @@ type storeReport struct {
 // record. It is a struct so the ok flag leads, as it does in every other result
 // this file prints.
 type storeMessage struct {
-	OK      bool   `json:"ok"`
-	Message string `json:"message"`
+	OK               bool     `json:"ok"`
+	Message          string   `json:"message"`
+	RetiredEndpoints []string `json:"RetiredEndpoints,omitempty"`
 }
 
 // storePaths resolves the project exactly as `waggle start` does. The store
@@ -179,43 +180,15 @@ func (s storeCommands) activate(ctx context.Context) (result any, code string, e
 		err = errors.Join(err, releaseErr)
 		result, code = nil, failureCode(err, codeActivationFailed)
 	}()
-	already, err := activateOwnedStore(ctx, owner)
+	activation, err := owner.Activate(ctx, brokerstate.NewConversionConfig(resolved))
 	if err != nil {
 		return nil, failureCode(err, codeActivationFailed), err
 	}
 	message := "store activated"
-	if already {
+	if activation.AlreadyActive {
 		message = "store already active"
 	}
-	return storeMessage{OK: true, Message: message}, "", nil
-}
-
-// activateOwnedStore performs the transition and reports whether the store was
-// already active, which is the one thing Activate cannot say: reaching the
-// active state is success either way, and an operator still needs to know
-// which of the two happened. Both answers come from held ownership, so no
-// other process can move the store between the question and the transition.
-func activateOwnedStore(ctx context.Context, owner *brokerstate.Owner) (bool, error) {
-	already := false
-	if err := owner.Do(ctx, func(op *brokerstate.Operation) error {
-		return op.Write(ctx, func(tx *brokerstate.WriteTx) error {
-			err := tx.RequireActive()
-			if err == nil {
-				already = true
-				return nil
-			}
-			if errors.Is(err, brokerstate.ErrPrepared) {
-				return nil
-			}
-			return err
-		})
-	}); err != nil {
-		return false, err
-	}
-	if already {
-		return true, nil
-	}
-	return false, owner.Activate(ctx)
+	return storeMessage{OK: true, Message: message, RetiredEndpoints: activation.RetiredEndpoints}, "", nil
 }
 
 // failureCode names the refusals an operator can act on, because a caller
