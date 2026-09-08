@@ -83,8 +83,8 @@ type WriterCensus interface {
 	// siblings) open, the caller included: which holders matter is the caller's
 	// judgement, not the census's.
 	OpenHandles(ctx context.Context, paths []string) ([]Handle, error)
-	// WaggleProcesses lists running processes whose executable basename is the
-	// Waggle binary, excluding self.
+	// WaggleProcesses lists processes matched by their argv[0] name (ps comm),
+	// excluding self. The same-user open-handle census is the primary proof.
 	WaggleProcesses(ctx context.Context) ([]Handle, error)
 	// Scope describes, for an operator, how far these two answers actually
 	// reach. A census that cannot see everything is still worth taking, but what

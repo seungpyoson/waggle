@@ -11,8 +11,8 @@ import (
 )
 
 // OSWriterCensus is the operating system's own answer to the two questions
-// conversion must ask before it changes anything: is a retired Waggle
-// executable still running, and does any process still hold the canonical store
+// conversion must ask before it changes anything: is a process with a Waggle
+// argv[0] name still running, and does any process still hold the canonical store
 // open. It answers them with the platform's census tools, so it exists only for
 // hosts whose tools this project has verified; every other host refuses.
 //
@@ -22,8 +22,9 @@ import (
 // never left to assume otherwise:
 //
 //   - Processes: every user's. The process listing names every process on the
-//     machine, and this census matches them by executable basename, so a
-//     retired broker running under another account is still found.
+//     machine. This census matches argv[0] basenames (ps comm) against the
+//     canonical binary name and its own executable basename. Other aliases
+//     and spoofed argv[0] names can evade this half of the census.
 //   - Open files: the invoking user's only. An unprivileged open-file census on
 //     this target reads the file tables of the invoking user's processes and
 //     silently reports nothing for anyone else's, which it cannot distinguish
@@ -32,17 +33,19 @@ import (
 //
 // So a conversion guarded by this census is safe against the same-user writers
 // it was written for, and against a differently-owned broker that still carries
-// the Waggle executable name, but not against a differently-owned process
+// a matching argv[0] name, but not against a differently-owned process
 // holding the store under some other name. Machine-wide cutover (M2) must run
 // the census with enough privilege to read every user's open files, or add a
 // check that closes that gap, before it treats the open-file half as
 // machine-wide.
 //
-// Binary is the executable basename a running old broker carries, taken from
-// this process's own executable rather than configured or guessed. Timeout
-// bounds one census command. OpenFiles and Processes are the census tools as
+// The same-user open-handle census is the primary proof.
+//
+// Binary is this process's executable basename, matched in addition to
+// config.Defaults.BinaryName. Timeout bounds one census command.
+// OpenFiles and Processes are the census tools as
 // resolved at construction. Neither question is asked about a process's
-// environment or arguments, and none is ever read.
+// environment or arguments beyond argv[0], and none is ever read.
 type OSWriterCensus struct {
 	Binary  string
 	Timeout time.Duration
@@ -58,10 +61,8 @@ type OSWriterCensus struct {
 	Processes string
 }
 
-// NewOSWriterCensus builds the census this executable can perform: the name it
-// looks for is its own, so there is no second place that decides what a Waggle
-// process is called, and the tools it will run are found now rather than at the
-// moment an answer is needed.
+// NewOSWriterCensus resolves its own executable basename and the census tools.
+// Process matching also uses the canonical binary name from config.
 //
 // The census it returns sees the invoking user's open files and every user's
 // processes; see OSWriterCensus for what that does not cover.

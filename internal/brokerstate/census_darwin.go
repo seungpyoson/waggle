@@ -11,12 +11,14 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/seungpyoson/waggle/internal/config"
 )
 
 // The census tools of the initial native target. lsof locates a file by device
 // and inode, so it answers for the store's identity rather than for a pathname,
-// and ps reports the executable of every process, so a running old broker is
-// found by what it is rather than by a PID file it may have outlived.
+// and ps reports the argv[0] name of every process. The handle census is the
+// primary proof; a process name is not executable identity.
 const (
 	openFilesCommand = "lsof"
 	processesCommand = "ps"
@@ -24,8 +26,8 @@ const (
 	// and command name of a process set, and the descriptor and name of each
 	// file it holds. Environments and arguments are never requested.
 	openFilesFields = "-Fpcfn"
-	// processesFormat prints one line per process as "<pid> <executable>". comm
-	// is the executable, not the command line: arguments stay unread.
+	// processesFormat prints one line per process as "<pid> <argv[0]>". comm
+	// reports the process name; subsequent arguments stay unread.
 	processesFormat = "-axo"
 	processesFields = "pid=,comm="
 	// nothingFound is lsof's exit status when it could not locate a search item.
@@ -36,7 +38,7 @@ const (
 	// operator reads in a conversion report. It is not a promise of a
 	// machine-wide census: see the OSWriterCensus documentation for what an
 	// unprivileged open-file census cannot see.
-	censusScope = "same-user open files; all users' processes by executable name"
+	censusScope = "all users' processes matched by their argv[0] name (ps comm); same-user open handles; the handle census is the primary proof"
 )
 
 // Scope reports the reach of the answers this census gives, so a conversion
@@ -118,8 +120,8 @@ func (c OSWriterCensus) holdersOf(ctx context.Context, path string) ([]Handle, e
 	return handles, nil
 }
 
-// WaggleProcesses reports every running process whose executable carries the
-// Waggle basename, whichever user started it, except this one: the process
+// WaggleProcesses matches argv[0] basenames against the canonical binary name
+// and its own basename, whichever user started it, except this one: the process
 // taking the census is not a writer it has to wait for.
 //
 // A process that has exited but has not been reaped is still listed, under its
@@ -236,8 +238,8 @@ func parseOpenFiles(out []byte) ([]Handle, error) {
 }
 
 // parseProcesses reads the process listing and keeps the processes running the
-// named executable, except self. The executable is the rest of the line, spaces
-// and all, so a Waggle installed under a pathname with spaces is still counted.
+// canonical or own argv[0] basename, except self. The name is the rest of the
+// line, spaces and all, so a pathname with spaces is still counted.
 func parseProcesses(out []byte, binary string, self int) ([]Handle, error) {
 	var found []Handle
 	listed := 0
@@ -260,7 +262,7 @@ func parseProcesses(out []byte, binary string, self int) ([]Handle, error) {
 			return nil, fmt.Errorf("process census names no executable for process %d", pid)
 		}
 		listed++
-		if pid == self || filepath.Base(executable) != binary {
+		if pid == self || (filepath.Base(executable) != config.Defaults.BinaryName && filepath.Base(executable) != binary) {
 			continue
 		}
 		found = append(found, Handle{PID: pid, Command: filepath.Base(executable), Path: executable})

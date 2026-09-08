@@ -55,6 +55,7 @@ func ValidateDefaults() error {
 }
 
 var Defaults = struct {
+	BinaryName string
 	DirName    string
 	DBFile     string
 	PIDFile    string
@@ -101,6 +102,7 @@ var Defaults = struct {
 	TaskStaleThreshold time.Duration
 	MaxTaskTTL         int
 }{
+	BinaryName: "waggle",
 	DirName:    ".waggle",
 	DBFile:     "state.db",
 	PIDFile:    "waggle-v2.pid",

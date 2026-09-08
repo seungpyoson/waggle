@@ -51,7 +51,7 @@ func TestCensusHelperProcess(t *testing.T) {
 // it only hopes has started. stop ends it and reaps it, so the process is truly
 // gone from the machine's listing and not left as a zombie the census would
 // still see.
-func censusHelper(t *testing.T, name, hold string) (pid int, executable string, stop func()) {
+func censusHelper(t *testing.T, name, hold string, argv0 ...string) (pid int, executable string, stop func()) {
 	t.Helper()
 	self, err := os.Executable()
 	if err != nil {
@@ -67,6 +67,9 @@ func censusHelper(t *testing.T, name, hold string) (pid int, executable string, 
 	}
 
 	child := exec.Command(target, "-test.run=^TestCensusHelperProcess$")
+	if len(argv0) > 0 {
+		child.Args[0] = argv0[0]
+	}
 	child.Env = append(os.Environ(), censusHelperEnv+"=1", censusHelperFile+"="+hold)
 	input, err := child.StdinPipe()
 	if err != nil {
@@ -427,7 +430,7 @@ func TestParseProcessesMatchesBasenameAndExcludesSelf(t *testing.T) {
 		t.Fatalf("processes = %+v, want %+v", processes, want)
 	}
 	if processes, err := parseProcesses([]byte(out), "waggle-shim", 1); err != nil ||
-		len(processes) != 1 || processes[0].PID != 503 {
+		len(processes) != 4 || processes[2].PID != 503 {
 		t.Fatalf("basename match = %+v, %v", processes, err)
 	}
 }
@@ -446,5 +449,26 @@ func TestParseProcessesRefusesUnreadableOutput(t *testing.T) {
 				t.Fatalf("parsed %q as %+v", out, processes)
 			}
 		})
+	}
+}
+
+func TestProcessCensusMatchesCanonicalNameFromRenamedBinary(t *testing.T) {
+	processes, err := parseProcesses([]byte("501 "+config.Defaults.BinaryName+"\n502 /opt/waggle-review\n503 /opt/unrelated\n"), "waggle-review", 502)
+	if err != nil || len(processes) != 1 || processes[0].PID != 501 {
+		t.Fatalf("renamed census missed canonical argv[0]: %+v, %v", processes, err)
+	}
+}
+
+func TestOSWriterCensusDetectsCanonicalArgvZero(t *testing.T) {
+	census := testCensus(t)
+	census.Binary = "waggle-review"
+	pid, _, stop := censusHelper(t, censusBinaryName(t), "", config.Defaults.BinaryName)
+	defer stop()
+	processes, err := census.WaggleProcesses(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !holds(processes, pid, config.Defaults.BinaryName) {
+		t.Fatalf("renamed census missed canonical argv[0] pid %d: %+v", pid, processes)
 	}
 }
