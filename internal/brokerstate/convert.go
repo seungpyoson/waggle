@@ -92,11 +92,14 @@ type WriterCensus interface {
 	Scope() string
 }
 
-// DomainUpgrade upgrades the domain schema inside the conversion transaction,
-// through the same scoped capability every other domain transaction gets. It
-// returns the legacy tables it moved aside under a retired name, which the
-// report names for the operator. It must refuse a store it cannot account for.
-type DomainUpgrade func(*WriteTx) ([]string, error)
+// DomainUpgrade checks the source read-only before snapshotting, then applies
+// the upgrade inside the conversion transaction. Check runs again inside that
+// transaction so a change since preflight cannot evade the domain's rules.
+// Apply returns any legacy tables it preserved under retired names.
+type DomainUpgrade struct {
+	Check func(Reader) error
+	Apply func(*WriteTx) ([]string, error)
+}
 
 // Report is what an operator sees after a conversion or a rollback. A rollback
 // restores the snapshot as VACUUM INTO wrote it, so the store it leaves behind
@@ -166,7 +169,7 @@ func Convert(ctx context.Context, cfg ConversionConfig, census WriterCensus, ins
 	if err := cfg.Validate(); err != nil {
 		return Report{}, err
 	}
-	if census == nil || inspector == nil || upgrade == nil {
+	if census == nil || inspector == nil || upgrade.Check == nil || upgrade.Apply == nil {
 		return Report{}, fmt.Errorf("conversion requires a writer census, process identity and a domain upgrade")
 	}
 	if err := requireRegularFile(cfg.Database); err != nil {
@@ -184,7 +187,7 @@ func Convert(ctx context.Context, cfg ConversionConfig, census WriterCensus, ins
 	}
 	// The source is examined read-only first, so a store this conversion must
 	// refuse is never opened for writing and never gains a snapshot.
-	if err := requireLegacyVersion(ctx, cfg); err != nil {
+	if err := preflightLegacyStore(ctx, cfg, upgrade.Check); err != nil {
 		return Report{}, err
 	}
 
@@ -225,7 +228,10 @@ func Convert(ctx context.Context, cfg ConversionConfig, census WriterCensus, ins
 		// census, since no incarnation owns a legacy store.
 		tx := &WriteTx{state: &transactionState{conn: conn, ctx: deadline, active: true}}
 		defer func() { tx.state.mu.Lock(); tx.state.active = false; tx.state.mu.Unlock() }()
-		preserved, err := upgrade(tx)
+		if err := upgrade.Check(tx); err != nil {
+			return fmt.Errorf("check domain schema: %w", err)
+		}
+		preserved, err := upgrade.Apply(tx)
 		if err != nil {
 			return fmt.Errorf("upgrade domain schema: %w", err)
 		}
@@ -483,11 +489,21 @@ func describe(handles []Handle) string {
 	return out
 }
 
-// requireLegacyVersion reads the version record without opening the store for
-// writing, so a refusal cannot touch it.
-func requireLegacyVersion(ctx context.Context, cfg ConversionConfig) error {
+// preflightLegacyStore checks the version and domain through one read-only
+// snapshot, before creating an undo copy or opening the source for writing.
+func preflightLegacyStore(ctx context.Context, cfg ConversionConfig, check func(Reader) error) error {
 	return readOnly(ctx, cfg, func(ctx context.Context, db *sql.DB) error {
-		return legacyVersion(ctx, db)
+		return reserved(ctx, db, readAccess, func(conn *sql.Conn) error {
+			if err := legacyVersion(ctx, conn); err != nil {
+				return err
+			}
+			tx := &ReadTx{state: &transactionState{conn: conn, ctx: ctx, active: true}}
+			defer func() { tx.state.mu.Lock(); tx.state.active = false; tx.state.mu.Unlock() }()
+			if err := check(tx); err != nil {
+				return fmt.Errorf("check legacy domain before snapshot: %w", err)
+			}
+			return nil
+		})
 	})
 }
 

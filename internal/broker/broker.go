@@ -118,25 +118,34 @@ var legacyStorageTables = []string{"schema_version", "tasks"}
 // refuses a store containing anything it does not recognize rather than run
 // CREATE statements into unknown state, and reports the legacy tables it moved
 // aside. The store it leaves behind is prepared, so activation remains separate.
-func UpgradeDomain(tx *brokerstate.WriteTx) ([]string, error) {
+var UpgradeDomain = brokerstate.DomainUpgrade{Check: checkLegacyDomain, Apply: upgradeDomain}
+
+func checkLegacyDomain(tx brokerstate.Reader) error {
 	tables, err := userTables(tx)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	legacyMessages := false
 	for _, name := range tables {
 		switch {
 		case slices.Contains(legacyStorageTables, name):
 		case name == legacyMessagesTable:
-			legacyMessages = true
 		case strings.HasPrefix(name, "sqlite_"):
 			// SQLite's own bookkeeping (sqlite_sequence, sqlite_stat1).
 		default:
-			return nil, fmt.Errorf("legacy store carries unrecognized table %q; conversion refuses a store it cannot account for", name)
+			return fmt.Errorf("legacy store carries unrecognized table %q; conversion refuses a store it cannot account for", name)
 		}
 	}
+	_, err = tasks.LegacyColumns(tx)
+	return err
+}
+
+func upgradeDomain(tx *brokerstate.WriteTx) ([]string, error) {
+	tables, err := userTables(tx)
+	if err != nil {
+		return nil, err
+	}
 	var preserved []string
-	if legacyMessages {
+	if slices.Contains(tables, legacyMessagesTable) {
 		// Renaming carries the legacy index with the table, so the native
 		// schema's own index names stay free.
 		if _, err := tx.Exec("ALTER TABLE " + legacyMessagesTable + " RENAME TO " + retiredMessagesTable); err != nil {
@@ -160,15 +169,26 @@ func domainSchema(tx *brokerstate.WriteTx, installTasks func(*brokerstate.WriteT
 	return err
 }
 
-func userTables(tx *brokerstate.WriteTx) ([]string, error) {
+func userTables(tx brokerstate.Reader) ([]string, error) {
 	var names []string
-	if err := tx.Query("SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name", nil, func(rows *sql.Rows) error {
+	if err := tx.Query("SELECT type, name FROM sqlite_schema WHERE type IN ('table','view','trigger','index') ORDER BY name", nil, func(rows *sql.Rows) error {
 		for rows.Next() {
-			var name string
-			if err := rows.Scan(&name); err != nil {
+			var kind, name string
+			if err := rows.Scan(&kind, &name); err != nil {
 				return err
 			}
-			names = append(names, name)
+			switch kind {
+			case "table":
+				names = append(names, name)
+			case "index":
+				if name == "idx_tasks_claimable" || name == "idx_tasks_idempotency" ||
+					name == "idx_messages_to_name" || strings.HasPrefix(name, "sqlite_autoindex_") {
+					continue
+				}
+				fallthrough
+			default:
+				return fmt.Errorf("legacy store carries unrecognized %s %q; conversion refuses a store it cannot account for", kind, name)
+			}
 		}
 		return nil
 	}); err != nil {

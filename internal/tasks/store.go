@@ -137,6 +137,27 @@ const legacyTTLColumn = "ttl"
 // sequence is carried across explicitly: dropping the renamed table would
 // otherwise discard it and let a later task reuse a retired id.
 func UpgradeFromV1(tx *brokerstate.WriteTx) error {
+	found, err := LegacyColumns(tx)
+	if err != nil {
+		return err
+	}
+	columns := strings.Join(found, ", ")
+	_, err = tx.Exec(`
+	ALTER TABLE tasks RENAME TO tasks_v1;
+	DROP INDEX idx_tasks_claimable;
+	DROP INDEX idx_tasks_idempotency;
+	` + Schema() + `
+	INSERT INTO tasks (` + columns + `) SELECT ` + columns + ` FROM tasks_v1;
+	DELETE FROM sqlite_sequence WHERE name = 'tasks';
+	UPDATE sqlite_sequence SET name = 'tasks' WHERE name = 'tasks_v1';
+	DROP TABLE tasks_v1;
+	`)
+	return err
+}
+
+// LegacyColumns checks the two recognized legacy shapes. Preflight and the
+// rebuild use the same rule, through the caller's existing read capability.
+func LegacyColumns(tx brokerstate.Reader) ([]string, error) {
 	var found []string
 	if err := tx.Query("SELECT name FROM pragma_table_info('tasks') ORDER BY cid", nil, func(rows *sql.Rows) error {
 		for rows.Next() {
@@ -148,24 +169,13 @@ func UpgradeFromV1(tx *brokerstate.WriteTx) error {
 		}
 		return nil
 	}); err != nil {
-		return fmt.Errorf("read legacy tasks columns: %w", err)
+		return nil, fmt.Errorf("read legacy tasks columns: %w", err)
 	}
 	if !isLegacyShape(found) {
-		return fmt.Errorf("unrecognized legacy tasks table: columns are [%s], expected [%s] with an optional trailing %s",
+		return nil, fmt.Errorf("unrecognized legacy tasks table: columns are [%s], expected [%s] with an optional trailing %s",
 			strings.Join(found, " "), strings.Join(legacyColumns, " "), legacyTTLColumn)
 	}
-	columns := strings.Join(found, ", ")
-	_, err := tx.Exec(`
-	ALTER TABLE tasks RENAME TO tasks_v1;
-	DROP INDEX idx_tasks_claimable;
-	DROP INDEX idx_tasks_idempotency;
-	` + Schema() + `
-	INSERT INTO tasks (` + columns + `) SELECT ` + columns + ` FROM tasks_v1;
-	DELETE FROM sqlite_sequence WHERE name = 'tasks';
-	UPDATE sqlite_sequence SET name = 'tasks' WHERE name = 'tasks_v1';
-	DROP TABLE tasks_v1;
-	`)
-	return err
+	return found, nil
 }
 
 // isLegacyShape accepts the two shapes a real v1 store has: as created, and as

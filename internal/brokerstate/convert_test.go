@@ -605,6 +605,38 @@ func TestConvertRefusesNonLegacyAndDuplicateVersions(t *testing.T) {
 	})
 }
 
+// Foreign schema is a refusal before any undo artifact is created.
+func TestConvertRefusesForeignSchemaBeforeSnapshot(t *testing.T) {
+	for _, object := range []struct{ name, ddl string }{
+		{"open_tasks", "CREATE VIEW open_tasks AS SELECT id FROM tasks"},
+		{"task_audit", "CREATE TRIGGER task_audit AFTER INSERT ON tasks BEGIN UPDATE tasks SET priority = 1 WHERE id = NEW.id; END"},
+		{"custom_task_index", "CREATE INDEX custom_task_index ON tasks(type)"},
+		{"extra", "ALTER TABLE tasks ADD COLUMN extra TEXT"},
+		{"watches", "CREATE TABLE watches (id INTEGER PRIMARY KEY)"},
+	} {
+		t.Run(object.name, func(t *testing.T) {
+			dir := t.TempDir()
+			paths := testPaths(t, dir)
+			newLegacyStore(t, dir, fieldShapes()[1])
+			db := openDB(t, paths.DB, "rw")
+			exec(t, db, object.ddl)
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+			before := fileHash(t, paths.DB)
+			_, err := brokerstate.Convert(t.Context(), brokerstate.NewConversionConfig(paths), &censusFixture{}, statetest.Process{}, broker.UpgradeDomain)
+			if err == nil || !strings.Contains(err.Error(), object.name) {
+				t.Errorf("convert = %v, want a refusal naming %s", err, object.name)
+			}
+			if fileHash(t, paths.DB) != before {
+				t.Error("refused conversion changed the source")
+			}
+			mustNotExist(t, paths.SnapshotDir)
+			mustHaveNoSidecars(t, paths.DB)
+		})
+	}
+}
+
 // TestConvertBlocksOnCensus proves an uncertain or occupied census stops the
 // conversion before anything is written, including the snapshot.
 func TestConvertBlocksOnCensus(t *testing.T) {
