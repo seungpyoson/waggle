@@ -1,47 +1,67 @@
 package cmd
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
-
-	"github.com/seungpyoson/waggle/internal/config"
-	rt "github.com/seungpyoson/waggle/internal/runtime"
 )
 
-func TestSpawnRegistersRuntimeWatchInSharedStore(t *testing.T) {
-	home := t.TempDir()
+func TestSpawnMissingBrokerDoesNotLaunchOrCreateRegistration(t *testing.T) {
+	home, commands := t.TempDir(), t.TempDir()
 	t.Setenv("HOME", home)
-
-	ok, msg := registerSpawnRuntimeWatch("proj-spawn", "worker-1")
-	if !ok {
-		t.Fatalf("registerSpawnRuntimeWatch failed: %s", msg)
+	t.Setenv("PATH", commands)
+	t.Setenv("WAGGLE_PROJECT_ID", "spawn-test")
+	t.Setenv("TERM_PROGRAM", "Apple_Terminal")
+	marker := filepath.Join(commands, "launched")
+	t.Setenv("SPAWN_LAUNCH_LOG", marker)
+	if err := os.WriteFile(filepath.Join(commands, "osascript"), []byte("#!/bin/sh\nprintf x >> \"$SPAWN_LAUNCH_LOG\"\n"), 0700); err != nil {
+		t.Fatal(err)
 	}
-
-	store, err := rt.OpenStore(config.NewPaths("proj-spawn"))
-	if err != nil {
-		t.Fatalf("open runtime store: %v", err)
+	stdout, _, err := executeRootCommandForTestWithError(t, "spawn", "--name", "worker")
+	if err == nil || !strings.Contains(err.Error(), "broker unavailable; run waggle start") || strings.Contains(stdout, `"ok": true`) {
+		t.Fatalf("missing broker reported launch success: stdout=%q err=%v", stdout, err)
 	}
-	defer store.Close()
-
-	watches, err := store.ListWatches()
-	if err != nil {
-		t.Fatalf("list watches: %v", err)
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("missing broker launched terminal: %v", err)
 	}
-	if len(watches) != 1 {
-		t.Fatalf("watch count = %d, want 1", len(watches))
-	}
-	if watches[0].ProjectID != "proj-spawn" || watches[0].AgentName != "worker-1" || watches[0].Source != "spawn" {
-		t.Fatalf("watch = %+v, want proj-spawn/worker-1/spawn", watches[0])
+	entries, err := os.ReadDir(home)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("failed launch created state: %v %v", entries, err)
 	}
 }
 
-func TestSpawnRuntimeWatchRegistrationFailsWithoutRuntimePath(t *testing.T) {
-	t.Setenv("HOME", "")
+func TestSpawnRejectsArgumentsAndEmptyLabel(t *testing.T) {
+	t.Setenv("WAGGLE_PROJECT_ID", "spawn-test")
+	for _, args := range [][]string{
+		{"spawn", "unexpected", "--name", "worker"},
+		{"spawn", "--name", " "},
+	} {
+		if _, _, err := executeRootCommandForTestWithError(t, args...); err == nil {
+			t.Fatalf("invalid spawn accepted: %v", args)
+		}
+	}
+}
 
-	ok, msg := registerSpawnRuntimeWatch("proj-spawn", "worker-1")
-	if ok {
-		t.Fatal("expected runtime watch registration to fail without HOME")
+func TestAllCommandHelpWorksWithoutProjectBrokerOrTools(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PATH", "")
+	t.Setenv("WAGGLE_PROJECT_ID", "")
+	t.Setenv("WAGGLE_ROOT", "")
+	t.Chdir(t.TempDir())
+	var visit func([]string)
+	visit = func(path []string) {
+		command, _, err := rootCmd.Find(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stdout, _, err := executeRootCommandForTestWithError(t, append(append([]string{}, path...), "--help")...)
+		if err != nil || !strings.Contains(stdout, "Usage:") {
+			t.Fatalf("help failed for %v: %q %v", path, stdout, err)
+		}
+		for _, child := range command.Commands() {
+			visit(append(append([]string{}, path...), child.Name()))
+		}
 	}
-	if msg == "" {
-		t.Fatal("expected runtime watch registration error message")
-	}
+	visit(nil)
 }

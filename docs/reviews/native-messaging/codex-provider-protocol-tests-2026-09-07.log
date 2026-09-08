@@ -1,0 +1,306 @@
+RUST_MIN_STACK=8388608 NEXTEST_PROFILE=local cargo nextest run --no-fail-fast "$@"
+   Compiling codex-app-server-protocol v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/app-server-protocol)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 14.52s
+────────────
+ Nextest run ID f3ae6234-82c1-410a-997b-2f30d60f9164 with nextest profile: local
+    Starting 298 tests across 1 binary (1 test skipped)
+        PASS [   0.012s] (  1/298) codex-app-server-protocol experimental_api::tests::derive_supports_all_enum_variant_shapes
+        PASS [   0.013s] (  2/298) codex-app-server-protocol experimental_api::tests::derive_marks_optional_experimental_fields_when_some
+        PASS [   0.012s] (  3/298) codex-app-server-protocol experimental_api::tests::derive_supports_nested_experimental_fields
+        PASS [   0.013s] (  4/298) codex-app-server-protocol experimental_api::tests::derive_supports_nested_collections
+        PASS [   0.012s] (  5/298) codex-app-server-protocol experimental_api::tests::derive_supports_nested_maps
+        PASS [   0.013s] (  6/298) codex-app-server-protocol export::tests::build_flat_v2_schema_keeps_shared_root_schemas_and_dependencies
+        PASS [   0.013s] (  7/298) codex-app-server-protocol export::tests::build_schema_bundle_rewrites_root_helper_refs_to_namespaced_defs
+        PASS [   0.014s] (  8/298) codex-app-server-protocol export::tests::experimental_type_fields_ts_filter_handles_generated_command_params_shape
+        PASS [   0.016s] (  9/298) codex-app-server-protocol export::tests::experimental_type_fields_ts_filter_handles_interface_shape
+        PASS [   0.015s] ( 10/298) codex-app-server-protocol export::tests::experimental_type_fields_ts_filter_keeps_imports_used_in_intersection_suffix
+        PASS [   0.815s] ( 11/298) codex-app-server-protocol export::tests::generate_json_includes_remote_control_methods_with_experimental_api
+        PASS [   0.048s] ( 12/298) codex-app-server-protocol export::tests::stable_schema_filter_removes_mock_experimental_method
+        PASS [   0.014s] ( 13/298) codex-app-server-protocol export::tests::stable_schema_filter_removes_mock_thread_start_field
+        PASS [   1.281s] ( 14/298) codex-app-server-protocol export::tests::generate_json_filters_experimental_fields_and_methods
+        PASS [   0.020s] ( 15/298) codex-app-server-protocol export::tests::generate_ts_with_experimental_api_retains_experimental_entries
+        PASS [   0.507s] ( 16/298) codex-app-server-protocol precomputed_exports_tests::precomputed_exports_are_written_to_disk
+        PASS [   0.109s] ( 17/298) codex-app-server-protocol export::tests::generated_ts_optional_nullable_fields_only_in_params
+        PASS [   0.010s] ( 18/298) codex-app-server-protocol protocol::common::common_tests::client_response_payload_serializes_without_an_intermediate_json_value
+        PASS [   0.013s] ( 19/298) codex-app-server-protocol protocol::common::common_tests::interrupt_conversation_payload_stays_jsonrpc_only
+        PASS [   0.012s] ( 20/298) codex-app-server-protocol protocol::common::tests::account_defaults_legacy_bedrock_managed_credentials_flag
+        PASS [   0.015s] ( 21/298) codex-app-server-protocol protocol::common::tests::account_serializes_fields_in_camel_case
+        PASS [   0.011s] ( 22/298) codex-app-server-protocol protocol::common::tests::client_request_serialization_scope_covers_keyed_families
+        PASS [   0.011s] ( 23/298) codex-app-server-protocol protocol::common::tests::client_request_serialization_scope_covers_unkeyed_representatives
+        PASS [   0.012s] ( 24/298) codex-app-server-protocol protocol::common::tests::command_exec_permission_profile_is_marked_experimental
+        PASS [   0.013s] ( 25/298) codex-app-server-protocol protocol::common::tests::command_execution_request_approval_additional_permissions_is_marked_experimental
+        PASS [   0.011s] ( 26/298) codex-app-server-protocol protocol::common::tests::conversation_id_deserializes_from_plain_string
+        PASS [   0.010s] ( 27/298) codex-app-server-protocol protocol::common::tests::conversation_id_serializes_as_plain_string
+        PASS [   0.012s] ( 28/298) codex-app-server-protocol protocol::common::tests::deserialize_initialize_capabilities
+        PASS [   0.011s] ( 29/298) codex-app-server-protocol protocol::common::tests::deserialize_legacy_get_account_token_usage_response
+        PASS [   0.014s] ( 30/298) codex-app-server-protocol protocol::common::tests::environment_add_is_marked_experimental
+        PASS [   0.011s] ( 31/298) codex-app-server-protocol protocol::common::tests::jsonrpc_request_conversion_preserves_serde_enum_decoding
+        PASS [   0.012s] ( 32/298) codex-app-server-protocol protocol::common::tests::mock_experimental_method_is_marked_experimental
+        PASS [   0.206s] ( 33/298) codex-app-server-protocol precomputed_exports_tests::typescript_export_options_preserve_generator_behavior
+        PASS [   0.011s] ( 34/298) codex-app-server-protocol protocol::common::tests::serialize_account_login_api_key
+        PASS [   0.013s] ( 35/298) codex-app-server-protocol protocol::common::tests::serialize_account_login_amazon_bedrock
+        PASS [   0.013s] ( 36/298) codex-app-server-protocol protocol::common::tests::serialize_account_login_chatgpt
+        PASS [   0.013s] ( 37/298) codex-app-server-protocol protocol::common::tests::serialize_account_login_chatgpt_auth_tokens
+        PASS [   0.012s] ( 38/298) codex-app-server-protocol protocol::common::tests::serialize_account_login_chatgpt_streamlined
+        PASS [   0.013s] ( 39/298) codex-app-server-protocol protocol::common::tests::serialize_account_login_chatgpt_device_code
+        PASS [   0.011s] ( 40/298) codex-app-server-protocol protocol::common::tests::serialize_account_login_chatgpt_with_hosted_success_page
+        PASS [   0.011s] ( 41/298) codex-app-server-protocol protocol::common::tests::serialize_account_logout
+        PASS [   0.015s] ( 42/298) codex-app-server-protocol protocol::common::tests::serialize_chatgpt_auth_tokens_refresh_request
+        PASS [   0.015s] ( 43/298) codex-app-server-protocol protocol::common::tests::serialize_attestation_generate_request
+        PASS [   0.016s] ( 44/298) codex-app-server-protocol protocol::common::tests::serialize_client_notification
+        PASS [   0.016s] ( 45/298) codex-app-server-protocol protocol::common::tests::serialize_client_response
+        PASS [   0.012s] ( 46/298) codex-app-server-protocol protocol::common::tests::serialize_config_requirements_read
+        PASS [   0.012s] ( 47/298) codex-app-server-protocol protocol::common::tests::serialize_current_time_read_request
+        PASS [   0.013s] ( 48/298) codex-app-server-protocol protocol::common::tests::serialize_environment_add
+        PASS [   0.013s] ( 49/298) codex-app-server-protocol protocol::common::tests::serialize_fs_get_metadata
+        PASS [   0.012s] ( 50/298) codex-app-server-protocol protocol::common::tests::serialize_fs_watch
+        PASS [   0.014s] ( 51/298) codex-app-server-protocol protocol::common::tests::serialize_get_account
+        PASS [   0.013s] ( 52/298) codex-app-server-protocol protocol::common::tests::serialize_get_account_rate_limits
+        PASS [   0.012s] ( 53/298) codex-app-server-protocol protocol::common::tests::serialize_get_account_thread_usage
+        PASS [   0.012s] ( 54/298) codex-app-server-protocol protocol::common::tests::serialize_get_account_token_usage
+        PASS [   0.011s] ( 55/298) codex-app-server-protocol protocol::common::tests::serialize_get_conversation_summary
+        PASS [   0.016s] ( 56/298) codex-app-server-protocol protocol::common::tests::serialize_initialize_capabilities
+        PASS [   0.017s] ( 57/298) codex-app-server-protocol protocol::common::tests::serialize_get_workspace_messages
+        PASS [   0.017s] ( 58/298) codex-app-server-protocol protocol::common::tests::serialize_installed_apps
+        PASS [   0.016s] ( 59/298) codex-app-server-protocol protocol::common::tests::serialize_installed_apps_response
+        PASS [   0.012s] ( 60/298) codex-app-server-protocol protocol::common::tests::serialize_list_collaboration_modes
+        PASS [   0.012s] ( 61/298) codex-app-server-protocol protocol::common::tests::serialize_list_apps
+        PASS [   0.012s] ( 62/298) codex-app-server-protocol protocol::common::tests::serialize_list_experimental_features
+        PASS [   0.012s] ( 63/298) codex-app-server-protocol protocol::common::tests::serialize_list_experimental_features_with_thread_id
+        PASS [   0.012s] ( 64/298) codex-app-server-protocol protocol::common::tests::serialize_list_models
+        PASS [   0.012s] ( 65/298) codex-app-server-protocol protocol::common::tests::serialize_mcp_server_elicitation_request
+        PASS [   0.012s] ( 66/298) codex-app-server-protocol protocol::common::tests::serialize_model_provider_capabilities_read
+        PASS [   0.013s] ( 67/298) codex-app-server-protocol protocol::common::tests::serialize_model_safety_buffering_updated_notification
+        PASS [   0.013s] ( 68/298) codex-app-server-protocol protocol::common::tests::serialize_read_apps
+        PASS [   0.013s] ( 69/298) codex-app-server-protocol protocol::common::tests::serialize_server_request
+        PASS [   0.013s] ( 70/298) codex-app-server-protocol protocol::common::tests::serialize_thread_background_terminals_clean
+        PASS [   0.013s] ( 71/298) codex-app-server-protocol protocol::common::tests::serialize_server_response
+        PASS [   0.014s] ( 72/298) codex-app-server-protocol protocol::common::tests::serialize_thread_background_terminals_list
+        PASS [   0.014s] ( 73/298) codex-app-server-protocol protocol::common::tests::serialize_thread_background_terminals_terminate
+        PASS [   0.013s] ( 74/298) codex-app-server-protocol protocol::common::tests::serialize_thread_realtime_append_speech
+        PASS [   0.013s] ( 75/298) codex-app-server-protocol protocol::common::tests::serialize_thread_realtime_output_audio_delta_notification
+        PASS [   0.013s] ( 76/298) codex-app-server-protocol protocol::common::tests::serialize_thread_realtime_start
+        PASS [   0.014s] ( 77/298) codex-app-server-protocol protocol::common::tests::serialize_thread_realtime_start_prompt_default_and_null
+        PASS [   0.012s] ( 78/298) codex-app-server-protocol protocol::common::tests::thread_goal_methods_are_not_marked_experimental
+        PASS [   0.013s] ( 79/298) codex-app-server-protocol protocol::common::tests::serialize_thread_status_changed_notification
+        PASS [   0.011s] ( 80/298) codex-app-server-protocol protocol::common::tests::thread_goal_notifications_are_not_marked_experimental
+        PASS [   0.013s] ( 81/298) codex-app-server-protocol protocol::common::tests::thread_realtime_output_audio_delta_notification_is_marked_experimental
+        PASS [   0.012s] ( 82/298) codex-app-server-protocol protocol::common::tests::thread_realtime_start_is_marked_experimental
+        PASS [   0.011s] ( 83/298) codex-app-server-protocol protocol::common::tests::thread_realtime_started_notification_is_marked_experimental
+        PASS [   0.012s] ( 84/298) codex-app-server-protocol protocol::common::tests::thread_settings_updated_notification_is_marked_experimental
+        PASS [   0.013s] ( 85/298) codex-app-server-protocol protocol::common::tests::thread_section_move_round_trips_and_serializes_by_thread
+        PASS [   0.013s] ( 86/298) codex-app-server-protocol protocol::common::tests::turn_moderation_metadata_notification_is_marked_experimental
+        PASS [   0.013s] ( 87/298) codex-app-server-protocol protocol::event_mapping::tests::collab_resume_begin_maps_to_item_started_resume_agent
+        PASS [   0.015s] ( 88/298) codex-app-server-protocol protocol::event_mapping::tests::exec_command_output_delta_maps_to_command_execution_output_delta
+        PASS [   0.015s] ( 89/298) codex-app-server-protocol protocol::event_mapping::tests::collab_resume_end_maps_to_item_completed_resume_agent
+        PASS [   0.020s] ( 90/298) codex-app-server-protocol protocol::item_builders::tests::guardian_stdin_reviews_preserve_parent_command_history
+        PASS [   0.020s] ( 91/298) codex-app-server-protocol protocol::item_builders::tests::read_command_actions_preserve_native_and_foreign_paths
+        PASS [   0.013s] ( 92/298) codex-app-server-protocol protocol::thread_history::tests::apply_patch_approval_request_updates_active_turn_snapshot_with_file_change
+        PASS [   0.020s] ( 93/298) codex-app-server-protocol protocol::thread_history::tests::assigns_late_exec_completion_to_original_turn
+        PASS [   0.010s] ( 94/298) codex-app-server-protocol protocol::thread_history::tests::builds_multiple_turns_with_reasoning_items
+        PASS [   0.013s] ( 95/298) codex-app-server-protocol protocol::thread_history::tests::canonical_hook_prompt_completion_updates_turn_history
+        PASS [   0.013s] ( 96/298) codex-app-server-protocol protocol::thread_history::tests::changed_rollout_item_reports_new_item_snapshot
+        PASS [   0.015s] ( 97/298) codex-app-server-protocol protocol::thread_history::tests::changed_rollout_item_reports_streaming_item_mutation
+        PASS [   0.012s] ( 98/298) codex-app-server-protocol protocol::thread_history::tests::changed_rollout_item_reports_turn_completion_metadata
+        PASS [   0.014s] ( 99/298) codex-app-server-protocol protocol::thread_history::tests::changed_rollout_item_reports_updated_existing_item_snapshot
+        PASS [   0.014s] (100/298) codex-app-server-protocol protocol::thread_history::tests::changed_rollout_items_dedupe_turn_metadata_snapshots
+        PASS [   0.011s] (101/298) codex-app-server-protocol protocol::thread_history::tests::changed_rollout_items_drop_prior_changes_for_removed_turns
+        PASS [   0.011s] (102/298) codex-app-server-protocol protocol::thread_history::tests::changed_rollout_items_dedupe_updated_item_snapshots
+        PASS [   0.012s] (103/298) codex-app-server-protocol protocol::thread_history::tests::completed_sub_agent_activity_updates_completed_parent_turn
+        PASS [   0.012s] (104/298) codex-app-server-protocol protocol::thread_history::tests::drops_last_turns_on_thread_rollback
+        PASS [   0.013s] (105/298) codex-app-server-protocol protocol::thread_history::tests::error_then_turn_complete_preserves_failed_status
+        PASS [   0.018s] (106/298) codex-app-server-protocol protocol::thread_history::tests::drops_late_turn_scoped_item_for_unknown_turn_id
+        PASS [   0.009s] (107/298) codex-app-server-protocol protocol::thread_history::tests::ignores_plain_user_response_items_in_rollout_replay
+        PASS [   0.009s] (108/298) codex-app-server-protocol protocol::thread_history::tests::ignores_user_message_item_lifecycle_events
+        PASS [   0.010s] (109/298) codex-app-server-protocol protocol::thread_history::tests::indexed_items_stay_with_their_turn_after_rollback
+        PASS [   0.011s] (110/298) codex-app-server-protocol protocol::thread_history::tests::late_turn_aborted_does_not_interrupt_active_turn
+        PASS [   0.012s] (111/298) codex-app-server-protocol protocol::thread_history::tests::late_turn_complete_does_not_close_active_turn
+        PASS [   0.010s] (112/298) codex-app-server-protocol protocol::thread_history::tests::late_turn_complete_with_embedded_error_preserves_active_turn
+        PASS [   0.010s] (113/298) codex-app-server-protocol protocol::thread_history::tests::marks_turn_as_interrupted_when_aborted
+        PASS [   0.010s] (114/298) codex-app-server-protocol protocol::thread_history::tests::out_of_turn_error_does_not_create_or_fail_a_turn
+        PASS [   0.015s] (115/298) codex-app-server-protocol protocol::thread_history::tests::patch_apply_begin_updates_active_turn_snapshot_with_file_change
+        PASS [   0.011s] (116/298) codex-app-server-protocol protocol::thread_history::tests::preserves_agent_message_phase_delivery_and_questions_in_history
+        PASS [   0.012s] (117/298) codex-app-server-protocol protocol::thread_history::tests::preserves_compaction_only_turn
+        PASS [   0.019s] (118/298) codex-app-server-protocol protocol::thread_history::tests::preserves_command_plugin_id_and_redacts_secrets_across_legacy_upsert
+        PASS [   0.013s] (119/298) codex-app-server-protocol protocol::thread_history::tests::preserves_user_message_client_id_from_legacy_event
+        PASS [   0.013s] (120/298) codex-app-server-protocol protocol::thread_history::tests::pushed_duplicates_resolve_to_first_occurrence_before_and_after_indexing
+        PASS [   0.015s] (121/298) codex-app-server-protocol protocol::thread_history::tests::rebuilds_extension_image_generation_item_from_persisted_completion
+        PASS [   0.012s] (122/298) codex-app-server-protocol protocol::thread_history::tests::rebuilds_hook_prompt_items_from_rollout_response_items
+        PASS [   0.013s] (123/298) codex-app-server-protocol protocol::thread_history::tests::rebuilds_sleep_item_from_persisted_completion
+        PASS [   0.011s] (124/298) codex-app-server-protocol protocol::thread_history::tests::rebuilds_user_message_attachments_from_legacy_events
+        PASS [   0.012s] (125/298) codex-app-server-protocol protocol::thread_history::tests::reconstructs_collab_spawn_end_item_with_model_metadata
+        PASS [   0.013s] (126/298) codex-app-server-protocol protocol::thread_history::tests::reconstructs_collab_resume_end_item
+        PASS [   0.012s] (127/298) codex-app-server-protocol protocol::thread_history::tests::reconstructs_declined_guardian_command_item
+        PASS [   0.018s] (128/298) codex-app-server-protocol protocol::thread_history::tests::reconstructs_declined_exec_and_patch_items
+        PASS [   0.011s] (129/298) codex-app-server-protocol protocol::thread_history::tests::reconstructs_dynamic_tool_items_from_request_and_response_events
+        PASS [   0.015s] (130/298) codex-app-server-protocol protocol::thread_history::tests::reconstructs_in_progress_guardian_execve_item
+        PASS [   0.011s] (131/298) codex-app-server-protocol protocol::thread_history::tests::reconstructs_interrupted_send_input_as_completed_collab_call
+        PASS [   0.016s] (132/298) codex-app-server-protocol protocol::thread_history::tests::reconstructs_mcp_tool_result_meta_from_persisted_completion_events
+        PASS [   0.020s] (133/298) codex-app-server-protocol protocol::thread_history::tests::reconstructs_tool_items_from_persisted_completion_events
+        PASS [   0.010s] (134/298) codex-app-server-protocol protocol::thread_history::tests::replays_image_generation_end_events_into_turn_history
+        PASS [   0.010s] (135/298) codex-app-server-protocol protocol::thread_history::tests::review_mode_events_replay_persisted_ids
+        PASS [   0.010s] (136/298) codex-app-server-protocol protocol::thread_history::tests::review_mode_items_replay_without_turn_started
+        PASS [   0.012s] (137/298) codex-app-server-protocol protocol::thread_history::tests::rollback_failed_error_does_not_mark_turn_failed
+        PASS [   0.012s] (138/298) codex-app-server-protocol protocol::thread_history::tests::splits_reasoning_when_interleaved
+        PASS [   0.014s] (139/298) codex-app-server-protocol protocol::thread_history::tests::thread_rollback_clears_all_turns_when_num_turns_exceeds_history
+        PASS [   0.012s] (140/298) codex-app-server-protocol protocol::thread_history::tests::turn_complete_with_embedded_error_marks_turn_failed
+        PASS [   0.013s] (141/298) codex-app-server-protocol protocol::thread_history::tests::uses_explicit_turn_boundaries_for_mid_turn_steering
+        PASS [   0.011s] (142/298) codex-app-server-protocol protocol::thread_history_projection::tests::ignores_legacy_abort_without_turn_id_and_context_only_records
+        PASS [   0.012s] (143/298) codex-app-server-protocol protocol::thread_history_projection::tests::projects_failed_turn_completion_as_snapshot
+        PASS [   0.013s] (144/298) codex-app-server-protocol protocol::thread_history_projection::tests::projects_completed_canonical_turn_items
+        PASS [   0.013s] (145/298) codex-app-server-protocol protocol::thread_history_projection::tests::projects_identified_turn_aborts
+        PASS [   0.016s] (146/298) codex-app-server-protocol protocol::thread_history_projection::tests::projects_optional_completed_item_lifecycle_timestamps
+        PASS [   0.015s] (147/298) codex-app-server-protocol protocol::thread_history_projection::tests::projects_turn_lifecycle_without_prior_builder_state
+        PASS [   0.016s] (148/298) codex-app-server-protocol protocol::v2::remote_control::tests::remote_control_clients_list_params_deserialize_camel_case_fields
+        PASS [   0.014s] (149/298) codex-app-server-protocol protocol::v2::remote_control::tests::remote_control_clients_list_params_serialize_nullable_optional_fields
+        PASS [   0.011s] (150/298) codex-app-server-protocol protocol::v2::remote_control::tests::remote_control_clients_revoke_response_serializes_as_empty_object
+        PASS [   0.011s] (151/298) codex-app-server-protocol protocol::v2::tests::additional_file_system_permissions_preserves_canonical_entries
+        PASS [   0.013s] (152/298) codex-app-server-protocol protocol::v2::tests::additional_file_system_permissions_populates_entries_for_legacy_roots
+        PASS [   0.012s] (153/298) codex-app-server-protocol protocol::v2::tests::approvals_reviewer_serializes_auto_review_and_accepts_legacy_guardian_subagent
+        PASS [   0.015s] (154/298) codex-app-server-protocol protocol::v2::tests::additional_file_system_permissions_rejects_zero_glob_scan_depth
+        PASS [   0.012s] (155/298) codex-app-server-protocol protocol::v2::tests::ask_for_approval_granular_is_marked_experimental
+        PASS [   0.014s] (156/298) codex-app-server-protocol protocol::v2::tests::ask_for_approval_granular_defaults_missing_optional_flags_to_false
+        PASS [   0.013s] (157/298) codex-app-server-protocol protocol::v2::tests::ask_for_approval_granular_round_trips_request_permissions_flag
+        PASS [   0.012s] (158/298) codex-app-server-protocol protocol::v2::tests::automatic_approval_review_deserializes_aborted_status
+        PASS [   0.011s] (159/298) codex-app-server-protocol protocol::v2::tests::client_request_thread_fork_granular_approval_policy_is_marked_experimental
+        PASS [   0.013s] (160/298) codex-app-server-protocol protocol::v2::tests::client_request_thread_resume_granular_approval_policy_is_marked_experimental
+        PASS [   0.012s] (161/298) codex-app-server-protocol protocol::v2::tests::client_request_thread_start_granular_approval_policy_is_marked_experimental
+        PASS [   0.010s] (162/298) codex-app-server-protocol protocol::v2::tests::client_request_turn_start_granular_approval_policy_is_marked_experimental
+        PASS [   0.014s] (163/298) codex-app-server-protocol protocol::v2::tests::codex_error_info_serializes_http_status_code_in_camel_case
+        PASS [   0.014s] (164/298) codex-app-server-protocol protocol::v2::tests::codex_error_info_serializes_active_turn_not_steerable_turn_kind_in_camel_case
+        PASS [   0.010s] (165/298) codex-app-server-protocol protocol::v2::tests::command_exec_output_delta_round_trips
+        PASS [   0.010s] (166/298) codex-app-server-protocol protocol::v2::tests::collab_agent_state_maps_interrupted_status
+        PASS [   0.010s] (167/298) codex-app-server-protocol protocol::v2::tests::command_exec_params_round_trip_with_size
+        PASS [   0.011s] (168/298) codex-app-server-protocol protocol::v2::tests::command_exec_params_default_optional_streaming_flags
+        PASS [   0.012s] (169/298) codex-app-server-protocol protocol::v2::tests::command_exec_params_round_trips_disable_timeout
+        PASS [   0.013s] (170/298) codex-app-server-protocol protocol::v2::tests::command_exec_params_round_trips_disable_output_cap
+        PASS [   0.012s] (171/298) codex-app-server-protocol protocol::v2::tests::command_exec_resize_round_trips
+        PASS [   0.013s] (172/298) codex-app-server-protocol protocol::v2::tests::command_exec_params_round_trips_env_overrides_and_unsets
+        PASS [   0.012s] (173/298) codex-app-server-protocol protocol::v2::tests::command_exec_terminate_round_trips
+        PASS [   0.012s] (174/298) codex-app-server-protocol protocol::v2::tests::command_exec_write_round_trips_close_only_payload
+        PASS [   0.011s] (175/298) codex-app-server-protocol protocol::v2::tests::command_execution_output_delta_round_trips
+        PASS [   0.011s] (176/298) codex-app-server-protocol protocol::v2::tests::command_execution_request_approval_localization_rejects_relative_additional_permission_paths
+        PASS [   0.013s] (177/298) codex-app-server-protocol protocol::v2::tests::config_approvals_reviewer_is_marked_experimental
+        PASS [   0.012s] (178/298) codex-app-server-protocol protocol::v2::tests::config_granular_approval_policy_is_marked_experimental
+        PASS [   0.014s] (179/298) codex-app-server-protocol protocol::v2::tests::config_requirements_granular_allowed_approval_policy_is_marked_experimental
+        PASS [   0.014s] (180/298) codex-app-server-protocol protocol::v2::tests::config_requirements_read_accepts_foreign_path_uris
+        PASS [   0.011s] (181/298) codex-app-server-protocol protocol::v2::tests::core_error_info_converts_to_camel_case
+        PASS [   0.020s] (182/298) codex-app-server-protocol protocol::v2::tests::core_turn_item_into_thread_item_converts_supported_variants
+        PASS [   0.013s] (183/298) codex-app-server-protocol protocol::v2::tests::dynamic_tool_response_serializes_content_items
+        PASS [   0.012s] (184/298) codex-app-server-protocol protocol::v2::tests::external_agent_config_detect_response_defaults_connectors_for_older_servers
+        PASS [   0.015s] (185/298) codex-app-server-protocol protocol::v2::tests::dynamic_tool_response_serializes_text_image_and_audio_content_items
+        PASS [   0.013s] (186/298) codex-app-server-protocol protocol::v2::tests::external_agent_config_import_params_accept_legacy_plugin_details
+        PASS [   0.014s] (187/298) codex-app-server-protocol protocol::v2::tests::external_agent_config_plugins_details_round_trip
+        PASS [   0.013s] (188/298) codex-app-server-protocol protocol::v2::tests::fs_copy_params_round_trip_with_recursive_directory_copy
+        PASS [   0.014s] (189/298) codex-app-server-protocol protocol::v2::tests::fs_changed_notification_round_trips
+        PASS [   0.011s] (190/298) codex-app-server-protocol protocol::v2::tests::fs_get_metadata_response_round_trips_minimal_fields
+        PASS [   0.011s] (191/298) codex-app-server-protocol protocol::v2::tests::fs_create_directory_params_round_trip_with_default_recursive
+        PASS [   0.013s] (192/298) codex-app-server-protocol protocol::v2::tests::fs_read_file_params_round_trip
+        PASS [   0.014s] (193/298) codex-app-server-protocol protocol::v2::tests::fs_read_file_response_round_trips_base64_data
+        PASS [   0.015s] (194/298) codex-app-server-protocol protocol::v2::tests::fs_write_file_params_round_trip_with_base64_data
+        PASS [   0.016s] (195/298) codex-app-server-protocol protocol::v2::tests::guardian_approval_review_action_round_trips_command_shape
+        PASS [   0.012s] (196/298) codex-app-server-protocol protocol::v2::tests::hook_handler_metadata_only_exposes_async_for_commands
+        PASS [   0.013s] (197/298) codex-app-server-protocol protocol::v2::tests::guardian_stdin_review_action_round_trips_native_and_foreign_paths
+        PASS [   0.014s] (198/298) codex-app-server-protocol protocol::v2::tests::managed_hooks_requirements_default_interrupt_to_empty
+        PASS [   0.014s] (199/298) codex-app-server-protocol protocol::v2::tests::legacy_current_working_directory_special_path_deserializes_as_project_roots
+        PASS [   0.015s] (200/298) codex-app-server-protocol protocol::v2::tests::marketplace_remove_response_serializes_nullable_installed_root
+        PASS [   0.016s] (201/298) codex-app-server-protocol protocol::v2::tests::marketplace_add_params_serialization_uses_optional_ref_name_and_sparse_paths
+        PASS [   0.015s] (202/298) codex-app-server-protocol protocol::v2::tests::marketplace_upgrade_params_serialization_uses_optional_marketplace_name
+        PASS [   0.014s] (203/298) codex-app-server-protocol protocol::v2::tests::marketplace_upgrade_response_serializes_camel_case_fields
+        PASS [   0.012s] (204/298) codex-app-server-protocol protocol::v2::tests::mcp_elicitation_preserves_integer_and_number_schema_wire_values
+        PASS [   0.012s] (205/298) codex-app-server-protocol protocol::v2::tests::mcp_elicitation_schema_matches_mcp_2025_11_25_primitives
+        PASS [   0.011s] (206/298) codex-app-server-protocol protocol::v2::tests::mcp_server_elicitation_request_from_core_openai_form_request
+        PASS [   0.011s] (207/298) codex-app-server-protocol protocol::v2::tests::mcp_server_elicitation_request_from_core_form_request
+        PASS [   0.012s] (208/298) codex-app-server-protocol protocol::v2::tests::mcp_server_elicitation_request_rejects_invalid_core_form_schema
+        PASS [   0.012s] (209/298) codex-app-server-protocol protocol::v2::tests::mcp_server_elicitation_request_from_core_url_request
+        PASS [   0.012s] (210/298) codex-app-server-protocol protocol::v2::tests::mcp_server_elicitation_response_round_trips_rmcp_result
+        PASS [   0.012s] (211/298) codex-app-server-protocol protocol::v2::tests::mcp_server_elicitation_request_rejects_null_core_form_schema
+        PASS [   0.011s] (212/298) codex-app-server-protocol protocol::v2::tests::mcp_server_elicitation_response_serializes_nullable_content
+        PASS [   0.011s] (213/298) codex-app-server-protocol protocol::v2::tests::mcp_server_status_accepts_older_inventory_without_runtime_status
+        PASS [   0.012s] (214/298) codex-app-server-protocol protocol::v2::tests::mcp_server_status_serializes_absent_server_info_metadata_as_null
+        PASS [   0.012s] (215/298) codex-app-server-protocol protocol::v2::tests::mcp_server_status_serializes_absent_server_info_as_null
+        PASS [   0.011s] (216/298) codex-app-server-protocol protocol::v2::tests::mcp_server_status_updated_accepts_missing_thread_id
+        PASS [   0.011s] (217/298) codex-app-server-protocol protocol::v2::tests::mcp_server_status_updated_serializes_failure_reason
+        PASS [   0.013s] (218/298) codex-app-server-protocol protocol::v2::tests::mcp_tool_call_app_context_serializes_connector_id
+        PASS [   0.013s] (219/298) codex-app-server-protocol protocol::v2::tests::mcp_tool_call_app_context_serializes_missing_mixed_version_fields_as_null
+        PASS [   0.013s] (220/298) codex-app-server-protocol protocol::v2::tests::network_requirements_deserializes_legacy_fields
+        PASS [   0.013s] (221/298) codex-app-server-protocol protocol::v2::tests::network_requirements_serializes_canonical_and_legacy_fields
+        PASS [   0.011s] (222/298) codex-app-server-protocol protocol::v2::tests::permissions_request_approval_rejects_macos_permissions
+        PASS [   0.012s] (223/298) codex-app-server-protocol protocol::v2::tests::permission_profile_selection_uses_id_string
+        PASS [   0.010s] (224/298) codex-app-server-protocol protocol::v2::tests::permissions_request_approval_response_defaults_scope_to_turn
+        PASS [   0.011s] (225/298) codex-app-server-protocol protocol::v2::tests::permissions_request_approval_response_accepts_strict_auto_review
+        PASS [   0.013s] (226/298) codex-app-server-protocol protocol::v2::tests::permissions_request_approval_response_uses_granted_permission_profile_without_macos
+        PASS [   0.013s] (227/298) codex-app-server-protocol protocol::v2::tests::permissions_request_approval_uses_request_permission_profile
+        PASS [   0.011s] (228/298) codex-app-server-protocol protocol::v2::tests::plugin_install_params_serialization_omits_force_remote_sync
+        PASS [   0.013s] (229/298) codex-app-server-protocol protocol::v2::tests::plugin_availability_deserializes_enabled_alias
+        PASS [   0.011s] (230/298) codex-app-server-protocol protocol::v2::tests::plugin_installed_params_serializes_install_suggestion_names
+        PASS [   0.010s] (231/298) codex-app-server-protocol protocol::v2::tests::plugin_interface_serializes_local_paths_and_remote_urls_separately
+        PASS [   0.012s] (232/298) codex-app-server-protocol protocol::v2::tests::plugin_list_params_deserializes_force_refetch
+        PASS [   0.012s] (233/298) codex-app-server-protocol protocol::v2::tests::plugin_list_params_ignore_removed_force_remote_sync_field
+        PASS [   0.012s] (234/298) codex-app-server-protocol protocol::v2::tests::plugin_list_params_serializes_marketplace_kind_filter
+        PASS [   0.013s] (235/298) codex-app-server-protocol protocol::v2::tests::plugin_marketplace_entry_serializes_remote_only_path_as_null
+        PASS [   0.014s] (236/298) codex-app-server-protocol protocol::v2::tests::plugin_share_list_response_serializes_share_items
+        PASS [   0.014s] (237/298) codex-app-server-protocol protocol::v2::tests::plugin_read_params_serialization_uses_install_source_fields
+        PASS [   0.013s] (238/298) codex-app-server-protocol protocol::v2::tests::plugin_share_params_and_response_serialization_use_camel_case_fields
+        PASS [   0.014s] (239/298) codex-app-server-protocol protocol::v2::tests::plugin_skill_read_params_serialization_uses_remote_plugin_id
+        PASS [   0.012s] (240/298) codex-app-server-protocol protocol::v2::tests::plugin_summary_defaults_missing_availability_to_available
+        PASS [   0.013s] (241/298) codex-app-server-protocol protocol::v2::tests::plugin_source_serializes_local_git_npm_and_remote_variants
+        PASS [   0.012s] (242/298) codex-app-server-protocol protocol::v2::tests::plugin_uninstall_params_serialization_omits_force_remote_sync
+        PASS [   0.012s] (243/298) codex-app-server-protocol protocol::v2::tests::plugin_summary_round_trips_plan_eligibility_metadata
+        PASS [   0.012s] (244/298) codex-app-server-protocol protocol::v2::tests::process_notifications_round_trip
+        PASS [   0.013s] (245/298) codex-app-server-protocol protocol::v2::tests::process_control_params_round_trip
+        PASS [   0.010s] (246/298) codex-app-server-protocol protocol::v2::tests::process_spawn_params_round_trips_without_sandbox_policy
+        PASS [   0.010s] (247/298) codex-app-server-protocol protocol::v2::tests::process_spawn_params_distinguish_omitted_null_and_value_limits
+        PASS [   0.010s] (248/298) codex-app-server-protocol protocol::v2::tests::realtime_append_text_defaults_role_to_user
+        PASS [   0.010s] (249/298) codex-app-server-protocol protocol::v2::tests::realtime_start_deserializes_client_handoff_channel_prefixes
+        PASS [   0.014s] (250/298) codex-app-server-protocol protocol::v2::tests::sandbox_policy_deserializes_legacy_read_only_full_access_field
+        PASS [   0.014s] (251/298) codex-app-server-protocol protocol::v2::tests::realtime_start_omitted_initial_items_remain_none
+        PASS [   0.012s] (252/298) codex-app-server-protocol protocol::v2::tests::sandbox_policy_deserializes_legacy_workspace_write_full_access_field
+        PASS [   0.013s] (253/298) codex-app-server-protocol protocol::v2::tests::sandbox_policy_rejects_legacy_read_only_restricted_access_field
+        PASS [   0.013s] (254/298) codex-app-server-protocol protocol::v2::tests::sandbox_policy_round_trips_external_sandbox_network_access
+        PASS [   0.014s] (255/298) codex-app-server-protocol protocol::v2::tests::sandbox_policy_rejects_legacy_workspace_write_restricted_read_access_field
+        PASS [   0.012s] (256/298) codex-app-server-protocol protocol::v2::tests::sandbox_policy_round_trips_workspace_write_access
+        PASS [   0.012s] (257/298) codex-app-server-protocol protocol::v2::tests::sandbox_policy_round_trips_read_only_network_access
+        PASS [   0.012s] (258/298) codex-app-server-protocol protocol::v2::tests::skills_extra_roots_set_params_rejects_relative_roots
+        PASS [   0.012s] (259/298) codex-app-server-protocol protocol::v2::tests::skills_extra_roots_set_params_serialization_uses_extra_roots
+        PASS [   0.010s] (260/298) codex-app-server-protocol protocol::v2::tests::skills_list_params_serialization_uses_force_reload
+        PASS [   0.011s] (261/298) codex-app-server-protocol protocol::v2::tests::thread_background_terminals_list_response_round_trips_foreign_paths
+        PASS [   0.012s] (262/298) codex-app-server-protocol protocol::v2::tests::thread_fork_last_turn_id_round_trips
+        PASS [   0.011s] (263/298) codex-app-server-protocol protocol::v2::tests::thread_items_list_round_trips
+        PASS [   0.010s] (264/298) codex-app-server-protocol protocol::v2::tests::thread_list_params_accepts_multiple_cwds
+        PASS [   0.011s] (265/298) codex-app-server-protocol protocol::v2::tests::thread_lifecycle_responses_default_missing_optional_fields
+        PASS [   0.011s] (266/298) codex-app-server-protocol protocol::v2::tests::thread_list_params_accepts_section_id_filter
+        PASS [   0.012s] (267/298) codex-app-server-protocol protocol::v2::tests::thread_list_params_accepts_single_cwd
+        PASS [   0.012s] (268/298) codex-app-server-protocol protocol::v2::tests::thread_path_params_deserialize_empty_path_as_none
+        PASS [   0.013s] (269/298) codex-app-server-protocol protocol::v2::tests::thread_list_params_accepts_state_db_only_flag
+        PASS [   0.015s] (270/298) codex-app-server-protocol protocol::v2::tests::thread_resume_params_accept_turns_page_bootstrap
+        PASS [   0.017s] (271/298) codex-app-server-protocol protocol::v2::tests::thread_recency_sort_key_serializes_as_snake_case
+        PASS [   0.015s] (272/298) codex-app-server-protocol protocol::v2::tests::thread_section_list_params_and_response_round_trip
+        PASS [   0.017s] (273/298) codex-app-server-protocol protocol::v2::tests::thread_resume_response_round_trips_initial_turns_page
+        PASS [   0.013s] (274/298) codex-app-server-protocol protocol::v2::tests::thread_section_updates_distinguish_omitted_and_cleared_appearance
+        PASS [   0.013s] (275/298) codex-app-server-protocol protocol::v2::tests::thread_settings_update_params_preserve_explicit_null_service_tier
+        PASS [   0.012s] (276/298) codex-app-server-protocol protocol::v2::tests::thread_shell_command_params_round_trip
+        PASS [   0.012s] (277/298) codex-app-server-protocol protocol::v2::tests::thread_settings_update_params_preserve_field_level_experimental_gates
+        PASS [   0.011s] (278/298) codex-app-server-protocol protocol::v2::tests::thread_shell_command_response_round_trip
+        PASS [   0.011s] (279/298) codex-app-server-protocol protocol::v2::tests::thread_shell_command_params_without_timeout_remain_valid
+        PASS [   0.012s] (280/298) codex-app-server-protocol protocol::v2::tests::thread_sources_round_trip_as_scalar_labels
+        PASS [   0.012s] (281/298) codex-app-server-protocol protocol::v2::tests::thread_start_params_preserve_explicit_null_service_tier
+        PASS [   0.011s] (282/298) codex-app-server-protocol protocol::v2::tests::thread_turns_list_params_accepts_items_view
+        PASS [   0.011s] (283/298) codex-app-server-protocol protocol::v2::tests::thread_start_params_round_trip_multi_agent_mode
+        PASS [   0.012s] (284/298) codex-app-server-protocol protocol::v2::tests::turn_defaults_legacy_missing_items_view_to_full
+        PASS [   0.012s] (285/298) codex-app-server-protocol protocol::v2::tests::tool_request_user_input_params_default_legacy_missing_is_blocking_to_true
+        PASS [   0.013s] (286/298) codex-app-server-protocol protocol::v2::tests::turn_start_params_preserve_empty_environments
+        PASS [   0.014s] (287/298) codex-app-server-protocol protocol::v2::tests::turn_start_cyber_access_program_uses_separate_wire_formats
+        PASS [   0.014s] (288/298) codex-app-server-protocol protocol::v2::tests::turn_start_params_preserve_explicit_null_service_tier
+        PASS [   0.014s] (289/298) codex-app-server-protocol protocol::v2::tests::turn_start_params_round_trip_environments
+        PASS [   0.014s] (290/298) codex-app-server-protocol protocol::v2::tests::turn_start_params_treat_null_or_omitted_environments_as_default
+        PASS [   0.015s] (291/298) codex-app-server-protocol protocol::v2::tests::turn_start_params_round_trip_multi_agent_mode
+        PASS [   0.013s] (292/298) codex-app-server-protocol protocol::v2::tests::user_input_into_core_preserves_media_fields
+        PASS [   0.013s] (293/298) codex-app-server-protocol schema_fixtures::tests::canonicalize_json_sorts_schema_ref_arrays
+        PASS [   0.013s] (294/298) codex-app-server-protocol schema_fixtures::tests::canonicalize_json_sorts_string_arrays
+        PASS [   2.853s] (295/298) codex-app-server-protocol schema_fixtures_tests::json_schema_fixtures_match_generated
+        PASS [   0.154s] (296/298) codex-app-server-protocol schema_fixtures_tests::stable_precomputed_exports_match_schema_fixtures
+        PASS [   0.101s] (297/298) codex-app-server-protocol schema_fixtures_tests::typescript_schema_fixtures_match_generated
+        PASS [   4.374s] (298/298) codex-app-server-protocol schema_fixtures_tests::experimental_precomputed_exports_match_generated
+────────────
+     Summary [   7.703s] 298 tests run: 298 passed, 1 skipped

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"fmt"
 	"hash/fnv"
 	"os"
@@ -54,159 +55,112 @@ func ValidateDefaults() error {
 }
 
 var Defaults = struct {
-	DirName                 string
-	DBFile                  string
-	ConfigFile              string
-	PIDFile                 string
-	LockFile                string
-	LogFile                 string
-	RuntimeDirName          string
-	RuntimeStartLockDirName string
-	RuntimeDBFile           string
-	RuntimePIDFile          string
-	RuntimeLogFile          string
-	RuntimeStateFile        string
-	SignalDirName           string
-	SignalMaxBytes          int64
+	BinaryName string
+	DirName    string
+	DBFile     string
+	PIDFile    string
+	SocketFile string
+	LockFile   string
+	LogFile    string
 
-	ShutdownTimeout                       time.Duration
-	RuntimeNotificationTimeout            time.Duration
-	RuntimeReconnectMaxBackoff            time.Duration
-	RuntimeEphemeralWatchTTL              time.Duration
-	RuntimeDeliveryRetention              time.Duration
-	RuntimeStartLockStaleThreshold        time.Duration
-	RuntimeReconcileInterval              time.Duration
-	RuntimeNotificationRetrySweepInterval time.Duration
-	RuntimeStateRefreshInterval           time.Duration
-	PollInterval                          time.Duration
-	RuntimeNotificationRetryBatchSize     int
-	MaxLogSize                            int64
-	MaxMessageSize                        int64
-	LeaseDuration                         time.Duration
-	IdleTimeout                           time.Duration
-	BusyTimeout                           time.Duration
-	LeaseCheckPeriod                      time.Duration
-	IdleCheckInterval                     time.Duration
-	StartupPollInterval                   time.Duration
-	ShutdownPollInterval                  time.Duration
-	StartupTimeout                        time.Duration
-	DisconnectTimeout                     time.Duration
-	CatchUpMaxRetries                     int
-	RuntimeNotificationRetryLimit         int
-	MaxRetries                            int
-	MaxPriority                           int
-	MaxFieldLength                        int
-	TTLCheckPeriod                        time.Duration
-	AwaitAckDefaultTimeout                time.Duration
-	MaxTTL                                int
-	DefaultMsgPriority                    string
-	ValidMsgPriorities                    []string
+	// The retired broker's IPC names. They are never opened or served: the
+	// native runtime only recognizes them so conversion can report and retire
+	// them. Nothing may fall back to these endpoints.
+	LegacyPIDFile    string
+	LegacySocketFile string
 
-	// Spawn-related defaults
-	SpawnPIDTimeout       time.Duration
-	SpawnPIDPollInterval  time.Duration
-	SpawnStopTimeout      time.Duration
-	SpawnStopPollInterval time.Duration
-	SpawnKillPollInterval time.Duration
-	AgentConfigFile       string
+	// SnapshotDir holds pre-conversion database copies, under DataDir.
+	SnapshotDir string
+
+	// CensusTimeout bounds one command of the offline writer census. The census
+	// walks every process on the machine, so it is far longer than any timeout
+	// on the broker's own path; a command that outruns it is uncertainty, and
+	// uncertainty blocks conversion rather than reporting an empty machine.
+	CensusTimeout time.Duration
+
+	ShutdownTimeout      time.Duration
+	MaxMessageSize       int64
+	LeaseDuration        time.Duration
+	BusyTimeout          time.Duration
+	LeaseCheckPeriod     time.Duration
+	ShutdownPollInterval time.Duration
+	StartupTimeout       time.Duration
+	DisconnectTimeout    time.Duration
+	MaxRetries           int
+	MaxPriority          int
+	MaxFieldLength       int
+
+	// Terminal-launch defaults
+	SpawnLaunchTimeout time.Duration
+	AgentConfigFile    string
 
 	// Connection timeout defaults
-	ConnectTimeout     time.Duration
-	HealthCheckTimeout time.Duration
+	ConnectTimeout time.Duration
 
 	// Task lifecycle defaults
 	TaskTTLCheckPeriod time.Duration
 	TaskStaleThreshold time.Duration
 	MaxTaskTTL         int
-
-	// Runtime observability
-	RuntimeRecentErrorCap int
 }{
-	DirName:                 ".waggle",
-	DBFile:                  "state.db",
-	ConfigFile:              "config.json",
-	PIDFile:                 "waggle.pid",
-	LockFile:                "waggle.lock",
-	LogFile:                 "waggle.log",
-	RuntimeDirName:          "runtime",
-	RuntimeStartLockDirName: "runtime-start.lock",
-	RuntimeDBFile:           "runtime.db",
-	RuntimePIDFile:          "runtime.pid",
-	RuntimeLogFile:          "runtime.log",
-	RuntimeStateFile:        "state.json",
-	SignalDirName:           "signals",
-	SignalMaxBytes:          65536,
+	BinaryName: "waggle",
+	DirName:    ".waggle",
+	DBFile:     "state.db",
+	PIDFile:    "waggle-v2.pid",
+	SocketFile: "broker-v2.sock",
+	LockFile:   "waggle.lock",
+	LogFile:    "waggle.log",
 
-	ShutdownTimeout:                       5 * time.Second,
-	RuntimeNotificationTimeout:            2 * time.Second,
-	RuntimeReconnectMaxBackoff:            30 * time.Second,
-	RuntimeEphemeralWatchTTL:              24 * time.Hour,
-	RuntimeDeliveryRetention:              30 * 24 * time.Hour,
-	RuntimeStartLockStaleThreshold:        10 * time.Second,
-	RuntimeReconcileInterval:              2 * time.Second,
-	RuntimeNotificationRetrySweepInterval: 1 * time.Second,
-	RuntimeStateRefreshInterval:           2 * time.Second,
-	PollInterval:                          500 * time.Millisecond,
-	RuntimeNotificationRetryBatchSize:     128,
-	MaxLogSize:                            10 * 1024 * 1024,
-	MaxMessageSize:                        1024 * 1024, // 1MB buffer for large AI agent payloads
-	LeaseDuration:                         5 * time.Minute,
-	IdleTimeout:                           5 * time.Minute,
-	BusyTimeout:                           5 * time.Second,
-	LeaseCheckPeriod:                      30 * time.Second,
-	IdleCheckInterval:                     1 * time.Second,
-	StartupPollInterval:                   100 * time.Millisecond,
-	ShutdownPollInterval:                  100 * time.Millisecond,
-	StartupTimeout:                        2 * time.Second,
-	DisconnectTimeout:                     2 * time.Second,
-	CatchUpMaxRetries:                     3,
-	RuntimeNotificationRetryLimit:         5,
-	MaxRetries:                            3,
-	MaxPriority:                           100,
-	MaxFieldLength:                        256,
-	TTLCheckPeriod:                        30 * time.Second,
-	AwaitAckDefaultTimeout:                30 * time.Second,
-	MaxTTL:                                86400,
-	DefaultMsgPriority:                    "normal",
-	ValidMsgPriorities:                    []string{"critical", "normal", "bulk"},
+	LegacyPIDFile:    "waggle.pid",
+	LegacySocketFile: "broker.sock",
 
-	SpawnPIDTimeout:       3 * time.Second,
-	SpawnPIDPollInterval:  200 * time.Millisecond,
-	SpawnStopTimeout:      5 * time.Second,
-	SpawnStopPollInterval: 100 * time.Millisecond,
-	SpawnKillPollInterval: 50 * time.Millisecond,
-	AgentConfigFile:       "agents.json",
+	SnapshotDir: "rollback",
 
-	ConnectTimeout:     5 * time.Second,
-	HealthCheckTimeout: 1 * time.Second,
+	CensusTimeout: 30 * time.Second,
+
+	ShutdownTimeout:      5 * time.Second,
+	MaxMessageSize:       1024 * 1024, // 1MB buffer for large AI agent payloads
+	LeaseDuration:        5 * time.Minute,
+	BusyTimeout:          5 * time.Second,
+	LeaseCheckPeriod:     30 * time.Second,
+	ShutdownPollInterval: 100 * time.Millisecond,
+	StartupTimeout:       2 * time.Second,
+	DisconnectTimeout:    2 * time.Second,
+	MaxRetries:           3,
+	MaxPriority:          100,
+	MaxFieldLength:       256,
+
+	SpawnLaunchTimeout: 10 * time.Second,
+	AgentConfigFile:    "agents.json",
+
+	ConnectTimeout: 5 * time.Second,
 
 	TaskTTLCheckPeriod: 30 * time.Second,
 	TaskStaleThreshold: 5 * time.Minute,
 	MaxTaskTTL:         86400, // 24 hours
 
-	RuntimeRecentErrorCap: 20,
 }
 
 type Paths struct {
-	ProjectID           string
-	DataDir             string
-	RuntimeDir          string
-	RuntimeDB           string
-	RuntimePID          string
-	RuntimeLog          string
-	RuntimeState        string
-	RuntimeStartLockDir string
-	RuntimeSignalDir    string
-	DB                  string
-	PID                 string
-	Lock                string
-	Log                 string
-	Socket              string
+	ProjectID string
+	DataDir   string
+	DB        string
+	PID       string
+	Lock      string
+	Log       string
+	Socket    string
+
+	// LegacyPID and LegacySocket are the retired broker's endpoints in the same
+	// resolved directories. Conversion reports and retires them; nothing serves
+	// or discovers them.
+	LegacyPID    string
+	LegacySocket string
+
+	// SnapshotDir holds the pre-conversion copies a rollback restores.
+	SnapshotDir string
 }
 
 // NewPaths computes all derived paths from a project ID. Broker state lives
-// under ~/.waggle/data/<hash>/ and ~/.waggle/sockets/<hash>/. Machine-runtime
-// state is machine-local and shared across projects under ~/.waggle/runtime/.
+// under ~/.waggle/data/<hash>/ and ~/.waggle/sockets/<hash>/.
 // If os.UserHomeDir fails (no HOME set), all paths will be empty — callers must
 // check before use.
 func NewPaths(projectID string) Paths {
@@ -223,34 +177,35 @@ func NewPaths(projectID string) Paths {
 
 	dataDir := filepath.Join(home, Defaults.DirName, "data", hash)
 	socketDir := filepath.Join(home, Defaults.DirName, "sockets", hash)
-	runtimeDir := filepath.Join(home, Defaults.DirName, Defaults.RuntimeDirName)
 
 	return Paths{
-		ProjectID:           projectID,
-		DataDir:             dataDir,
-		RuntimeDir:          runtimeDir,
-		RuntimeDB:           filepath.Join(runtimeDir, Defaults.RuntimeDBFile),
-		RuntimePID:          filepath.Join(runtimeDir, Defaults.RuntimePIDFile),
-		RuntimeLog:          filepath.Join(runtimeDir, Defaults.RuntimeLogFile),
-		RuntimeState:        filepath.Join(runtimeDir, Defaults.RuntimeStateFile),
-		RuntimeStartLockDir: filepath.Join(runtimeDir, Defaults.RuntimeStartLockDirName),
-		RuntimeSignalDir:    filepath.Join(runtimeDir, Defaults.SignalDirName),
-		DB:                  filepath.Join(dataDir, Defaults.DBFile),
-		PID:                 filepath.Join(dataDir, Defaults.PIDFile),
-		Lock:                filepath.Join(dataDir, Defaults.LockFile),
-		Log:                 filepath.Join(dataDir, Defaults.LogFile),
-		Socket:              filepath.Join(socketDir, "broker.sock"),
+		ProjectID:    projectID,
+		DataDir:      dataDir,
+		DB:           filepath.Join(dataDir, Defaults.DBFile),
+		PID:          filepath.Join(dataDir, Defaults.PIDFile),
+		Lock:         filepath.Join(dataDir, Defaults.LockFile),
+		Log:          filepath.Join(dataDir, Defaults.LogFile),
+		Socket:       filepath.Join(socketDir, Defaults.SocketFile),
+		LegacyPID:    filepath.Join(dataDir, Defaults.LegacyPIDFile),
+		LegacySocket: filepath.Join(socketDir, Defaults.LegacySocketFile),
+		SnapshotDir:  filepath.Join(dataDir, Defaults.SnapshotDir),
 	}
 }
 
 // ResolveProjectID returns a stable identifier for the current project.
 // Priority: WAGGLE_PROJECT_ID env var → git root commit SHA → "path:" + WAGGLE_ROOT → error.
-func ResolveProjectID() (string, error) {
+func ResolveProjectID(ctx context.Context) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", fmt.Errorf("resolve project: %w", err)
+	}
 	if id := os.Getenv("WAGGLE_PROJECT_ID"); id != "" {
 		return id, nil
 	}
-	if id, err := gitRootCommit(); err == nil {
+	if id, err := gitRootCommit(ctx); err == nil {
 		return id, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return "", fmt.Errorf("resolve project: %w", err)
 	}
 	if root := os.Getenv("WAGGLE_ROOT"); root != "" {
 		return "path:" + root, nil
@@ -260,11 +215,11 @@ func ResolveProjectID() (string, error) {
 
 // gitRootCommit returns the SHA of the earliest root commit (sorted lexicographically
 // to be deterministic when multiple root commits exist, e.g. merged unrelated histories).
-func gitRootCommit() (string, error) {
-	if _, err := exec.Command("git", "rev-parse", "--git-common-dir").Output(); err != nil {
+func gitRootCommit(ctx context.Context) (string, error) {
+	if _, err := exec.CommandContext(ctx, "git", "rev-parse", "--git-common-dir").Output(); err != nil {
 		return "", fmt.Errorf("not a git repo: %w", err)
 	}
-	out, err := exec.Command("git", "rev-list", "--max-parents=0", "HEAD").Output()
+	out, err := exec.CommandContext(ctx, "git", "rev-list", "--max-parents=0", "HEAD").Output()
 	if err != nil {
 		return "", fmt.Errorf("git rev-list: %w", err)
 	}

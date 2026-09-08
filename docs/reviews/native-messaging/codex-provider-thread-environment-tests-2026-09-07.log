@@ -1,0 +1,185 @@
+RUST_MIN_STACK=8388608 NEXTEST_PROFILE=local cargo nextest run --no-fail-fast "$@"
+   Compiling codex-hooks v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/hooks)
+    Finished `dev-small` profile [unoptimized] target(s) in 8.76s
+────────────
+ Nextest run ID 302e1a13-9157-40b4-829d-e72b36d9069a with nextest profile: local
+    Starting 177 tests across 1 binary
+        PASS [   0.020s] (  1/177) codex-hooks engine::command_runner::tests::build_command_replays_snapshot_before_hook_overrides_and_scrubbing
+        PASS [   0.022s] (  2/177) codex-hooks config_rules::tests::hook_states_from_stack_respects_layer_precedence
+        PASS [   0.021s] (  3/177) codex-hooks declarations::tests::lists_declared_plugin_handlers_with_persisted_hook_keys
+        PASS [   0.022s] (  4/177) codex-hooks config_rules::tests::hook_states_from_stack_ignores_malformed_hook_events
+        PASS [   0.023s] (  5/177) codex-hooks config_rules::tests::hook_states_from_stack_ignores_malformed_state_entries
+        PASS [   0.024s] (  6/177) codex-hooks config_rules::tests::hook_states_from_stack_merges_fields_across_layers
+        PASS [   0.062s] (  7/177) codex-hooks engine::discovery::tests::composite_requirement_hook_source_uses_primary_source
+        PASS [   0.072s] (  8/177) codex-hooks engine::command_runner::tests::fallback_shell_uses_snapshot
+        PASS [   0.075s] (  9/177) codex-hooks engine::discovery::tests::bypass_hook_trust_respects_disabled_handlers
+        PASS [   0.076s] ( 10/177) codex-hooks engine::discovery::tests::bypass_hook_trust_allows_enabled_untrusted_handlers
+        PASS [   0.106s] ( 11/177) codex-hooks engine::command_runner::tests::command_hook_does_not_expose_configured_noise_auth_token
+        PASS [   0.060s] ( 12/177) codex-hooks engine::discovery::tests::enterprise_managed_synthetic_path_escapes_display_fields
+        PASS [   0.049s] ( 13/177) codex-hooks engine::discovery::tests::interrupt_normalizes_timeout_and_supports_async_execution
+        PASS [   0.059s] ( 14/177) codex-hooks engine::discovery::tests::hook_metadata_for_config_layer_source_discards_source_details
+        PASS [   0.054s] ( 15/177) codex-hooks engine::discovery::tests::interrupt_mcp_tool_hooks_are_supported_and_timeout_is_clamped
+        PASS [   0.071s] ( 16/177) codex-hooks engine::discovery::tests::mcp_tool_hooks_preserve_argument_templates_and_list_their_target
+        PASS [   0.049s] ( 17/177) codex-hooks engine::discovery::tests::post_tool_use_keeps_valid_matcher_during_discovery
+        PASS [   0.050s] ( 18/177) codex-hooks engine::discovery::tests::pre_tool_use_treats_star_matcher_as_match_all
+        PASS [   0.056s] ( 19/177) codex-hooks engine::discovery::tests::pre_tool_use_keeps_valid_matcher_during_discovery
+        PASS [   0.049s] ( 20/177) codex-hooks engine::discovery::tests::pre_tool_use_resolves_windows_command_override_during_discovery
+        PASS [   0.036s] ( 21/177) codex-hooks engine::discovery::tests::session_end_mcp_tool_hooks_are_warned_and_skipped
+        PASS [   0.029s] ( 22/177) codex-hooks engine::discovery::tests::session_end_normalizes_timeout
+        PASS [   0.228s] ( 23/177) codex-hooks engine::command_runner::tests::async_hook_result_survives_runtime_reconfiguration
+        PASS [   0.023s] ( 24/177) codex-hooks engine::discovery::tests::unsupported_event_warns_and_ignores_additional_context_limit
+        PASS [   0.031s] ( 25/177) codex-hooks engine::discovery::tests::supported_events_retain_per_handler_additional_context_limit_and_hash_it
+        PASS [   0.216s] ( 26/177) codex-hooks engine::command_runner::tests::fast_exiting_hook_preserves_stdout_when_stdin_is_not_consumed
+        PASS [   0.033s] ( 27/177) codex-hooks engine::discovery::tests::toml_hook_discovery_ignores_malformed_state_entries
+        PASS [   0.027s] ( 28/177) codex-hooks engine::discovery::tests::user_prompt_submit_ignores_invalid_matcher_during_discovery
+        PASS [   0.026s] ( 29/177) codex-hooks engine::dispatcher::tests::compact_hooks_match_trigger
+        PASS [   0.028s] ( 30/177) codex-hooks engine::dispatcher::tests::pre_tool_use_aliases_match_once_per_handler
+        PASS [   0.029s] ( 31/177) codex-hooks engine::dispatcher::tests::post_tool_use_matches_tool_name
+        PASS [   0.024s] ( 32/177) codex-hooks engine::dispatcher::tests::pre_tool_use_regex_alternation_matches_each_tool_name
+        PASS [   0.023s] ( 33/177) codex-hooks engine::dispatcher::tests::pre_tool_use_star_matcher_matches_all_tools
+        PASS [   0.026s] ( 34/177) codex-hooks engine::dispatcher::tests::pre_tool_use_matches_tool_name
+        PASS [   0.028s] ( 35/177) codex-hooks engine::dispatcher::tests::select_handlers_ignores_interrupt_matchers
+        PASS [   0.023s] ( 36/177) codex-hooks engine::dispatcher::tests::select_handlers_keeps_duplicate_stop_handlers
+        PASS [   0.020s] ( 37/177) codex-hooks engine::dispatcher::tests::user_prompt_submit_ignores_matcher
+        PASS [   0.023s] ( 38/177) codex-hooks engine::dispatcher::tests::select_handlers_preserves_declaration_order
+        PASS [   0.021s] ( 39/177) codex-hooks engine::mcp_runner::tests::mcp_tool_results_use_command_hook_output_contract
+        PASS [   0.021s] ( 40/177) codex-hooks engine::mcp_runner::tests::missing_placeholder_fails_without_passing_unresolved_input
+        PASS [   0.268s] ( 41/177) codex-hooks engine::command_runner::tests::shutdown_aborts_in_flight_async_hooks_without_delivering_context
+        PASS [   0.040s] ( 42/177) codex-hooks engine::dispatcher::tests::select_handlers_keeps_overlapping_session_start_matchers
+        PASS [   0.031s] ( 43/177) codex-hooks engine::output_parser::tests::permission_request_rejects_reserved_updated_input_field
+        PASS [   0.031s] ( 44/177) codex-hooks engine::output_parser::tests::permission_request_rejects_reserved_updated_permissions_field
+        PASS [   0.043s] ( 45/177) codex-hooks engine::mcp_runner::tests::placeholders_preserve_json_types_and_expand_nested_inputs
+        PASS [   0.040s] ( 46/177) codex-hooks engine::output_parser::tests::permission_request_rejects_reserved_interrupt_field
+        PASS [   0.032s] ( 47/177) codex-hooks engine::schema_loader::tests::loads_generated_hook_schemas
+        PASS [   0.035s] ( 48/177) codex-hooks engine::output_parser::tests::structured_output_rejects_invalid_shapes_and_types
+        PASS [   0.031s] ( 49/177) codex-hooks engine::tests::allow_managed_hooks_only_false_keeps_unmanaged_hooks
+        PASS [   0.019s] ( 50/177) codex-hooks engine::tests::allow_managed_hooks_only_skips_unmanaged_json_and_toml_hooks
+        PASS [   0.042s] ( 51/177) codex-hooks engine::session_start_identity_tests::start_hook_payload_preserves_session_and_exact_thread_identity
+        PASS [   0.020s] ( 52/177) codex-hooks engine::tests::allow_managed_hooks_only_skips_unmanaged_plugin_hooks
+        PASS [   0.021s] ( 53/177) codex-hooks engine::tests::allow_managed_hooks_only_in_config_toml_does_not_enable_policy
+        PASS [   0.023s] ( 54/177) codex-hooks engine::tests::allow_managed_hooks_only_keeps_managed_requirement_and_config_layer_hooks
+        PASS [   0.020s] ( 55/177) codex-hooks engine::tests::builtin_cleanup_ignores_disablement_but_preserves_managed_only_policy
+        PASS [   0.019s] ( 56/177) codex-hooks engine::tests::bundled_cleanup_hooks_are_trusted_without_saved_hashes
+        PASS [   0.024s] ( 57/177) codex-hooks engine::tests::bundled_cleanup_trust_does_not_extend_to_other_handlers
+        PASS [   0.015s] ( 58/177) codex-hooks engine::tests::executor_interrupt_hooks_register_and_run
+        PASS [   0.022s] ( 59/177) codex-hooks engine::tests::bundled_cleanup_trust_requires_matching_plugin_server_and_event
+        PASS [   0.020s] ( 60/177) codex-hooks engine::tests::executor_hooks_register_events_from_each_environment
+        PASS [   0.023s] ( 61/177) codex-hooks engine::tests::disabled_hooks_feature_keeps_builtin_cleanup_but_not_trusted_plugin_hooks
+        PASS [   0.019s] ( 62/177) codex-hooks engine::tests::executor_stop_hooks_do_not_delay_stop_completion
+        PASS [   0.019s] ( 63/177) codex-hooks engine::tests::executor_stop_hooks_register_each_target_environment_once
+        PASS [   0.026s] ( 64/177) codex-hooks engine::tests::discovers_hooks_from_json_and_toml_in_the_same_layer
+        PASS [   0.362s] ( 65/177) codex-hooks engine::command_runner::tests::async_hook_marks_invalid_structured_output_as_failed
+        PASS [   0.020s] ( 66/177) codex-hooks engine::tests::malformed_hooks_json_is_reported_as_startup_warning
+        PASS [   0.021s] ( 67/177) codex-hooks engine::tests::local_hosted_app_cleanup_hooks_require_saved_trust
+        PASS [   0.023s] ( 68/177) codex-hooks engine::tests::executor_stop_hooks_use_an_admitted_mcp_environment
+        PASS [   0.022s] ( 69/177) codex-hooks engine::tests::managed_config_layer_hook_failures_remain_startup_warnings
+        PASS [   0.029s] ( 70/177) codex-hooks engine::tests::executor_stop_hooks_run_unless_regular_hooks_block_without_stopping
+        PASS [   0.025s] ( 71/177) codex-hooks engine::tests::mcp_tool_hooks_expand_event_input_and_apply_pre_tool_decisions
+        PASS [   0.021s] ( 72/177) codex-hooks engine::tests::permission_request_timeout_only_counts_synchronous_handlers
+        PASS [   0.032s] ( 73/177) codex-hooks engine::tests::mcp_interrupt_hooks_expand_event_input_and_bound_timeout
+        PASS [   0.022s] ( 74/177) codex-hooks engine::tests::plugin_hook_sources_expand_plugin_placeholders
+        PASS [   0.029s] ( 75/177) codex-hooks engine::tests::plugin_hook_load_warnings_are_startup_warnings
+        PASS [   0.024s] ( 76/177) codex-hooks engine::tests::required_managed_hooks_allow_disabled_hooks_feature
+        PASS [   0.025s] ( 77/177) codex-hooks engine::tests::required_managed_hooks_allow_invalid_matchers_without_handlers
+        PASS [   0.023s] ( 78/177) codex-hooks engine::tests::required_managed_hooks_reject_empty_commands
+        PASS [   0.031s] ( 79/177) codex-hooks engine::tests::profile_user_layers_load_shared_hooks_json_once
+        PASS [   0.026s] ( 80/177) codex-hooks engine::tests::required_managed_hooks_reject_invalid_matchers
+        PASS [   0.023s] ( 81/177) codex-hooks engine::tests::required_managed_hooks_with_unknown_source_still_reject_discovery_failures
+        PASS [   0.031s] ( 82/177) codex-hooks engine::tests::required_managed_hooks_reject_unsupported_handler_types
+        PASS [   0.022s] ( 83/177) codex-hooks engine::tests::required_managed_session_end_mcp_hooks_reject_startup
+        PASS [   0.023s] ( 84/177) codex-hooks engine::tests::required_managed_mcp_hooks_reject_empty_targets
+        PASS [   0.020s] ( 85/177) codex-hooks engine::tests::requirements_managed_hooks_load_when_managed_dir_is_missing
+        PASS [   0.085s] ( 86/177) codex-hooks engine::tests::memory_consolidation_stop_preserves_policy_and_executor_cleanup
+        PASS [   0.023s] ( 87/177) codex-hooks engine::tests::user_disablement_does_not_filter_managed_layer_hooks
+        PASS [   0.025s] ( 88/177) codex-hooks engine::tests::unknown_requirement_source_hooks_stay_managed
+        PASS [   0.023s] ( 89/177) codex-hooks engine::tests::user_disablement_filters_non_managed_hooks_but_not_managed_hooks
+        PASS [   0.024s] ( 90/177) codex-hooks engine::tests::valid_required_managed_hooks_allow_startup
+        PASS [   0.020s] ( 91/177) codex-hooks events::common::tests::exact_matcher_supports_pipe_alternatives
+        PASS [   0.022s] ( 92/177) codex-hooks events::common::tests::matcher_empty_string_matches_all_occurrences
+        PASS [   0.027s] ( 93/177) codex-hooks events::common::tests::literal_matcher_uses_exact_matching
+        PASS [   0.026s] ( 94/177) codex-hooks events::common::tests::matcher_omitted_matches_all_occurrences
+        PASS [   0.028s] ( 95/177) codex-hooks events::common::tests::invalid_regex_is_rejected
+        PASS [   0.085s] ( 96/177) codex-hooks engine::tests::requirements_managed_hooks_execute_windows_command_override
+        PASS [   0.027s] ( 97/177) codex-hooks events::common::tests::matcher_star_matches_all_occurrences
+        PASS [   0.019s] ( 98/177) codex-hooks events::common::tests::supported_events_keep_matchers
+        PASS [   0.027s] ( 99/177) codex-hooks events::common::tests::matcher_supports_anchored_regexes
+        PASS [   0.025s] (100/177) codex-hooks events::common::tests::matcher_uses_regex_when_it_contains_regex_characters
+        PASS [   0.018s] (101/177) codex-hooks events::common::tests::unsupported_events_ignore_matchers
+        PASS [   0.032s] (102/177) codex-hooks events::common::tests::mcp_matchers_support_regex_wildcards
+        PASS [   0.020s] (103/177) codex-hooks events::compact::tests::block_decision_is_not_supported_for_pre_compact
+        PASS [   0.020s] (104/177) codex-hooks events::compact::tests::continue_false_stops_before_compaction
+        PASS [   0.020s] (105/177) codex-hooks events::compact::tests::post_compact_continue_false_stops_after_compaction
+        PASS [   0.147s] (106/177) codex-hooks engine::tests::plugin_hook_sources_run_with_plugin_env_and_plugin_source
+        PASS [   0.021s] (107/177) codex-hooks events::compact::tests::post_compact_ignores_plain_stdout
+        PASS [   0.023s] (108/177) codex-hooks events::compact::tests::post_compact_input_includes_lifecycle_metadata
+        PASS [   0.022s] (109/177) codex-hooks events::compact::tests::pre_compact_ignores_plain_stdout
+        PASS [   0.023s] (110/177) codex-hooks events::interrupt::tests::invalid_json_outputs_fail
+        PASS [   0.032s] (111/177) codex-hooks events::compact::tests::pre_compact_input_includes_lifecycle_metadata
+        PASS [   0.027s] (112/177) codex-hooks events::interrupt::tests::empty_stdout_succeeds
+        PASS [   0.017s] (113/177) codex-hooks events::permission_request::tests::permission_request_deny_overrides_earlier_allow
+        PASS [   0.028s] (114/177) codex-hooks events::interrupt::tests::other_failures_use_standard_errors
+        PASS [   0.027s] (115/177) codex-hooks events::interrupt::tests::system_message_becomes_warning
+        PASS [   0.021s] (116/177) codex-hooks events::permission_request::tests::permission_request_returns_allow_when_no_handler_denies
+        PASS [   0.017s] (117/177) codex-hooks events::permission_request::tests::permission_request_returns_none_when_no_handler_decides
+        PASS [   0.017s] (118/177) codex-hooks events::post_tool_use::tests::additional_context_is_recorded
+        PASS [   0.019s] (119/177) codex-hooks events::post_tool_use::tests::block_decision_stops_normal_processing
+        PASS [   0.013s] (120/177) codex-hooks events::post_tool_use::tests::continue_false_stops_with_reason
+        PASS [   0.159s] (121/177) codex-hooks engine::tests::requirements_managed_hooks_execute_from_managed_dir
+        PASS [   0.018s] (122/177) codex-hooks events::post_tool_use::tests::continue_false_without_reason_synthesizes_feedback
+        PASS [   0.019s] (123/177) codex-hooks events::post_tool_use::tests::command_input_uses_request_tool_name
+        PASS [   0.018s] (124/177) codex-hooks events::post_tool_use::tests::exit_two_blocks_with_feedback
+        PASS [   0.017s] (125/177) codex-hooks events::post_tool_use::tests::plain_stdout_is_ignored_for_post_tool_use
+        PASS [   0.018s] (126/177) codex-hooks events::post_tool_use::tests::preview_and_completed_run_ids_include_tool_use_id
+        PASS [   0.587s] (127/177) codex-hooks engine::command_runner::tests::async_hooks_limit_concurrent_processes_without_dropping_waiting_jobs
+        PASS [   0.021s] (128/177) codex-hooks events::pre_tool_use::tests::additional_context_is_recorded
+        PASS [   0.023s] (129/177) codex-hooks events::post_tool_use::tests::serialization_failure_run_ids_include_tool_use_id
+        PASS [   0.024s] (130/177) codex-hooks events::post_tool_use::tests::unsupported_updated_mcp_tool_output_fails_open
+        PASS [   0.018s] (131/177) codex-hooks events::pre_tool_use::tests::command_input_uses_request_tool_name
+        PASS [   0.018s] (132/177) codex-hooks events::pre_tool_use::tests::deprecated_approve_decision_fails_open
+        PASS [   0.020s] (133/177) codex-hooks events::pre_tool_use::tests::deprecated_block_decision_blocks_processing
+        PASS [   0.025s] (134/177) codex-hooks events::pre_tool_use::tests::exit_code_two_blocks_processing
+        PASS [   0.018s] (135/177) codex-hooks events::pre_tool_use::tests::last_completed_updated_input_wins
+        PASS [   0.017s] (136/177) codex-hooks events::pre_tool_use::tests::permission_decision_allow_can_update_input
+        PASS [   0.028s] (137/177) codex-hooks events::pre_tool_use::tests::deprecated_block_decision_with_additional_context_blocks_processing
+        PASS [   0.019s] (138/177) codex-hooks events::pre_tool_use::tests::invalid_json_like_stdout_fails_instead_of_becoming_noop
+        PASS [   0.020s] (139/177) codex-hooks events::pre_tool_use::tests::plain_stdout_is_ignored
+        PASS [   0.021s] (140/177) codex-hooks events::pre_tool_use::tests::permission_decision_deny_blocks_processing
+        PASS [   0.022s] (141/177) codex-hooks events::pre_tool_use::tests::permission_decision_allow_without_updated_input_fails_open
+        PASS [   0.018s] (142/177) codex-hooks events::pre_tool_use::tests::preview_and_completed_run_ids_include_tool_use_id
+        PASS [   0.012s] (143/177) codex-hooks events::session_start::tests::continue_false_preserves_context_for_later_turns
+        PASS [   0.014s] (144/177) codex-hooks events::pre_tool_use::tests::serialization_failure_run_ids_include_tool_use_id
+        PASS [   0.015s] (145/177) codex-hooks events::pre_tool_use::tests::unsupported_permission_decision_fails_open
+        PASS [   0.019s] (146/177) codex-hooks events::session_end::tests::session_end_ignores_successful_output
+        PASS [   0.020s] (147/177) codex-hooks events::session_end::tests::session_end_matches_other_reason
+        PASS [   0.016s] (148/177) codex-hooks events::session_start::tests::subagent_start_plain_stdout_becomes_model_context
+        PASS [   0.019s] (149/177) codex-hooks events::session_start::tests::invalid_json_like_stdout_fails_instead_of_becoming_model_context
+        PASS [   0.018s] (150/177) codex-hooks events::session_start::tests::plain_stdout_becomes_model_context
+        PASS [   0.022s] (151/177) codex-hooks events::session_start::tests::subagent_start_continue_false_is_ignored
+        PASS [   0.021s] (152/177) codex-hooks events::stop::tests::aggregate_results_concatenates_blocking_reasons_in_declaration_order
+        PASS [   0.023s] (153/177) codex-hooks events::stop::tests::block_decision_with_blank_reason_fails_instead_of_blocking
+        PASS [   0.029s] (154/177) codex-hooks events::stop::tests::block_decision_with_reason_sets_continuation_prompt
+        PASS [   0.024s] (155/177) codex-hooks events::stop::tests::continue_false_overrides_block_decision
+        PASS [   0.026s] (156/177) codex-hooks events::stop::tests::block_decision_without_reason_is_invalid
+        PASS [   0.025s] (157/177) codex-hooks events::stop::tests::exit_code_two_uses_stderr_feedback_only
+        PASS [   0.034s] (158/177) codex-hooks events::stop::tests::exit_code_two_without_stderr_does_not_block
+        PASS [   0.034s] (159/177) codex-hooks events::stop::tests::invalid_stdout_fails_instead_of_silently_nooping
+        PASS [   0.029s] (160/177) codex-hooks events::user_prompt_submit::tests::claude_block_decision_blocks_processing
+        PASS [   0.035s] (161/177) codex-hooks events::user_prompt_submit::tests::claude_block_decision_requires_reason
+        PASS [   0.027s] (162/177) codex-hooks events::user_prompt_submit::tests::exit_code_two_blocks_processing
+        PASS [   0.034s] (163/177) codex-hooks events::user_prompt_submit::tests::continue_false_preserves_context_for_later_turns
+        PASS [   0.024s] (164/177) codex-hooks legacy_notify::tests::test_user_notification
+        PASS [   0.034s] (165/177) codex-hooks legacy_notify::tests::legacy_notify_command_replays_session_snapshot_and_scrubs_credentials
+        PASS [   0.033s] (166/177) codex-hooks legacy_notify::tests::legacy_notify_json_matches_historical_wire_shape
+        PASS [   0.022s] (167/177) codex-hooks output_spill::tests::hook_output_spiller_is_scoped_to_its_thread
+        PASS [   0.020s] (168/177) codex-hooks output_spill::tests::small_hook_output_remains_inline
+        PASS [   0.033s] (169/177) codex-hooks output_spill::tests::additional_contexts_apply_limits_individually
+        PASS [   0.033s] (170/177) codex-hooks output_spill::tests::large_hook_output_spills_to_file
+        PASS [   0.030s] (171/177) codex-hooks schema::tests::hook_specific_output_event_names_are_event_specific_in_output_schemas
+        PASS [   0.024s] (172/177) codex-hooks schema::tests::turn_scoped_hook_inputs_include_codex_turn_id_extension
+        PASS [   0.024s] (173/177) codex-hooks types::tests::hook_payload_serializes_stable_wire_shape
+        PASS [   0.033s] (174/177) codex-hooks schema::tests::subagent_context_fields_are_optional_for_hooks_that_run_inside_subagents
+        PASS [   0.025s] (175/177) codex-hooks schema::tests::subagent_context_fields_serialize_flat_and_omit_when_absent
+        PASS [   0.038s] (176/177) codex-hooks schema::tests::generated_hook_schemas_match_fixtures
+        PASS [   0.430s] (177/177) codex-hooks engine::thread_environment_tests::thread_hook_environment_is_isolated_and_refresh_removes_old_overrides
+────────────
+     Summary [   0.867s] 177 tests run: 177 passed, 0 skipped

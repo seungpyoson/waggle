@@ -1,6 +1,7 @@
 package tasks
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -70,39 +71,26 @@ func ResolveDeps(s *Store, completedID int64) ([]int64, error) {
 		WHERE t.state = 'pending' AND t.blocked = 1 AND j.value = ?
 	`
 
-	rows, err := s.db.Query(query, completedID)
-	if err != nil {
-		return nil, err
-	}
-
-	// Collect all candidates first (avoid nested queries)
 	type candidate struct {
 		taskID    int64
 		dependsOn []int64
 	}
 	var candidates []candidate
-
-	for rows.Next() {
-		var taskID int64
-		var dependsOnJSON string
-
-		if err := rows.Scan(&taskID, &dependsOnJSON); err != nil {
-			rows.Close()
-			return nil, err
+	err := s.tx.Query(query, []any{completedID}, func(rows *sql.Rows) error {
+		for rows.Next() {
+			var c candidate
+			var raw string
+			if err := rows.Scan(&c.taskID, &raw); err != nil {
+				return err
+			}
+			if err := json.Unmarshal([]byte(raw), &c.dependsOn); err != nil {
+				return err
+			}
+			candidates = append(candidates, c)
 		}
-
-		// Parse the depends_on array
-		var dependsOn []int64
-		if err := json.Unmarshal([]byte(dependsOnJSON), &dependsOn); err != nil {
-			rows.Close()
-			return nil, err
-		}
-
-		candidates = append(candidates, candidate{taskID: taskID, dependsOn: dependsOn})
-	}
-	rows.Close()
-
-	if err := rows.Err(); err != nil {
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
 
@@ -126,7 +114,7 @@ func ResolveDeps(s *Store, completedID int64) ([]int64, error) {
 
 		// If all dependencies are completed, unblock the task
 		if allCompleted {
-			_, err := s.db.Exec(`
+			_, err := s.tx.Exec(`
 				UPDATE tasks
 				SET blocked = 0, updated_at = ?
 				WHERE id = ?
@@ -152,31 +140,25 @@ func FailDependents(s *Store, failedID int64) ([]int64, error) {
 		WHERE t.state = 'pending' AND t.blocked = 1 AND j.value = ?
 	`
 
-	rows, err := s.db.Query(query, failedID)
-	if err != nil {
-		return nil, err
-	}
-
-	// Collect all task IDs first (avoid nested queries)
 	var taskIDs []int64
-	for rows.Next() {
-		var taskID int64
-		if err := rows.Scan(&taskID); err != nil {
-			rows.Close()
-			return nil, err
+	err := s.tx.Query(query, []any{failedID}, func(rows *sql.Rows) error {
+		for rows.Next() {
+			var id int64
+			if err := rows.Scan(&id); err != nil {
+				return err
+			}
+			taskIDs = append(taskIDs, id)
 		}
-		taskIDs = append(taskIDs, taskID)
-	}
-	rows.Close()
-
-	if err := rows.Err(); err != nil {
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
 
 	// Now update all the tasks
 	now := time.Now().UTC().Format(time.RFC3339)
 	for _, taskID := range taskIDs {
-		_, err := s.db.Exec(`
+		_, err := s.tx.Exec(`
 			UPDATE tasks
 			SET state = 'failed', failure_reason = 'dependency_failed', updated_at = ?
 			WHERE id = ?

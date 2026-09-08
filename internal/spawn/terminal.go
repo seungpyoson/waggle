@@ -1,155 +1,97 @@
 package spawn
 
 import (
+	"context"
 	"fmt"
-	"os"
 	"os/exec"
-	"runtime"
-	"strconv"
-	"strings"
-	"time"
+	"path/filepath"
 
 	"github.com/seungpyoson/waggle/internal/config"
 )
 
-type Terminal int
+type Terminal string
 
 const (
-	TerminalApp Terminal = iota
-	ITerm2
-	LinuxDefault
-	Unknown
+	TerminalApp       Terminal = "terminal"
+	ITerm2            Terminal = "iterm2"
+	Gnome             Terminal = "gnome-terminal"
+	XTerm             Terminal = "xterm"
+	XTerminalEmulator Terminal = "x-terminal-emulator"
 )
 
-// Detect returns the current terminal emulator.
-func Detect() Terminal {
-	// Check TERM_PROGRAM env var
-	termProgram := os.Getenv("TERM_PROGRAM")
-
-	switch termProgram {
-	case "Apple_Terminal":
-		return TerminalApp
-	case "iTerm.app":
-		return ITerm2
-	}
-
-	// On macOS, default to Terminal.app if TERM_PROGRAM not set
-	if runtime.GOOS == "darwin" {
-		return TerminalApp
-	}
-
-	// Check for Linux terminals in PATH
-	if runtime.GOOS == "linux" {
-		for _, term := range []string{"gnome-terminal", "xterm", "x-terminal-emulator"} {
-			if _, err := exec.LookPath(term); err == nil {
-				return LinuxDefault
-			}
-		}
-	}
-
-	return Unknown
+// Launcher contains one resolved terminal executable. Launch cannot select
+// another terminal after an error.
+type Launcher struct {
+	terminal   Terminal
+	executable string
+	shell      string
 }
 
-// OpenTab opens a new terminal tab with the given command and env vars.
-// Returns the PID of the spawned process.
-func OpenTab(t Terminal, name string, cmd string, args []string, env map[string]string) (int, error) {
-	// Build shell command with env vars using safe builder
-	shellCmd, err := BuildShellCommand(env, cmd, args)
-	if err != nil {
-		return 0, fmt.Errorf("failed to build shell command: %w", err)
-	}
-
+func ResolveTerminal(name string) (*Launcher, error) {
+	t := Terminal(name)
+	var command string
 	switch t {
-	case TerminalApp:
-		// Use AppleScript to open a new tab in Terminal.app
-		script := BuildAppleScript(TerminalApp, shellCmd)
-		execCmd := exec.Command("osascript", "-e", script)
-		if err := execCmd.Run(); err != nil {
-			return 0, fmt.Errorf("failed to open Terminal.app tab: %w", err)
-		}
-		// Poll for the spawned process PID using WAGGLE_AGENT_NAME env marker
-		pid, err := findSpawnedPID(name, config.Defaults.SpawnPIDTimeout)
-		if err != nil {
-			// Tab opened but couldn't find PID — return 0 as fallback
-			return 0, nil
-		}
-		return pid, nil
-
-	case ITerm2:
-		// Use AppleScript to open a new tab in iTerm2
-		script := BuildAppleScript(ITerm2, shellCmd)
-		execCmd := exec.Command("osascript", "-e", script)
-		if err := execCmd.Run(); err != nil {
-			return 0, fmt.Errorf("failed to open iTerm2 tab: %w", err)
-		}
-		// Poll for the spawned process PID using WAGGLE_AGENT_NAME env marker
-		pid, err := findSpawnedPID(name, config.Defaults.SpawnPIDTimeout)
-		if err != nil {
-			// Tab opened but couldn't find PID — return 0 as fallback
-			return 0, nil
-		}
-		return pid, nil
-
-	case LinuxDefault:
-		// Try gnome-terminal first
-		if _, err := exec.LookPath("gnome-terminal"); err == nil {
-			execCmd := exec.Command("gnome-terminal", "--", "bash", "-c", shellCmd)
-			if err := execCmd.Start(); err != nil {
-				return 0, fmt.Errorf("failed to open gnome-terminal: %w", err)
-			}
-			return execCmd.Process.Pid, nil
-		}
-
-		// Try xterm
-		if _, err := exec.LookPath("xterm"); err == nil {
-			execCmd := exec.Command("xterm", "-e", shellCmd)
-			if err := execCmd.Start(); err != nil {
-				return 0, fmt.Errorf("failed to open xterm: %w", err)
-			}
-			return execCmd.Process.Pid, nil
-		}
-
-		// Try x-terminal-emulator
-		if _, err := exec.LookPath("x-terminal-emulator"); err == nil {
-			execCmd := exec.Command("x-terminal-emulator", "-e", shellCmd)
-			if err := execCmd.Start(); err != nil {
-				return 0, fmt.Errorf("failed to open x-terminal-emulator: %w", err)
-			}
-			return execCmd.Process.Pid, nil
-		}
-
-		return 0, fmt.Errorf("no supported Linux terminal emulator found")
-
-	case Unknown:
-		return 0, fmt.Errorf("cannot detect terminal emulator")
-
+	case TerminalApp, ITerm2:
+		command = "osascript"
+	case Gnome, XTerm, XTerminalEmulator:
+		command = name
 	default:
-		return 0, fmt.Errorf("unsupported terminal type: %v", t)
+		return nil, fmt.Errorf("select a supported terminal with --terminal: terminal, iterm2, gnome-terminal, xterm, x-terminal-emulator")
 	}
+	path, err := resolveExecutable(command)
+	if err != nil {
+		return nil, fmt.Errorf("resolve selected terminal %q: %w", name, err)
+	}
+	shell, err := resolveExecutable(config.LaunchShell)
+	if err != nil {
+		return nil, fmt.Errorf("resolve launch shell: %w", err)
+	}
+	return &Launcher{terminal: t, executable: path, shell: shell}, nil
 }
 
-// findSpawnedPID polls for a process with WAGGLE_AGENT_NAME=<name> in its environment.
-// Uses pgrep -f to find the process by searching the full command line.
-// Returns the PID if found within the timeout, or an error if not found.
-func findSpawnedPID(name string, timeout time.Duration) (int, error) {
-	deadline := time.Now().Add(timeout)
-	searchPattern := BuildPgrepPattern(name)
-
-	for time.Now().Before(deadline) {
-		// pgrep -f searches the full command line including env vars
-		out, err := exec.Command("pgrep", "-f", searchPattern).Output()
-		if err == nil && len(out) > 0 {
-			// Parse first PID from output
-			lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-			if len(lines) > 0 {
-				pid, err := strconv.Atoi(strings.TrimSpace(lines[0]))
-				if err == nil && pid > 0 {
-					return pid, nil
-				}
-			}
-		}
-		time.Sleep(config.Defaults.SpawnPIDPollInterval)
+func resolveExecutable(name string) (string, error) {
+	path, err := exec.LookPath(name)
+	if err != nil {
+		return "", err
 	}
+	return filepath.Abs(path)
+}
 
-	return 0, fmt.Errorf("could not find spawned process for %s within %v", name, timeout)
+// OpenTab requests one launch. Native enrollment establishes identity and readiness.
+func (l *Launcher) OpenTab(ctx context.Context, command string, args []string, env map[string]string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	executable, err := resolveExecutable(command)
+	if err != nil {
+		return fmt.Errorf("resolve selected agent: %w", err)
+	}
+	shellCmd, err := BuildShellCommand(env, executable, args)
+	if err != nil {
+		return fmt.Errorf("build terminal command: %w", err)
+	}
+	var launchArgs []string
+	switch l.terminal {
+	case TerminalApp, ITerm2:
+		launchArgs = []string{"-e", BuildAppleScript(l.terminal, shellCmd)}
+	case Gnome:
+		launchArgs = []string{"--", l.shell, "-c", shellCmd}
+	case XTerm, XTerminalEmulator:
+		launchArgs = []string{"-e", l.shell, "-c", shellCmd}
+	default:
+		return fmt.Errorf("terminal launcher is not resolved")
+	}
+	if l.terminal == TerminalApp || l.terminal == ITerm2 {
+		ctx, cancel := context.WithTimeout(ctx, config.Defaults.SpawnLaunchTimeout)
+		defer cancel()
+		if err := exec.CommandContext(ctx, l.executable, launchArgs...).Run(); err != nil {
+			return fmt.Errorf("terminal launch result unconfirmed: %w", err)
+		}
+		return nil
+	}
+	launcher := exec.Command(l.executable, launchArgs...)
+	if err := launcher.Start(); err != nil {
+		return fmt.Errorf("start selected terminal: %w", err)
+	}
+	return launcher.Process.Release()
 }

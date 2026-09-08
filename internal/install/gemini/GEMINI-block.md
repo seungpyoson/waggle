@@ -1,7 +1,3 @@
-## Waggle Runtime
+## Waggle coordination
 
-At the start of every session, run:
-
-    WAGGLE_AGENT_PPID=$PPID waggle adapter bootstrap gemini --format markdown
-
-Do not skip this step. If waggle is not installed, the command will fail silently — continue normally. Use the agent name from the output for any subsequent waggle commands in this session. If you need to rediscover your identity later, run `waggle whoami`.
+Native messaging is unsupported for this provider. Do not enroll through shell commands, infer identity from process or terminal IDs, or create a listener. Use `waggle task --help` for the separate broker task contract with an explicit worker name. Missing broker prerequisites must be reported; they do not establish task or message success.

@@ -28,8 +28,8 @@ func TestInstall_AugmentCreatesBlock(t *testing.T) {
 	if !strings.Contains(content, augmentBlockEnd) {
 		t.Errorf("end marker not found in waggle.md")
 	}
-	if !strings.Contains(content, "waggle adapter bootstrap augment") {
-		t.Errorf("expected waggle adapter bootstrap command in skill block:\n%s", content)
+	if !strings.Contains(content, "Native messaging is unsupported") || strings.Contains(content, "adapter bootstrap") {
+		t.Errorf("unsupported provider instructions still imply enrollment:\n%s", content)
 	}
 }
 
@@ -108,18 +108,15 @@ func TestInstall_AugmentUninstallTruncatedBlock(t *testing.T) {
 	skillPath := filepath.Join(augmentDir, "waggle.md")
 	os.WriteFile(skillPath, []byte(augmentBlockBegin+"\ntruncated block\n"), 0644)
 
-	// removeManagedBlock self-heals truncated blocks (begin without end)
-	// by removing everything from begin marker to EOF
-	if err := uninstallAugment(tmpHome); err != nil {
-		t.Fatalf("expected self-healing uninstall, got error: %v", err)
+	if err := uninstallAugment(tmpHome); err == nil {
+		t.Fatal("truncated block must fail without guessing its boundary")
 	}
-
 	data, err := os.ReadFile(skillPath)
 	if err != nil {
-		t.Fatalf("read failed: %v", err)
+		t.Fatal(err)
 	}
-	if strings.Contains(string(data), augmentBlockBegin) {
-		t.Errorf("begin marker still present after self-healing uninstall")
+	if string(data) != augmentBlockBegin+"\ntruncated block\n" {
+		t.Fatal("truncated block was changed")
 	}
 }
 

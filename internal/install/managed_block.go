@@ -21,8 +21,8 @@ func isLineBreakChar(c byte) bool {
 // Rules:
 //  1. At most one begin marker and one end marker.
 //  2. An end marker without a begin marker is always invalid (orphaned end).
-//  3. A begin marker without an end marker is tolerable (upsert/remove self-heal it),
-//     but the begin marker must be at the start of a line.
+//  3. A begin marker requires its matching end; incomplete ownership of a file
+//     cannot authorize replacing or deleting the remaining contents.
 //  4. If both exist: begin must be at start of line, end must be at end of
 //     line (followed only by \n or EOF).
 func validateMarkerTopology(content, begin, end string) error {
@@ -35,8 +35,8 @@ func validateMarkerTopology(content, begin, end string) error {
 	if endCount > 1 {
 		return fmt.Errorf("duplicate end markers (%d found); refusing to mutate", endCount)
 	}
-	if endCount == 1 && beginCount == 0 {
-		return fmt.Errorf("orphaned end marker without begin marker; refusing to mutate")
+	if endCount != beginCount {
+		return fmt.Errorf("unpaired managed-block marker; refusing to mutate")
 	}
 
 	if beginCount == 1 {
@@ -80,12 +80,6 @@ func upsertManagedBlock(path, begin, end, body, root string) error {
 
 	if idx := strings.Index(content, begin); idx >= 0 {
 		endIdx := strings.Index(content[idx:], end)
-		if endIdx < 0 {
-			// Begin without end — replace everything from begin to EOF with canonical block.
-			// This self-heals truncated files (e.g., OS crash during write).
-			replaced := content[:idx] + block
-			return safeWriteFile(path, managedBlockBytes(replaced, true), 0o644, root)
-		}
 		endAbs := idx + endIdx + len(end)
 		replaced := content[:idx] + block + content[endAbs:]
 		return safeWriteFile(path, managedBlockBytes(replaced, content[endAbs:] == ""), 0o644, root)
@@ -129,12 +123,6 @@ func removeManagedBlock(path, begin, end, root string) error {
 		return nil
 	}
 	endIdx := strings.Index(content[idx:], end)
-	if endIdx < 0 {
-		// Begin without end — remove everything from begin to EOF.
-		// This self-heals truncated files.
-		updated := content[:idx]
-		return safeWriteFile(path, []byte(updated), 0o644, root)
-	}
 	endAbs := idx + endIdx + len(end)
 	after := content[endAbs:]
 	if strings.HasPrefix(after, "\r\n") {
@@ -144,7 +132,11 @@ func removeManagedBlock(path, begin, end, root string) error {
 	}
 
 	updated := content[:idx] + after
-	return safeWriteFile(path, []byte(updated), 0o644, root)
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	return safeWriteFile(path, []byte(updated), info.Mode().Perm(), root)
 }
 
 func canonicalManagedBlock(begin, end, body string) string {

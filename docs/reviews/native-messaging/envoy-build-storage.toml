@@ -1,0 +1,22 @@
+# Dedicated build allocation. The dirty provider source remains in its original
+# checkout; ws copies only committed Git objects when provisioning storage.
+root = "/Volumes/Dev-OWC-Envoy"
+tmpdir = "tmp/"
+grace_hours = 2
+review_grace_hours = 24
+unpushed_grace_days = 7
+retention_days = 7
+
+[limits]
+command_timeout_seconds = 120
+clone_timeout_seconds = 600
+lsof_timeout_seconds = 60
+env_probe_timeout_seconds = 30
+janitor_interval_seconds = 3600
+
+[projects.waggle-native-builds]
+url = "file:///Users/spson/Projects/Claude/waggle/.worktrees/codex-native"
+disposable = ["target/", "tmp/"]
+precreate = ["target/", "tmp/"]
+post_create = []
+codex_env = {}

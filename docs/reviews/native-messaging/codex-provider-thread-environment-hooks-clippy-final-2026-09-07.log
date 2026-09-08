@@ -1,0 +1,204 @@
+cargo clippy --tests {args}
+    Checking lock_api v0.4.14
+    Checking subtle v2.6.1
+    Checking generic-array v0.14.7
+    Checking parking_lot v0.12.5
+    Checking tokio v1.52.3
+    Checking crypto-common v0.1.7
+    Checking block-buffer v0.10.4
+    Checking digest v0.10.7
+    Checking futures-io v0.3.32
+    Checking futures-util v0.3.32
+    Checking serde_json v1.0.149
+    Checking getrandom v0.3.4
+    Checking tokio-util v0.7.18
+    Checking sha1 v0.10.6
+    Checking getrandom v0.4.2
+    Checking tinystr v0.8.3
+    Checking rand_core v0.9.5
+    Checking icu_locale_core v2.2.0
+    Checking rand_chacha v0.9.0
+    Checking rand v0.9.3
+    Checking ring v0.17.14
+    Checking icu_provider v2.2.0
+    Checking futures-executor v0.3.32
+    Checking tempfile v3.27.0
+    Checking either v1.15.0
+    Checking icu_normalizer v2.2.0
+    Checking icu_properties v2.2.0
+    Checking rustls-webpki v0.103.13
+    Checking itertools v0.14.0
+    Checking idna_adapter v1.2.1
+    Checking time v0.3.47
+    Checking idna v1.1.0
+    Checking rustls v0.23.36
+    Checking h2 v0.4.16
+    Checking futures v0.3.31
+    Checking uuid v1.20.0
+    Checking sha2 v0.10.9
+    Checking url v2.5.8
+    Checking hyper v1.8.1
+    Checking rama-utils v0.3.0-alpha.4
+    Checking ahash v0.8.12
+    Checking tokio-rustls v0.26.4
+    Checking tokio-graceful v0.2.2
+    Checking hyper-util v0.1.20
+    Checking rama-core v0.3.0-alpha.4
+    Checking spin v0.9.8
+    Checking flume v0.12.0
+    Checking num-integer v0.1.46
+    Checking prodash v31.0.0
+    Checking gix-features v0.46.2
+    Checking num-bigint v0.4.6
+    Checking rama-http-types v0.3.0-alpha.4
+    Checking tower v0.5.3
+    Checking rama-net v0.3.0-alpha.4
+    Checking tokio-stream v0.1.18
+    Checking schemars v0.8.22
+    Checking native-tls v0.2.14
+    Checking tokio-native-tls v0.3.1
+    Checking cookie v0.18.1
+    Checking ts-rs v11.1.0
+    Checking publicsuffix v2.3.0
+    Checking rand v0.10.1
+    Checking codex-utils-absolute-path v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/utils/absolute-path)
+    Checking moka v0.12.13
+    Checking lock_free_hashtable v0.1.4
+    Checking tracing-subscriber v0.3.22
+    Checking asn1-rs v0.7.1
+    Checking quickcheck v1.1.0
+    Checking cookie_store v0.22.1
+    Checking hickory-proto v0.25.2
+    Checking hyper-tls v0.6.0
+    Checking hyper-rustls v0.27.7
+    Checking tower-http v0.6.8
+    Checking sha1-checked v0.10.0
+    Checking blake3 v1.8.2
+    Checking allocative v0.3.6
+    Checking dashmap v6.1.0
+    Checking gix-hash v0.23.0
+    Checking reqwest v0.12.28
+    Checking hickory-resolver v0.25.2
+    Checking sorted_vector_map v0.2.1
+    Checking static_interner v0.1.2
+    Checking rama-dns v0.3.0-alpha.4
+    Checking pagable v0.4.1
+    Checking rama-http-headers v0.3.0-alpha.4
+    Checking oid-registry v0.8.1
+    Checking der-parser v10.0.0
+    Checking codex-utils-rustls-provider v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/utils/rustls-provider)
+    Checking rama-http v0.3.0-alpha.4
+    Checking starlark_map v0.14.2
+    Checking x509-parser v0.18.1
+    Checking rama-tcp v0.3.0-alpha.4
+    Checking lsp-types v0.97.0
+    Checking tracing-opentelemetry v0.32.1
+    Checking tokio-test v0.4.5
+    Checking yasna v0.5.2
+    Checking display_container v0.9.0
+    Checking rcgen v0.14.7
+    Checking rama-http-core v0.3.0-alpha.4
+    Checking starlark_syntax v0.14.2
+    Checking codex-http-client v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/http-client)
+    Checking debugserver-types v0.5.0
+    Checking gix-hashtable v0.13.0
+    Checking rama-udp v0.3.0-alpha.4
+    Checking rama-unix v0.3.0-alpha.4
+    Checking codex-utils-cache v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/utils/cache)
+    Checking rama-http-backend v0.3.0-alpha.4
+    Checking rama-socks5 v0.3.0-alpha.4
+    Checking starlark v0.14.2
+    Checking gix-object v0.58.0
+    Checking icu_locale v2.2.0
+    Checking rama-tls-rustls v0.3.0-alpha.4
+    Checking codex-utils-home-dir v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/utils/home-dir)
+    Checking codex-utils-path-uri v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/utils/path-uri)
+    Checking codex-utils-string v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/utils/string)
+    Checking codex-network-proxy v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/network-proxy)
+    Checking icu_decimal v2.2.0
+    Checking codex-utils-image v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/utils/image)
+    Checking codex-extension-items v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/ext/items)
+    Checking codex-utils-redacted-string v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/utils/redacted-string)
+    Checking codex-async-utils v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/async-utils)
+    Checking strum v0.27.2
+    Checking headers v0.4.1
+    Checking gix-fs v0.19.2
+    Checking tungstenite v0.27.0 (https://github.com/openai-oss-forks/tungstenite-rs?rev=4fffad30fe373adbdcffab9545e9e9bf4f2fc19f#4fffad30)
+    Checking codex-execpolicy v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/execpolicy)
+    Checking objc2 v0.6.3
+    Checking codex-protocol v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/protocol)
+    Checking event-listener v5.4.1
+    Checking tokio-tungstenite v0.28.0 (https://github.com/openai-oss-forks/tokio-tungstenite?rev=0e5b2d73aa18dd9f0a50ee9ff199d5aef7594186#0e5b2d73)
+    Checking gix-tempfile v21.0.2
+    Checking hyper-timeout v0.5.2
+    Checking tonic v0.14.3
+    Checking gix-lock v21.0.2
+    Checking prost v0.14.3
+    Checking event-listener-strategy v0.5.4
+    Checking codex-client v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/codex-client)
+    Checking async-channel v2.5.0
+    Checking tonic-prost v0.14.3
+    Checking codex-websocket-client v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/websocket-client)
+    Checking block2 v0.6.2
+    Checking objc2-core-foundation v0.3.2
+    Checking gix-commitgraph v0.35.0
+    Checking opentelemetry_sdk v0.31.0
+    Checking opentelemetry-proto v0.31.0
+    Checking gix-revwalk v0.29.0
+    Checking objc2-foundation v0.3.2
+    Checking nix v0.30.1
+    Checking gix-ref v0.61.0
+    Checking opentelemetry-http v0.31.0
+    Checking opentelemetry-otlp v0.31.0
+    Checking os_info v3.14.0
+    Checking opentelemetry-appender-tracing v0.31.1
+    Checking gix-glob v0.24.0
+    Checking inout v0.1.4
+    Checking cipher v0.4.4
+    Checking gix-pack v0.68.0
+    Checking gix-transport v0.55.1
+    Checking codex-utils-pty v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/utils/pty)
+    Checking gix-revision v0.43.0
+    Checking gix-shallow v0.10.0
+    Checking universal-hash v0.5.1
+    Checking gix-config v0.54.0
+    Checking polyval v0.6.2
+    Checking gix-protocol v0.59.0
+    Checking gix-refspec v0.39.0
+    Checking gix-odb v0.78.0
+    Checking gix-discover v0.49.0
+    Checking gix-traverse v0.55.0
+    Checking gix-diff v0.61.0
+    Checking tree-sitter v0.25.10
+    Checking codex-api v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/codex-api)
+    Checking codex-file-system v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/file-system)
+    Checking sha3 v0.10.9
+    Checking gix v0.81.0
+    Checking rand v0.8.6
+    Checking curve25519-dalek v4.1.3
+    Checking ghash v0.5.1
+    Checking aes v0.8.4
+    Checking ctr v0.9.2
+    Checking tracing-appender v0.2.4
+    Checking aead v0.5.2
+    Checking codex-git-utils v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/git-utils)
+    Checking codex-otel v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/otel)
+    Checking codex-model-provider-info v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/model-provider-info)
+    Checking ml-kem v0.2.3
+    Checking aes-gcm v0.10.3
+    Checking codex-shell-command v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/shell-command)
+    Checking codex-features v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/features)
+    Checking codex-windows-sandbox v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/windows-sandbox-rs)
+    Checking x25519-dalek v2.0.1
+    Checking codex-utils-path v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/utils/path-utils)
+    Checking axum v0.8.8
+    Checking codex-config v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/config)
+    Checking clatter v2.2.0
+    Checking codex-sandboxing v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/sandboxing)
+    Checking codex-exec-server-protocol v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/exec-server-protocol)
+    Checking codex-utils-output-truncation v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/utils/output-truncation)
+    Checking codex-exec-server v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/exec-server)
+    Checking codex-utils-plugins v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/utils/plugins)
+    Checking codex-plugin v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/plugin)
+    Checking codex-hooks v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/hooks)
+    Finished `dev-small` profile [unoptimized] target(s) in 1m 39s

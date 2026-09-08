@@ -28,7 +28,7 @@ func BuildShellCommand(env EnvMap, cmd string, args []string) (string, error) {
 	}
 
 	// Add command
-	parts = append(parts, cmd)
+	parts = append(parts, shellQuote(cmd))
 
 	// Add args (quoted for safety)
 	for _, arg := range args {
@@ -50,14 +50,6 @@ func BuildAppleScript(terminal Terminal, shellCmd string) string {
 	default:
 		return ""
 	}
-}
-
-// BuildPgrepPattern constructs an exact-match pattern for finding a process by agent name.
-// Prevents partial matches (e.g., "w" matching "worker-1").
-func BuildPgrepPattern(name string) string {
-	// Use word boundary pattern: WAGGLE_AGENT_NAME=<name> followed by space or end of line
-	// This prevents "worker-1" from matching "worker-10"
-	return fmt.Sprintf("WAGGLE_AGENT_NAME=%s( |$)", regexp.QuoteMeta(name))
 }
 
 // shellQuote wraps a value in single quotes with proper escaping.

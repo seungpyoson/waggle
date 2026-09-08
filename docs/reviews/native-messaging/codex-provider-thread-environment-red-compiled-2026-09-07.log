@@ -1,0 +1,39 @@
+RUST_MIN_STACK=8388608 NEXTEST_PROFILE=local cargo nextest run --no-fail-fast "$@"
+   Compiling codex-hooks v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/hooks)
+    Finished `dev-small` profile [unoptimized] target(s) in 7.46s
+────────────
+ Nextest run ID 0891d3ac-f52b-4210-a39e-1ff46f858942 with nextest profile: local
+    Starting 1 test across 1 binary (176 tests skipped)
+        FAIL [   0.082s] (1/1) codex-hooks engine::thread_environment_tests::thread_hook_environment_is_isolated_and_refresh_removes_old_overrides
+  stdout ───
+
+    running 1 test
+    test engine::thread_environment_tests::thread_hook_environment_is_isolated_and_refresh_removes_old_overrides ... FAILED
+
+    failures:
+
+    failures:
+        engine::thread_environment_tests::thread_hook_environment_is_isolated_and_refresh_removes_old_overrides
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 176 filtered out; finished in 0.07s
+
+  stderr ───
+
+    thread 'engine::thread_environment_tests::thread_hook_environment_is_isolated_and_refresh_removes_old_overrides' (338289411) panicked at hooks/src/engine/thread_environment_tests.rs:100:9:
+    assertion failed: `(left == right)`
+
+    Diff < left / right > :
+     Array [
+    <    Null,
+    >    String("01a07986-d1a1-7b40-b3b1-6689e6c7c9d0"),
+         Null,
+     ]
+
+
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+────────────
+     Summary [   0.087s] 1 test run: 0 passed, 1 failed, 176 skipped
+        FAIL [   0.082s] (1/1) codex-hooks engine::thread_environment_tests::thread_hook_environment_is_isolated_and_refresh_removes_old_overrides
+error: test run failed
+error: recipe `test` failed on line 88 with exit code 100

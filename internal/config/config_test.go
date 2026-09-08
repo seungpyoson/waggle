@@ -271,114 +271,11 @@ func TestPaths_SocketHashLength(t *testing.T) {
 	if len(dir) != 12 {
 		t.Fatalf("hash length = %d, want 12, hash = %q", len(dir), dir)
 	}
-	if filepath.Base(p.Socket) != "broker.sock" {
-		t.Fatalf("socket filename = %q, want %q", filepath.Base(p.Socket), "broker.sock")
+	if filepath.Base(p.Socket) != "broker-v2.sock" {
+		t.Fatalf("socket filename = %q, want %q", filepath.Base(p.Socket), "broker-v2.sock")
 	}
 }
 
-func TestNewPaths_IncludesRuntimePaths(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-
-	p := NewPaths("test-project")
-	for name, val := range map[string]string{
-		"RuntimeDir":          p.RuntimeDir,
-		"RuntimeDB":           p.RuntimeDB,
-		"RuntimePID":          p.RuntimePID,
-		"RuntimeLog":          p.RuntimeLog,
-		"RuntimeState":        p.RuntimeState,
-		"RuntimeStartLockDir": p.RuntimeStartLockDir,
-	} {
-		if val == "" {
-			t.Fatalf("%s is empty", name)
-		}
-		if !filepath.IsAbs(val) {
-			t.Fatalf("%s not absolute: %q", name, val)
-		}
-	}
-
-	if got := filepath.Base(p.RuntimeDB); got != Defaults.RuntimeDBFile {
-		t.Fatalf("RuntimeDB filename = %q, want %q", got, Defaults.RuntimeDBFile)
-	}
-	if got := filepath.Base(p.RuntimePID); got != Defaults.RuntimePIDFile {
-		t.Fatalf("RuntimePID filename = %q, want %q", got, Defaults.RuntimePIDFile)
-	}
-	if got := filepath.Base(p.RuntimeLog); got != Defaults.RuntimeLogFile {
-		t.Fatalf("RuntimeLog filename = %q, want %q", got, Defaults.RuntimeLogFile)
-	}
-	if got := filepath.Base(p.RuntimeState); got != Defaults.RuntimeStateFile {
-		t.Fatalf("RuntimeState filename = %q, want %q", got, Defaults.RuntimeStateFile)
-	}
-	if got := filepath.Base(p.RuntimeStartLockDir); got != Defaults.RuntimeStartLockDirName {
-		t.Fatalf("RuntimeStartLockDir filename = %q, want %q", got, Defaults.RuntimeStartLockDirName)
-	}
-	if got, want := filepath.Dir(p.RuntimeDB), p.RuntimeDir; got != want {
-		t.Fatalf("RuntimeDB dir = %q, want %q", got, want)
-	}
-	if got, want := filepath.Dir(p.RuntimePID), p.RuntimeDir; got != want {
-		t.Fatalf("RuntimePID dir = %q, want %q", got, want)
-	}
-	if got, want := filepath.Dir(p.RuntimeLog), p.RuntimeDir; got != want {
-		t.Fatalf("RuntimeLog dir = %q, want %q", got, want)
-	}
-	if got, want := filepath.Dir(p.RuntimeState), p.RuntimeDir; got != want {
-		t.Fatalf("RuntimeState dir = %q, want %q", got, want)
-	}
-	if got, want := filepath.Dir(p.RuntimeStartLockDir), p.RuntimeDir; got != want {
-		t.Fatalf("RuntimeStartLockDir dir = %q, want %q", got, want)
-	}
-	if got := filepath.Base(p.RuntimeDir); got != Defaults.RuntimeDirName {
-		t.Fatalf("RuntimeDir basename = %q, want %q", got, Defaults.RuntimeDirName)
-	}
-}
-
-func TestNewPaths_RuntimePathsSharedAcrossProjects(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-
-	a := NewPaths("project-a")
-	b := NewPaths("project-b")
-
-	if a.RuntimeDir != b.RuntimeDir {
-		t.Fatalf("RuntimeDir should be machine-local: %q vs %q", a.RuntimeDir, b.RuntimeDir)
-	}
-	if a.RuntimeDB != b.RuntimeDB {
-		t.Fatalf("RuntimeDB should be machine-local: %q vs %q", a.RuntimeDB, b.RuntimeDB)
-	}
-	if a.RuntimePID != b.RuntimePID {
-		t.Fatalf("RuntimePID should be machine-local: %q vs %q", a.RuntimePID, b.RuntimePID)
-	}
-}
-
-func TestResolveProjectID_UnchangedForRuntime(t *testing.T) {
-	t.Setenv("WAGGLE_PROJECT_ID", "")
-	t.Setenv("WAGGLE_ROOT", "")
-
-	repo := createGitRepo(t)
-	chdir(t, repo)
-
-	id, err := ResolveProjectID()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	p := NewPaths(id)
-	if p.ProjectID != id {
-		t.Fatalf("ProjectID = %q, want %q", p.ProjectID, id)
-	}
-
-	if p.RuntimeDir == "" || p.RuntimeDB == "" || p.RuntimePID == "" || p.RuntimeLog == "" || p.RuntimeState == "" || p.RuntimeStartLockDir == "" {
-		t.Fatalf("runtime paths should be populated for a resolved project: %#v", p)
-	}
-
-	id2, err := ResolveProjectID()
-	if err != nil {
-		t.Fatalf("unexpected error on second call: %v", err)
-	}
-	if id2 != id {
-		t.Fatalf("ResolveProjectID changed after NewPaths: got %q, want %q", id2, id)
-	}
-}
-
-// LeaseDuration is set to 5 minutes for task claims
 func TestDefaults_LeaseDuration(t *testing.T) {
 	if Defaults.LeaseDuration != 5*time.Minute {
 		t.Fatalf("LeaseDuration = %v, want %v (5 minutes)", Defaults.LeaseDuration, 5*time.Minute)
@@ -405,18 +302,6 @@ func TestDefaults_LeaseCheckPeriod(t *testing.T) {
 	}
 }
 
-func TestDefaults_IdleCheckInterval(t *testing.T) {
-	if Defaults.IdleCheckInterval != 1*time.Second {
-		t.Fatalf("IdleCheckInterval = %v, want 1s", Defaults.IdleCheckInterval)
-	}
-}
-
-func TestDefaults_StartupPollInterval(t *testing.T) {
-	if Defaults.StartupPollInterval != 100*time.Millisecond {
-		t.Fatalf("StartupPollInterval = %v, want 100ms", Defaults.StartupPollInterval)
-	}
-}
-
 func TestDefaults_ShutdownPollInterval(t *testing.T) {
 	if Defaults.ShutdownPollInterval != 100*time.Millisecond {
 		t.Fatalf("ShutdownPollInterval = %v, want 100ms", Defaults.ShutdownPollInterval)
@@ -426,36 +311,6 @@ func TestDefaults_ShutdownPollInterval(t *testing.T) {
 func TestDefaults_StartupTimeout(t *testing.T) {
 	if Defaults.StartupTimeout != 2*time.Second {
 		t.Fatalf("StartupTimeout = %v, want 2s", Defaults.StartupTimeout)
-	}
-}
-
-func TestDefaults_RuntimeStartLockStaleThreshold(t *testing.T) {
-	if Defaults.RuntimeStartLockStaleThreshold != 10*time.Second {
-		t.Fatalf("RuntimeStartLockStaleThreshold = %v, want 10s", Defaults.RuntimeStartLockStaleThreshold)
-	}
-}
-
-func TestDefaults_RuntimeReconcileInterval(t *testing.T) {
-	if Defaults.RuntimeReconcileInterval != 2*time.Second {
-		t.Fatalf("RuntimeReconcileInterval = %v, want 2s", Defaults.RuntimeReconcileInterval)
-	}
-}
-
-func TestDefaults_RuntimeNotificationRetrySweepInterval(t *testing.T) {
-	if Defaults.RuntimeNotificationRetrySweepInterval != time.Second {
-		t.Fatalf("RuntimeNotificationRetrySweepInterval = %v, want 1s", Defaults.RuntimeNotificationRetrySweepInterval)
-	}
-}
-
-func TestDefaults_RuntimeStateRefreshInterval(t *testing.T) {
-	if Defaults.RuntimeStateRefreshInterval != 2*time.Second {
-		t.Fatalf("RuntimeStateRefreshInterval = %v, want 2s", Defaults.RuntimeStateRefreshInterval)
-	}
-}
-
-func TestDefaults_RuntimeNotificationRetryBatchSize(t *testing.T) {
-	if Defaults.RuntimeNotificationRetryBatchSize != 128 {
-		t.Fatalf("RuntimeNotificationRetryBatchSize = %d, want 128", Defaults.RuntimeNotificationRetryBatchSize)
 	}
 }
 
@@ -528,7 +383,7 @@ func TestValidateDefaults_DeterministicErrorOrder(t *testing.T) {
 
 func TestResolveProjectID_EnvOverride(t *testing.T) {
 	t.Setenv("WAGGLE_PROJECT_ID", "custom-id-123")
-	id, err := ResolveProjectID()
+	id, err := ResolveProjectID(t.Context())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -543,7 +398,7 @@ func TestResolveProjectID_GitRootCommit(t *testing.T) {
 	repo := createGitRepo(t)
 	chdir(t, repo)
 
-	id, err := ResolveProjectID()
+	id, err := ResolveProjectID(t.Context())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -572,13 +427,13 @@ func TestResolveProjectID_GitWorktree(t *testing.T) {
 	})
 
 	chdir(t, repo)
-	idMain, err := ResolveProjectID()
+	idMain, err := ResolveProjectID(t.Context())
 	if err != nil {
 		t.Fatalf("main repo: %v", err)
 	}
 
 	chdir(t, wt)
-	idWT, err := ResolveProjectID()
+	idWT, err := ResolveProjectID(t.Context())
 	if err != nil {
 		t.Fatalf("worktree: %v", err)
 	}
@@ -594,7 +449,7 @@ func TestResolveProjectID_MultipleRootCommits(t *testing.T) {
 	repo := createGitRepoWithMergedHistory(t)
 	chdir(t, repo)
 
-	id, err := ResolveProjectID()
+	id, err := ResolveProjectID(t.Context())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -602,7 +457,7 @@ func TestResolveProjectID_MultipleRootCommits(t *testing.T) {
 		t.Fatalf("expected 40-char SHA, got %q (len=%d)", id, len(id))
 	}
 	// Must be deterministic
-	id2, _ := ResolveProjectID()
+	id2, _ := ResolveProjectID(t.Context())
 	if id != id2 {
 		t.Fatalf("not deterministic: %q != %q", id, id2)
 	}
@@ -613,7 +468,7 @@ func TestResolveProjectID_WaggleRootFallback(t *testing.T) {
 	t.Setenv("WAGGLE_ROOT", "/some/project/root")
 	chdir(t, t.TempDir())
 
-	id, err := ResolveProjectID()
+	id, err := ResolveProjectID(t.Context())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -627,7 +482,7 @@ func TestResolveProjectID_Error(t *testing.T) {
 	t.Setenv("WAGGLE_ROOT", "")
 	chdir(t, t.TempDir())
 
-	_, err := ResolveProjectID()
+	_, err := ResolveProjectID(t.Context())
 	if err == nil {
 		t.Fatal("expected error when no git and no env vars")
 	}
@@ -647,7 +502,7 @@ func TestResolveProjectID_EmptyRepo(t *testing.T) {
 	}
 	chdir(t, tmp)
 
-	_, err := ResolveProjectID()
+	_, err := ResolveProjectID(t.Context())
 	if err == nil {
 		t.Fatal("expected error for empty git repo with no env vars")
 	}
@@ -701,10 +556,8 @@ func TestNewPaths_AllEmptyWithoutHome(t *testing.T) {
 	t.Setenv("HOME", "")
 	p := NewPaths("test-id")
 	for name, val := range map[string]string{
-		"DataDir": p.DataDir, "RuntimeDir": p.RuntimeDir,
-		"RuntimeDB": p.RuntimeDB, "RuntimePID": p.RuntimePID, "RuntimeLog": p.RuntimeLog,
-		"RuntimeState": p.RuntimeState, "RuntimeStartLockDir": p.RuntimeStartLockDir,
-		"DB": p.DB, "PID": p.PID, "Lock": p.Lock, "Log": p.Log, "Socket": p.Socket,
+		"DataDir": p.DataDir,
+		"DB":      p.DB, "PID": p.PID, "Lock": p.Lock, "Log": p.Log, "Socket": p.Socket,
 	} {
 		if val != "" {
 			t.Errorf("expected empty %s without HOME, got %q", name, val)

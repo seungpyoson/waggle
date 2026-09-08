@@ -1,9 +1,39 @@
 package cmd
 
 import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"time"
+
+	"github.com/seungpyoson/waggle/internal/config"
 	"github.com/seungpyoson/waggle/internal/protocol"
 	"github.com/spf13/cobra"
 )
+
+func awaitEndpointRemoval(ctx context.Context, pidPath string, poll, deadline time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, deadline)
+	defer cancel()
+	tick := time.NewTicker(poll)
+	defer tick.Stop()
+	for {
+		_, err := os.Lstat(pidPath)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("inspect broker PID file: %w", err)
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+		case <-tick.C:
+		}
+	}
+}
 
 func init() {
 	rootCmd.AddCommand(stopCmd)
@@ -28,6 +58,10 @@ var stopCmd = &cobra.Command{
 
 		if !resp.OK {
 			printErr(resp.Code, resp.Error)
+			return nil
+		}
+		if err := awaitEndpointRemoval(cmd.Context(), paths.PID, config.Defaults.ShutdownPollInterval, config.Defaults.ShutdownTimeout); err != nil {
+			printErr("SHUTDOWN_INCOMPLETE", "stop requested; broker still draining (ownership retained)")
 			return nil
 		}
 
