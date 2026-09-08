@@ -19,7 +19,9 @@ import (
 const (
 	codeConversionBlocked  = "CONVERSION_BLOCKED"
 	codeNotLegacy          = "NOT_LEGACY"
+	codeNotNative          = "NOT_NATIVE"
 	codeNotPrepared        = "NOT_PREPARED"
+	codeNoProvenance       = "NO_PROVENANCE"
 	codeBrokerRunning      = "BROKER_RUNNING"
 	codeShutdownIncomplete = "SHUTDOWN_INCOMPLETE"
 	codeConversionFailed   = "CONVERSION_FAILED"
@@ -66,6 +68,14 @@ type storeInspection struct {
 type storeReport struct {
 	OK bool `json:"ok"`
 	brokerstate.Report
+}
+
+// storeMessage is the result of a command whose outcome is a fact rather than a
+// record. It is a struct so the ok flag leads, as it does in every other result
+// this file prints.
+type storeMessage struct {
+	OK      bool   `json:"ok"`
+	Message string `json:"message"`
 }
 
 // storePaths resolves the project exactly as `waggle start` does. The store
@@ -156,10 +166,18 @@ func (s storeCommands) activate(ctx context.Context) (result any, code string, e
 		owner.BeginShutdown(nil)
 		release, cancel := context.WithTimeout(context.Background(), config.Defaults.ShutdownTimeout)
 		defer cancel()
-		if releaseErr := owner.Wait(release); releaseErr != nil {
-			err = errors.Join(err, releaseErr)
-			result, code = nil, failureCode(err, codeActivationFailed)
+		releaseErr := owner.Wait(release)
+		if releaseErr == nil {
+			return
 		}
+		if err == nil {
+			// The transition committed and only the release did not. Saying so
+			// is the difference between an operator running activate again and
+			// an operator looking for the process that still holds the store.
+			releaseErr = fmt.Errorf("the store is active; ownership was not released: %w", releaseErr)
+		}
+		err = errors.Join(err, releaseErr)
+		result, code = nil, failureCode(err, codeActivationFailed)
 	}()
 	already, err := activateOwnedStore(ctx, owner)
 	if err != nil {
@@ -169,7 +187,7 @@ func (s storeCommands) activate(ctx context.Context) (result any, code string, e
 	if already {
 		message = "store already active"
 	}
-	return map[string]any{"ok": true, "message": message}, "", nil
+	return storeMessage{OK: true, Message: message}, "", nil
 }
 
 // activateOwnedStore performs the transition and reports whether the store was
@@ -200,15 +218,21 @@ func activateOwnedStore(ctx context.Context, owner *brokerstate.Owner) (bool, er
 	return false, owner.Activate(ctx)
 }
 
-// failureCode names the refusals an operator can act on. Everything else keeps
-// the operation's own failure code rather than being sorted into a cause this
-// command did not establish.
+// failureCode names the refusals an operator can act on, because a caller
+// branching on the code has to be able to tell a refusal no retry will ever
+// clear from a failure worth retrying. Everything else keeps the operation's
+// own failure code rather than being sorted into a cause this command did not
+// establish.
 func failureCode(err error, failure string) string {
 	switch {
 	case errors.Is(err, brokerstate.ErrWritersPresent), errors.Is(err, brokerstate.ErrCensusUnavailable):
 		return codeConversionBlocked
 	case errors.Is(err, brokerstate.ErrNotLegacy):
 		return codeNotLegacy
+	case errors.Is(err, brokerstate.ErrSchemaVersion):
+		return codeNotNative
+	case errors.Is(err, brokerstate.ErrNoProvenance):
+		return codeNoProvenance
 	case errors.Is(err, brokerstate.ErrNotPrepared):
 		return codeNotPrepared
 	case errors.Is(err, brokerstate.ErrOwnerAlive):

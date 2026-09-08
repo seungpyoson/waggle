@@ -300,6 +300,32 @@ func TestStoreRollbackRefusesAnActivatedStore(t *testing.T) {
 	}
 }
 
+// A store that never came from a conversion has nothing to be rolled back to,
+// and no retry will change that. It must not answer with the failure code that
+// means "the cause was not established".
+func TestStoreRollbackRefusesAStoreWithNoRecordedOrigin(t *testing.T) {
+	resolved := storeProject(t)
+	if err := os.MkdirAll(resolved.DataDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	owner, err := brokerstate.Acquire(t.Context(), config.NewOwnershipConfig(resolved.DB, config.CreateStore), brokerstate.OSProcessInspector{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner.BeginShutdown(nil)
+	if err := owner.Wait(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	result, code, err := clearCensus().rollback(t.Context())
+	if err == nil || result != nil {
+		t.Fatalf("rollback of a store with no origin returned %v (%v)", result, err)
+	}
+	if code != "NO_PROVENANCE" || !errors.Is(err, brokerstate.ErrNoProvenance) {
+		t.Fatalf("rollback of a store with no origin reported %s: %v", code, err)
+	}
+}
+
 func TestStoreConvertRefusalsCarryTheirOwnCode(t *testing.T) {
 	writer := brokerstate.Handle{PID: os.Getpid() + 1, Command: "waggle", Path: "state.db"}
 	for _, testCase := range []struct {
@@ -422,7 +448,7 @@ func TestStoreActivateRefusesALiveBrokerAndAnUnconvertedStore(t *testing.T) {
 		if err == nil || result != nil {
 			t.Fatalf("activation of a legacy store returned %v (%v)", result, err)
 		}
-		if code != "ACTIVATION_FAILED" || !errors.Is(err, brokerstate.ErrSchemaVersion) {
+		if code != "NOT_NATIVE" || !errors.Is(err, brokerstate.ErrSchemaVersion) {
 			t.Fatalf("activation of a legacy store reported %s: %v", code, err)
 		}
 	})

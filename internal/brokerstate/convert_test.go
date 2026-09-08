@@ -23,68 +23,10 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// The frozen legacy store. A real schema-v1 store is not the retired broker's
-// CREATE text alone: that broker migrated the store on every open, so the shape
-// in the field also carries the runtime ALTERs below. All of this text is
-// history and must never be edited to match current code.
-//
-// legacyTasksSchemaV1 is main (commit 5fac053) internal/tasks/store.go:128-154.
-const legacyTasksSchemaV1 = `
-	CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
-
-	CREATE TABLE IF NOT EXISTS tasks (
-		id              INTEGER PRIMARY KEY AUTOINCREMENT,
-		idempotency_key TEXT UNIQUE,
-		type            TEXT,
-		tags            TEXT,
-		payload         TEXT NOT NULL,
-		priority        INTEGER DEFAULT 0,
-		state           TEXT NOT NULL DEFAULT 'pending',
-		blocked         BOOLEAN DEFAULT FALSE,
-		depends_on      TEXT,
-		claim_token     TEXT,
-		claimed_by      TEXT,
-		claimed_at      TEXT,
-		lease_expires_at TEXT,
-		lease_duration  INTEGER DEFAULT %d,
-		max_retries     INTEGER DEFAULT %d,
-		retry_count     INTEGER DEFAULT 0,
-		result          TEXT,
-		failure_reason  TEXT,
-		created_at      TEXT NOT NULL DEFAULT (strftime('%%Y-%%m-%%dT%%H:%%M:%%SZ', 'now')),
-		updated_at      TEXT NOT NULL DEFAULT (strftime('%%Y-%%m-%%dT%%H:%%M:%%SZ', 'now'))
-	);
-
-	CREATE INDEX IF NOT EXISTS idx_tasks_claimable ON tasks (state, blocked, priority DESC, created_at ASC);
-	CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_idempotency ON tasks (idempotency_key) WHERE idempotency_key IS NOT NULL;
-	`
-
-// legacyTasksTTLMigration is main:internal/tasks/store.go:193, run on every open
-// by migrateTaskSchema, so ttl is the last column of any store that broker ran.
-const legacyTasksTTLMigration = `ALTER TABLE tasks ADD COLUMN ttl INTEGER`
-
-// legacyMessagesSchemaV1 is main:internal/messages/store.go:42-50 and its index
-// at line 58, created by NewStore on every open of the old broker.
-const legacyMessagesSchemaV1 = `
-	CREATE TABLE IF NOT EXISTS messages (
-		id          INTEGER PRIMARY KEY AUTOINCREMENT,
-		from_name   TEXT NOT NULL,
-		to_name     TEXT NOT NULL,
-		body        TEXT NOT NULL,
-		state       TEXT DEFAULT 'queued',
-		created_at  TEXT NOT NULL,
-		pushed_at   TEXT
-	);
-	CREATE INDEX IF NOT EXISTS idx_messages_to_name ON messages(to_name, state);
-	`
-
-// legacyMessagesMigrations is main:internal/messages/store.go:79-82.
-var legacyMessagesMigrations = []string{
-	`ALTER TABLE messages ADD COLUMN seen_at TEXT`,
-	`ALTER TABLE messages ADD COLUMN acked_at TEXT`,
-	`ALTER TABLE messages ADD COLUMN priority TEXT NOT NULL DEFAULT 'normal'`,
-	`ALTER TABLE messages ADD COLUMN ttl INTEGER`,
-}
+// The frozen legacy store lives in statetest: a real schema-v1 store is not the
+// retired broker's CREATE text alone, because that broker migrated the store on
+// every open, and both this package and the CLI tests build their fixtures from
+// the one copy of those statements. See statetest.LegacyStatements.
 
 const (
 	legacyTaskCount    = 3
@@ -206,9 +148,8 @@ func newLegacyStore(t *testing.T, dir string, shape legacyShape) string {
 			t.Fatalf("legacy fixture journal mode = %q", mode)
 		}
 	}
-	exec(t, db, fmt.Sprintf(legacyTasksSchemaV1, int(config.Defaults.LeaseDuration.Seconds()), config.Defaults.MaxRetries))
-	if shape.ttl {
-		exec(t, db, legacyTasksTTLMigration)
+	for _, statement := range statetest.LegacyStatements(shape.ttl, shape.messages) {
+		exec(t, db, statement)
 	}
 	for _, v := range shape.versions {
 		exec(t, db, "INSERT INTO schema_version(version) VALUES (?)", v)
@@ -231,10 +172,6 @@ func newLegacyStore(t *testing.T, dir string, shape legacyShape) string {
 	exec(t, db, "INSERT INTO tasks(payload) VALUES ('{}')")
 	exec(t, db, "DELETE FROM tasks WHERE id = ?", retiredSequence)
 	if shape.messages {
-		exec(t, db, legacyMessagesSchemaV1)
-		for _, migration := range legacyMessagesMigrations {
-			exec(t, db, migration)
-		}
 		for i := 1; i <= legacyMessageCount; i++ {
 			exec(t, db, `INSERT INTO messages(from_name, to_name, body, state, created_at, pushed_at, seen_at, acked_at, priority, ttl)
 				VALUES (?, ?, ?, 'queued', '2026-01-01T00:00:00Z', NULL, NULL, NULL, 'normal', ?)`,
