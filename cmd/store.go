@@ -198,6 +198,10 @@ func (s storeCommands) activate(ctx context.Context) (result any, code string, e
 // establish.
 func failureCode(err error, failure string) string {
 	switch {
+	case errors.Is(err, brokerstate.ErrShutdownIncomplete), errors.Is(err, brokerstate.ErrFinalizationFailed):
+		return codeShutdownIncomplete
+	case errors.Is(err, brokerstate.ErrOwnerAlive):
+		return codeBrokerRunning
 	case errors.Is(err, brokerstate.ErrWritersPresent), errors.Is(err, brokerstate.ErrCensusUnavailable):
 		return codeConversionBlocked
 	case errors.Is(err, brokerstate.ErrNotLegacy):
@@ -208,10 +212,6 @@ func failureCode(err error, failure string) string {
 		return codeNoProvenance
 	case errors.Is(err, brokerstate.ErrNotPrepared):
 		return codeNotPrepared
-	case errors.Is(err, brokerstate.ErrOwnerAlive):
-		return codeBrokerRunning
-	case errors.Is(err, brokerstate.ErrShutdownIncomplete), errors.Is(err, brokerstate.ErrFinalizationFailed):
-		return codeShutdownIncomplete
 	default:
 		return failure
 	}
@@ -247,12 +247,13 @@ func newStoreCommand(commands storeCommands) *cobra.Command {
 			"Upgrade the schema-v1 store this project already has to native storage.\n\n"+
 				"The machine is surveyed for old Waggle processes and for handles on the store, twice, and any\n"+
 				"uncertainty blocks the conversion. A snapshot is taken before anything changes, and every change\n"+
-				"happens in one transaction, so an interruption leaves the store as it was. The converted store is\n"+
+				"happens in one transaction, so an interruption before commit leaves the store as it was. The converted store is\n"+
 				"prepared: run `waggle store activate` to admit a broker to it.",
 			commands.convert),
 		storeSubcommand("activate", "Admit a converted store to native service",
-			"Move a prepared store to active, so a broker may start on it. Ownership is held for the transition\n"+
-				"alone and released before this command returns. A broker that is already running refuses it.",
+			"Finish any pending journal switch and legacy endpoint retirement, then move the prepared store\n"+
+				"to active. Ownership is held throughout and released before this command returns.\n"+
+				"A broker that is already running refuses it.",
 			commands.activate),
 		storeSubcommand("rollback", "Restore the snapshot a prepared store was converted from",
 			"Restore the snapshot this store's conversion recorded as its origin, undoing the conversion.\n\n"+

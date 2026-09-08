@@ -188,8 +188,6 @@ func isLegacyShape(found []string) bool {
 }
 
 // nullableInt converts 0 to SQL NULL
-
-// nullableInt converts 0 to SQL NULL
 func nullableInt(v int) interface{} {
 	if v == 0 {
 		return nil

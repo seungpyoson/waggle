@@ -484,9 +484,11 @@ type failCloseConnector struct {
 	err    error
 }
 
-func (c failCloseConnector) Connect(context.Context) (driver.Conn, error) { return c.driver.Open(c.dsn) }
-func (c failCloseConnector) Driver() driver.Driver                        { return c.driver }
-func (c failCloseConnector) Close() error                                 { return c.err }
+func (c failCloseConnector) Connect(context.Context) (driver.Conn, error) {
+	return c.driver.Open(c.dsn)
+}
+func (c failCloseConnector) Driver() driver.Driver { return c.driver }
+func (c failCloseConnector) Close() error          { return c.err }
 
 // A canonical store that was released but whose local handle did not close is
 // not retained ownership: the row is free, a successor acquires it, and the

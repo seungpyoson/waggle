@@ -166,7 +166,9 @@ func TestSuperviseBeginsShutdownWhenTheParentContextIsCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	serve := func(context.Context) error { <-o.Draining(); return nil }
 	done := make(chan error, 1)
-	go func() { done <- supervise(ctx, make(chan os.Signal, 2), serve, o, config.Defaults.ShutdownTimeout, &syncBuffer{}) }()
+	go func() {
+		done <- supervise(ctx, make(chan os.Signal, 2), serve, o, config.Defaults.ShutdownTimeout, &syncBuffer{})
+	}()
 	cancel()
 	select {
 	case err := <-done:

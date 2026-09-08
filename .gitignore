@@ -14,6 +14,7 @@ coverage.html
 # unless it is killed mid-run.
 .ipc-*
 .convert-*
+.h-*
 
 # IDE
 .idea/

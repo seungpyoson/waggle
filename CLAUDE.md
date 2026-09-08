@@ -328,7 +328,7 @@ without being asked for:
 ```bash
 waggle store inspect    # report schema version, cutover state and snapshots; changes nothing
 waggle store convert    # snapshot, then upgrade v1 to native in one transaction; leaves the store prepared
-waggle store activate   # move the prepared store to active, so a broker may start on it
+waggle store activate   # finish conversion cleanup and move the prepared store to active
 waggle store rollback   # restore the snapshot the conversion recorded (prepared stores only)
 ```
 
@@ -347,6 +347,14 @@ Error: recover task claims: canonical store is prepared; activation is required
 That separation is deliberate: conversion rewrites the store, activation is the
 decision to admit a broker to it.
 
+**Prepared but not activatable after an interruption:** run `waggle store activate`.
+It finishes any pending journal switch to WAL and legacy endpoint retirement
+under ownership before activating. Its JSON lists `RetiredEndpoints` when it
+removes any. If activation fails, resolve the reported cause; while the store is
+still prepared, run `waggle store rollback` then `waggle store convert` to retry
+from the verified snapshot. A prepared native store in DELETE journal mode is
+accepted for activation; `store convert` still refuses it with `NOT_LEGACY`.
+
 **To roll back**, run `waggle store rollback` while the store is still prepared.
 It restores the snapshot under `~/.waggle/data/<hash>/rollback/`, which
 `waggle store inspect` lists. Once the store is activated it has been served, and
@@ -354,8 +362,11 @@ rollback refuses.
 
 **What the pre-conversion survey can and cannot see.** `convert` looks for old
 Waggle processes and for open handles on the store, and any uncertainty blocks
-it. Processes are matched by executable name under every user account. Open
-handles are only visible for your own processes: one held by root or by another
+it. Processes are matched by their argv[0] name (`ps comm`) under every user
+account, using the canonical `waggle` name and the converter's own basename.
+Other aliases and spoofed argv[0] names can evade that match; the open-handle
+survey is the primary proof. Open handles are only visible for your own
+processes: one held by root or by another
 account cannot be seen without privilege, and the report says as much in its
 `CensusScope` field. Converting a store another account may be writing is not
 covered yet; that is machine-wide cutover work (M2).
@@ -379,12 +390,13 @@ covered yet; that is machine-wide cutover work (M2).
   Find that process before retrying.
 - `CONVERSION_FAILED`, `ACTIVATION_FAILED`, `ROLLBACK_FAILED`,
   `INSPECTION_FAILED` — the operation's own failure, with the cause in `error`.
-  A conversion is one transaction, so an interrupted one leaves the store exactly
-  as it was and the snapshot in place.
+  Before the transaction commits, an interrupted conversion leaves the store
+  exactly as it was and any completed snapshot in place. After commit, a prepared
+  store may still need the journal switch and endpoint retirement described above.
 
 ### Socket Path Too Long
 
-Waggle uses `~/.waggle/sockets/<hash>/broker.sock` to avoid macOS 104-byte limit.
+Waggle uses `~/.waggle/sockets/<hash>/broker-v2.sock` to avoid macOS 104-byte limit.
 
 If you see socket errors, check:
 ```bash

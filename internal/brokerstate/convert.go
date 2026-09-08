@@ -161,8 +161,9 @@ type Inspection struct {
 // The order is the whole safety argument: a full census proves nothing is
 // holding the store, a consistent snapshot is taken, the census is repeated
 // immediately before any change, and every change then happens in one
-// transaction that also moves the version record. An interruption at any point
-// leaves the source untouched and the snapshot present. The converted store is
+// transaction that also moves the version record. An interruption before commit
+// leaves the source untouched and any completed snapshot present. After commit,
+// Activate can finish the journal switch and endpoint retirement. The store is
 // prepared, never active: activation stays a separate, ownership-guarded
 // decision.
 func Convert(ctx context.Context, cfg ConversionConfig, census WriterCensus, inspector ProcessInspector, upgrade DomainUpgrade) (_ Report, err error) {

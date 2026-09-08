@@ -625,3 +625,16 @@ func TestStoreActivateKeepsPreparedOnRetirementFailure(t *testing.T) {
 	}
 	runStore(t, refusedCensus(), "activate")
 }
+
+func TestStoreFailureCodePrioritizesRetainedOwnership(t *testing.T) {
+	for _, retained := range []error{brokerstate.ErrShutdownIncomplete, brokerstate.ErrFinalizationFailed} {
+		for _, refusal := range []error{
+			brokerstate.ErrNotPrepared, brokerstate.ErrSchemaVersion, brokerstate.ErrNotLegacy,
+			brokerstate.ErrWritersPresent, brokerstate.ErrNoProvenance, brokerstate.ErrOwnerAlive,
+		} {
+			if code := failureCode(errors.Join(refusal, retained), codeActivationFailed); code != "SHUTDOWN_INCOMPLETE" {
+				t.Errorf("joined %v and %v reported %s", refusal, retained, code)
+			}
+		}
+	}
+}
