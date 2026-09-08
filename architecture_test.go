@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -11,12 +12,22 @@ import (
 	"testing"
 )
 
+// gone reports whether a walk step failed because what it was about to read is
+// no longer there. Packages under this tree create and remove scratch
+// directories of their own while their tests run, and this guard reads the tree
+// they are writing to, so an entry that disappears mid-walk is a file this
+// guard has nothing to say about rather than a failure of the walk.
+func gone(err error) bool { return errors.Is(err, fs.ErrNotExist) }
+
 func TestOwnershipHasNoAlternateDatabaseOrProviderConstructors(t *testing.T) {
 	files := token.NewFileSet()
 	opens := 0
 	for _, root := range []string{"internal", "cmd"} {
 		err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 			if err != nil {
+				if gone(err) {
+					return nil
+				}
 				return err
 			}
 			if entry.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
@@ -24,6 +35,9 @@ func TestOwnershipHasNoAlternateDatabaseOrProviderConstructors(t *testing.T) {
 			}
 			file, err := parser.ParseFile(files, path, nil, 0)
 			if err != nil {
+				if gone(err) {
+					return nil
+				}
 				return err
 			}
 			imports := make(map[string]string)

@@ -51,7 +51,13 @@ func TestCensusHelperProcess(t *testing.T) {
 // it only hopes has started. stop ends it and reaps it, so the process is truly
 // gone from the machine's listing and not left as a zombie the census would
 // still see.
-func censusHelper(t *testing.T, name, hold string, argv0 ...string) (pid int, executable string, stop func()) {
+//
+// The name must be one nothing else on the machine carries, never the canonical
+// binary name: the census reads the whole machine, and a real process called
+// waggle is exactly what every guard in this module refuses to convert around.
+// Canonical-name matching is proven against a listing instead, by
+// TestParseProcessesMatchesTheCanonicalNameFromARenamedBinary.
+func censusHelper(t *testing.T, name, hold string) (pid int, executable string, stop func()) {
 	t.Helper()
 	self, err := os.Executable()
 	if err != nil {
@@ -67,9 +73,6 @@ func censusHelper(t *testing.T, name, hold string, argv0 ...string) (pid int, ex
 	}
 
 	child := exec.Command(target, "-test.run=^TestCensusHelperProcess$")
-	if len(argv0) > 0 {
-		child.Args[0] = argv0[0]
-	}
 	child.Env = append(os.Environ(), censusHelperEnv+"=1", censusHelperFile+"="+hold)
 	input, err := child.StdinPipe()
 	if err != nil {
@@ -130,6 +133,19 @@ func holds(handles []Handle, pid int, path string) bool {
 		}
 	}
 	return false
+}
+
+// listed returns the census's entry for pid, if it has one. The process census
+// covers every process on the machine, including brokers other packages' tests
+// are running at the same time, so a test reads the listing for the process it
+// started itself and never for the absence of processes it did not.
+func listed(processes []Handle, pid int) (Handle, bool) {
+	for _, p := range processes {
+		if p.PID == pid {
+			return p, true
+		}
+	}
+	return Handle{}, false
 }
 
 // resolved is the pathname the operating system reports for a file, which is
@@ -252,6 +268,11 @@ func TestOSWriterCensusRefusesWhenUnconfigured(t *testing.T) {
 // TestOSWriterCensusDetectsRunningBinary proves the process half of the census:
 // a running executable with the Waggle basename is found by name alone, with no
 // PID file involved, and is gone from the listing once it exits.
+//
+// The subject is this test's own child, found among whatever else the machine
+// is running. Nothing here asks the listing to be otherwise empty: a census is
+// machine-wide by design, and the rest of the suite may be running real brokers
+// while this test runs.
 func TestOSWriterCensusDetectsRunningBinary(t *testing.T) {
 	census := testCensus(t)
 	binary := census.Binary
@@ -261,11 +282,13 @@ func TestOSWriterCensusDetectsRunningBinary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("process census: %v", err)
 	}
-	if len(processes) != 1 || processes[0].PID != pid || processes[0].Command != binary {
-		t.Fatalf("process census = %+v, want only pid %d running %s", processes, pid, binary)
+	found, ok := listed(processes, pid)
+	if !ok {
+		t.Fatalf("process census = %+v, want it to report pid %d running %s", processes, pid, binary)
 	}
-	if processes[0].Path != executable {
-		t.Fatalf("census reports executable %q, want %q", processes[0].Path, executable)
+	if found.Command != binary || found.Path != executable {
+		t.Fatalf("census reports pid %d as %q at %q, want %q at %q",
+			pid, found.Command, found.Path, binary, executable)
 	}
 
 	stop()
@@ -273,8 +296,8 @@ func TestOSWriterCensusDetectsRunningBinary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("process census after exit: %v", err)
 	}
-	if len(processes) != 0 {
-		t.Fatalf("exited child still counted: %+v", processes)
+	if found, ok := listed(processes, pid); ok {
+		t.Fatalf("exited child still counted: %+v", found)
 	}
 }
 
@@ -452,23 +475,19 @@ func TestParseProcessesRefusesUnreadableOutput(t *testing.T) {
 	}
 }
 
-func TestProcessCensusMatchesCanonicalNameFromRenamedBinary(t *testing.T) {
-	processes, err := parseProcesses([]byte("501 "+config.Defaults.BinaryName+"\n502 /opt/waggle-review\n503 /opt/unrelated\n"), "waggle-review", 502)
-	if err != nil || len(processes) != 1 || processes[0].PID != 501 {
-		t.Fatalf("renamed census missed canonical argv[0]: %+v, %v", processes, err)
-	}
-}
-
-func TestOSWriterCensusDetectsCanonicalArgvZero(t *testing.T) {
-	census := testCensus(t)
-	census.Binary = "waggle-review"
-	pid, _, stop := censusHelper(t, censusBinaryName(t), "", config.Defaults.BinaryName)
-	defer stop()
-	processes, err := census.WaggleProcesses(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !holds(processes, pid, config.Defaults.BinaryName) {
-		t.Fatalf("renamed census missed canonical argv[0] pid %d: %+v", pid, processes)
+// TestParseProcessesMatchesTheCanonicalNameFromARenamedBinary is the whole
+// coverage of the rule that a census run from a renamed build still counts the
+// canonical name: a process whose argv[0] is exactly the shipped binary name is
+// matched even though the census's own basename is something else.
+//
+// It is proven against a listing rather than against a process this test starts
+// under that name. A real process called waggle is precisely the condition
+// every conversion guard in this module refuses, so a test that created one
+// would fail the conversion tests of any package running beside it.
+func TestParseProcessesMatchesTheCanonicalNameFromARenamedBinary(t *testing.T) {
+	canonical := config.Defaults.BinaryName
+	processes, err := parseProcesses([]byte("501 "+canonical+"\n502 /opt/waggle-review\n503 /opt/unrelated\n"), "waggle-review", 502)
+	if err != nil || len(processes) != 1 || processes[0].PID != 501 || processes[0].Command != canonical {
+		t.Fatalf("renamed census missed canonical argv[0] %q: %+v, %v", canonical, processes, err)
 	}
 }
