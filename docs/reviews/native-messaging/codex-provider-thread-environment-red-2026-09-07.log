@@ -1,0 +1,45 @@
+RUST_MIN_STACK=8388608 NEXTEST_PROFILE=local cargo nextest run --no-fail-fast "$@"
+   Compiling codex-hooks v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/hooks)
+error[E0433]: cannot find module or crate `toml` in this scope
+  --> hooks/src/registry_environment_tests.rs:39:30
+   |
+39 |     let layer: toml::Value = toml::toml! {
+   |                              ^^^^ use of unresolved module or unlinked crate `toml`
+
+error[E0603]: module `tests` is private
+   --> hooks/src/registry_environment_tests.rs:21:20
+    |
+ 21 | use crate::engine::tests::mcp_executor;
+    |                    ^^^^^ private module
+    |
+note: the module `tests` is defined here
+   --> hooks/src/engine/mod.rs:492:1
+    |
+492 | mod tests;
+    | ^^^^^^^^^^
+
+error[E0063]: missing field `environment_overrides` in initializer of `HooksConfig`
+   --> hooks/src/engine/mod_tests.rs:627:36
+    |
+627 |     let listed = crate::list_hooks(crate::HooksConfig {
+    |                                    ^^^^^^^^^^^^^^^^^^ missing `environment_overrides`
+
+error[E0063]: missing field `environment_overrides` in initializer of `HooksConfig`
+    --> hooks/src/engine/mod_tests.rs:2080:36
+     |
+2080 |     let listed = crate::list_hooks(crate::HooksConfig {
+     |                                    ^^^^^^^^^^^^^^^^^^ missing `environment_overrides`
+
+error[E0433]: cannot find module or crate `toml` in this scope
+  --> hooks/src/registry_environment_tests.rs:39:16
+   |
+39 |     let layer: toml::Value = toml::toml! {
+   |                ^^^^ use of unresolved module or unlinked crate `toml`
+   |
+   = help: if you wanted to use a crate named `toml`, use `cargo add toml` to add it to your `Cargo.toml`
+
+Some errors have detailed explanations: E0063, E0433, E0603.
+For more information about an error, try `rustc --explain E0063`.
+error: could not compile `codex-hooks` (lib test) due to 5 previous errors
+error: command `/Users/spson/.rustup/toolchains/1.95.0-aarch64-apple-darwin/bin/cargo test --no-run --message-format json-render-diagnostics --package codex-hooks --lib --jobs 2 --profile dev-small --locked --offline` exited with code 101
+error: recipe `test` failed on line 88 with exit code 101

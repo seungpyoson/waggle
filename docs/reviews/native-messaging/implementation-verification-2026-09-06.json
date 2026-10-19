@@ -1,0 +1,228 @@
+{
+  "base_head": "5fac0530a789f54b2a87fb10d9d21a14b2dded91",
+  "source_snapshot_sha256": "18b51a7e0859ad5a284cfd4642fb6801da7caf59a0cd356a620d13f40b7d53fd",
+  "full_test_source_snapshot_sha256": "8debc75029b5d57458722f5587ad17c0654ea20b2965ab0f7c105fb12e254a1e",
+  "digest_format": "sorted tracked and untracked source paths: UTF8 path, NUL, 8-byte big-endian content length, bytes; deleted paths use <deleted>. Includes cmd, internal, integrations, root Go entrypoints, go.mod, go.sum, Makefile, .no-mistakes.yaml; excludes review documents and user-owned GEMINI.md deletion.",
+  "source_entries": 201,
+  "full_test_command": "GOCACHE=\"$TMPDIR/waggle-build-cache\" GOPROXY=off make test",
+  "full_test_exit": 2,
+  "top_level_test_failures": 45,
+  "top_level_test_skips": 0,
+  "failed_packages": [
+    "FAIL\tgithub.com/seungpyoson/waggle\t4.504s",
+    "FAIL\tgithub.com/seungpyoson/waggle/internal/broker\t1.144s",
+    "FAIL\tgithub.com/seungpyoson/waggle/internal/brokerstate\t1.787s",
+    "FAIL\tgithub.com/seungpyoson/waggle/internal/client\t1.340s"
+  ],
+  "full_test_log_sha256": "04ac0a8879c7e8e0c14c5a811175085f20158a6ab97405e03195110dbb02d0d4",
+  "full_test_log": "/var/folders/y5/syb9vj4n3l10028h1jst4_tm0000gn/T/waggle-native-scheduler-test.log",
+  "subsequent_changes": [
+    "Broker test helper uses status RPC and joins Serve; compiled",
+    "Connector requires connected kernel peer UID before native protocol; native/driver race tests passed"
+  ],
+  "verified_commands": [
+    {
+      "command": "go build -o waggle .",
+      "exit": 0,
+      "scope": "final source"
+    },
+    {
+      "command": "go vet ./...",
+      "exit": 0,
+      "scope": "final source"
+    },
+    {
+      "command": ".no-mistakes.yaml format",
+      "exit": 0,
+      "scope": "final source"
+    },
+    {
+      "command": "go test -race ./internal/messages ./internal/driver/... ./internal/native ./internal/protocol ./internal/config ./cmd -count=1",
+      "exit": 0,
+      "scope": "before final peer credential change"
+    },
+    {
+      "command": "go test -race ./internal/native ./internal/driver/... -count=1 -v",
+      "exit": 0,
+      "scope": "final peer credential and transport source"
+    }
+  ],
+  "followup_source_inspection": {
+    "date": "2026-09-07",
+    "finding": "Codex driver does not acquire or retain the subscription required by approved design line 133",
+    "source_snapshot_sha256": "18b51a7e0859ad5a284cfd4642fb6801da7caf59a0cd356a620d13f40b7d53fd",
+    "production_code_changed": false,
+    "upstream_repository": "https://github.com/openai/codex",
+    "upstream_tag": "rust-v0.153.4",
+    "upstream_tag_object": "042fb41b7c813ac7999105e886b2b7aa715b5081",
+    "upstream_commit": "3d2ee51ca2d5db578f328aa75e20aa22c0197c9a",
+    "upstream_files_sha256": {
+      "codex-rs/app-server/src/lib.rs": "13f10bc2b5f08b24c27cbb77db205d1a35bc8900938112724328298467732665",
+      "codex-rs/app-server/src/message_processor.rs": "e060124c3cec98dfccc02e73e0622212ffee2989c36e470043393adb966fcdb6",
+      "codex-rs/app-server/src/outgoing_message.rs": "df283be051d56d4615472c137b2d827ccbb9e392675d3c10fbe46990e15bdd9c",
+      "codex-rs/app-server/src/request_processors/initialize_processor.rs": "6e73dce0275c7264b23ee0a312f215fead241ce55dc1a86fa1dbd109ad4278e0",
+      "codex-rs/app-server/src/request_processors/thread_lifecycle.rs": "66326bc54dc38fad512db26f1f9a388fd171eb1a79b870a91877b754efe44262",
+      "codex-rs/app-server/src/request_processors/thread_processor.rs": "b7257eb4e93317d6162bba17462abb4607b9083621d11ddfe7bbc04777cc930c",
+      "codex-rs/app-server/src/request_processors/turn_processor.rs": "272560df374f40afd142f058445a051701b4b658a365c0542085903d3a8cc7b9",
+      "codex-rs/app-server/src/thread_state.rs": "d6af02611b001c06cd33f4e4c7ed964518b4361a7e5c94bc1f27e4e6102cf40c"
+    },
+    "installed_cli_schema_sha256": {
+      "ClientRequest.json": "05c82ead1a820c765c23d3a1d262e4ae54889785276ee1acf7c494141fd94d70",
+      "v2/ThreadResumeParams.json": "324e96004c49de35935cade3386958431c93a4fd3997a839f9796772ea4c8072"
+    },
+    "missing_capability": "Atomic subscription to the exact already loaded conversation, rejecting unloaded or closing targets without reopening them",
+    "rejected_compensation": "Probe then thread/resume cannot prevent a concurrent unload from causing cold resume",
+    "decision": "Stop the Codex attachment implementation step pending a supported native mechanism or explicit contract revision",
+    "native_execution_performed": false,
+    "tests_rerun": false,
+    "test_reason": "Only evidence documents changed; denied IPC and OS identity operations were not repeated"
+  },
+  "claude_prerequisite_inspection": {
+    "date": "2026-09-07",
+    "binary_version_path": "2.1.263",
+    "binary_sha256": "ef5d2909c8af49f31ab6d5487e90316777bc2fac170adfe8160716caa8aaf4f9",
+    "inbox_dispatcher": {
+      "start_byte": 177019324,
+      "end_byte_exclusive": 177023995,
+      "sha256": "c6aeb03a8cb9de1bf83e54ea73d4275df4ee7a0e24cf77e3a763f94b7ea941f2"
+    },
+    "session_id_filter": {
+      "start_byte": 177017280,
+      "end_byte_exclusive": 177017502,
+      "sha256": "9857fc253f29c788b6cedfce6a491ad67f3ddfa1458fc774acd62c5146bb377a"
+    },
+    "finding": "No passive session-identity/readiness request found in the inspected inbox dispatcher; mismatched session IDs are silently rejected",
+    "scope_limit": "Static inspection of the named handler, not proof that no other native capability exists",
+    "documentation": "https://code.claude.com/docs/en/cross-session-messaging#the-sessions-inbox-socket",
+    "production_driver_added": false,
+    "native_execution_performed": false,
+    "conformance": "not_confirmed"
+  },
+  "scheduler_fixture_fix": {
+    "date": "2026-09-07",
+    "source_snapshot_sha256": "087be5590715a6fd666df6efd5a50e7cf30b0c76fe551747e6dfbbed28c689c3",
+    "source_entries": 201,
+    "scheduler_test_sha256": "3af8621fdca64c9b48fd813c732b22cb6e704a54ab1f2c1479a5b5353f85820f",
+    "reported_execution": {
+      "origin": "user_supplied_terminal_output",
+      "command": "go test -race ./... -count=1 -v",
+      "result": "FAIL",
+      "source_digest_in_output": false,
+      "failed_tests": [
+        "TestSchedulerFindsCommittedWorkWithoutWakeup",
+        "TestSchedulerRetainsUncertainAttemptAcrossRestart",
+        "TestSchedulerShutdownRetainsOwnershipUntilDriverCloseJoins"
+      ],
+      "failure": "conversation hop budget outside configured bounds",
+      "other_listed_test_packages": "PASS",
+      "skips_in_supplied_output": 0
+    },
+    "cause": "All three test inputs omitted the required positive Hops budget; ordinary CLI sends already supply the configured default",
+    "change": "Set Hops to b.config.Messaging.DefaultHops in all three scheduler test inputs",
+    "production_code_changed": false,
+    "independent_diagnostic": {
+      "seam": "Same Enqueue input through the real owner-fenced SQLite store",
+      "omitted_hops": "Failed with the identical budget error",
+      "configured_default_hops": "Passed with race detector",
+      "temporary_diagnostic_removed": true
+    },
+    "checks": [
+      {
+        "command": "go test -race ./internal/broker -run ^$",
+        "exit": 0,
+        "scope": "Compilation only; no tests executed"
+      },
+      {
+        "command": "go test -race ./internal/messages ./internal/protocol ./internal/config ./cmd -count=1",
+        "exit": 0
+      },
+      {
+        "command": "go build -o waggle .",
+        "exit": 0
+      },
+      {
+        "command": "go vet ./...",
+        "exit": 0
+      },
+      {
+        "command": ".no-mistakes.yaml format",
+        "exit": 0
+      },
+      {
+        "command": "git diff --check",
+        "exit": 0
+      }
+    ],
+    "scheduler_fault_scenarios_after_fix": {
+      "origin": "user_supplied_terminal_output",
+      "command": "go test -race ./internal/broker -run '^TestScheduler' -count=1 -v",
+      "result": "PASS",
+      "package_seconds": 3.348,
+      "tests": [
+        {
+          "name": "TestSchedulerFindsCommittedWorkWithoutWakeup",
+          "result": "PASS",
+          "seconds": 1.07
+        },
+        {
+          "name": "TestSchedulerRetainsUncertainAttemptAcrossRestart",
+          "result": "PASS",
+          "seconds": 0.59
+        },
+        {
+          "name": "TestSchedulerShutdownRetainsOwnershipUntilDriverCloseJoins",
+          "result": "PASS",
+          "seconds": 0.33
+        }
+      ],
+      "skips_in_supplied_output": 0,
+      "independently_executed_by_agent": false,
+      "source_digest_in_output": false,
+      "current_test_file_matches_fix_digest": true,
+      "scope": "Real broker scheduling and lifecycle with deterministic native-driver fixtures; actual provider behavior remains unconfirmed",
+      "full_suite_after_fix": "not_confirmed"
+    }
+  },
+  "runtime_conformance": "not_confirmed",
+  "milestone_approval": "not_approved",
+  "codex_enrollment_source_inspection": {
+    "date": "2026-09-07",
+    "installed_package_version": "0.153.4",
+    "upstream_commit": "3d2ee51ca2d5db578f328aa75e20aa22c0197c9a",
+    "evidence_kind": "direct_source_inspection",
+    "upstream_files_sha256": {
+      "codex-rs/core/src/session/session.rs": "b84a57c59c7db19c5e91a0b08281bb564c2edad77a2403ae167639587d9f521c",
+      "codex-rs/core/src/session/turn.rs": "231b0818690d0f2fa1afd1f9b5bf4485e7e8f5008670354b412d649e623c4ee1",
+      "codex-rs/core/src/hook_runtime.rs": "87b678af0f9ea87e0de6041fe82f9f90315b0b18c10524731deba9b7f9841f1e",
+      "codex-rs/core/src/session/mod.rs": "2e4010b30003a0c3f319452c6cf453ca18de43faace9a4753f80bedaebd57075",
+      "codex-rs/hooks/src/registry.rs": "4c9e29f146fd409a515d198ae86c46d1852e8e84d4a0f3bcd73c45548311c160",
+      "codex-rs/hooks/src/engine/command_runner.rs": "c3913ff8ee6f449f07ce3c69bb2f194ad8aef2ce13b83e693165d74329ca3e14",
+      "codex-rs/protocol/src/shell_environment.rs": "e16f61ea96db99307e3d8d2eb2fbb1b6fc703ce0ca7651fa97170dd6e0557da0",
+      "codex-rs/core/tests/suite/hooks.rs": "ce837898ab1911c26f2942923e2519d32c51c06c4047662c6377dbb808e557d0"
+    },
+    "findings": [
+      {
+        "invariant": "Enrollment of a fresh idle native session must precede any turn or ordinary tool call",
+        "owner": "Codex native startup lifecycle supplies the event; Waggle broker owns enrollment transitions",
+        "observed_source": "Session::new queues SessionStart and returns; run_turn dispatches the pending hook",
+        "effect": "The inspected startup path does not invoke the sole enrollment hook before a turn",
+        "runtime_execution": "not_confirmed"
+      },
+      {
+        "invariant": "The hook and ordinary shell calls must carry the same explicitly scoped per-thread registration material",
+        "owner": "Codex native per-thread environment construction",
+        "tested_hypothesis": "shell_environment_policy.set is available to SessionStart and ordinary shell calls",
+        "observed_source": "Hooks::new snapshots process environment; command runner uses snapshot plus handler env; ordinary shell construction separately applies policy.set",
+        "effect": "The selected shell-policy-only configuration does not supply its values to the hook through this path",
+        "scope_limit": "Does not establish that every possible per-thread credential mechanism is unavailable",
+        "runtime_execution": "not_confirmed"
+      }
+    ],
+    "production_code_changed": false,
+    "approved_design_changed": false,
+    "native_execution_performed": false,
+    "upstream_tests_executed": false,
+    "decision": "Stop Codex enrollment implementation pending a native lifecycle and credential mechanism satisfying the approved contract; no alternate enrollment route or server-wide credential added",
+    "source_snapshot_sha256": "087be5590715a6fd666df6efd5a50e7cf30b0c76fe551747e6dfbbed28c689c3"
+  }
+}

@@ -144,35 +144,3 @@ func TestHeartbeat_InvalidToken(t *testing.T) {
 }
 
 // TestLeaseChecker_Goroutine verifies that the lease checker goroutine works
-func TestLeaseChecker_Goroutine(t *testing.T) {
-	s := newTestStore(t)
-
-	// Create and claim a task
-	s.Create(CreateParams{Payload: `{"test":"data"}`})
-	claimed, _ := s.Claim("worker-1", ClaimFilter{})
-
-	// Manually expire the lease
-	pastTime := time.Now().Add(-1 * time.Minute).UTC().Format(time.RFC3339)
-	_, err := s.db.Exec(`
-		UPDATE tasks
-		SET lease_expires_at = ?
-		WHERE id = ?
-	`, pastTime, claimed.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Start lease checker with short interval
-	stop := make(chan struct{})
-	defer close(stop)
-	go StartLeaseChecker(s, 100*time.Millisecond, stop)
-
-	// Wait for lease checker to run
-	time.Sleep(300 * time.Millisecond)
-
-	// Verify task was re-queued
-	task, _ := s.Get(claimed.ID)
-	if task.State != StatePending {
-		t.Errorf("state = %q, want %q", task.State, StatePending)
-	}
-}

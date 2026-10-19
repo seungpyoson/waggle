@@ -43,6 +43,7 @@ internal/
 ├── tasks/       # SQLite task store, dependencies, lease management
 ├── locks/       # Advisory lock manager
 ├── broker/      # Socket listener, session management, command routing
+│   └── enrollment/ # Owner-registered per-enrollment workers; provider mechanics under internal/
 └── client/      # Shared client for CLI commands
 
 cmd/             # Cobra CLI commands
@@ -311,9 +312,91 @@ cat .waggle/broker.log
 waggle start --foreground
 ```
 
+### Upgrading an Existing Project Store
+
+A project created before native messaging has a schema-v1 store (tasks only) at
+`~/.waggle/data/<hash>/state.db`. The broker will not open it and will never
+upgrade it on its own:
+
+```
+Error: acquire canonical store: canonical schema requires explicit offline conversion
+```
+
+Upgrading is four separate offline commands, so nothing about the store changes
+without being asked for:
+
+```bash
+waggle store inspect    # report schema version, cutover state and snapshots; changes nothing
+waggle store convert    # snapshot, then upgrade v1 to native in one transaction; leaves the store prepared
+waggle store activate   # finish conversion cleanup and move the prepared store to active
+waggle store rollback   # restore the snapshot the conversion recorded (prepared stores only)
+```
+
+Run them with no broker running. Tasks, their sequence and their TTLs are carried
+across; the old `messages` table is kept untouched as `legacy_messages`. The
+project's ID-to-hash mapping and the `state.db` path do not change, so the store
+stays where it was.
+
+**A converted store is prepared, not active.** Until `activate` succeeds the
+broker still refuses to serve, and binds nothing:
+
+```
+Error: recover task claims: canonical store is prepared; activation is required
+```
+
+That separation is deliberate: conversion rewrites the store, activation is the
+decision to admit a broker to it.
+
+**Prepared but not activatable after an interruption:** run `waggle store activate`.
+It finishes any pending journal switch to WAL and legacy endpoint retirement
+under ownership before activating. Its JSON lists `RetiredEndpoints` when it
+removes any. If activation fails, resolve the reported cause; while the store is
+still prepared, run `waggle store rollback` then `waggle store convert` to retry
+from the verified snapshot. A prepared native store in DELETE journal mode is
+accepted for activation; `store convert` still refuses it with `NOT_LEGACY`.
+
+**To roll back**, run `waggle store rollback` while the store is still prepared.
+It restores the snapshot under `~/.waggle/data/<hash>/rollback/`, which
+`waggle store inspect` lists. Once the store is activated it has been served, and
+rollback refuses.
+
+**What the pre-conversion survey can and cannot see.** `convert` looks for old
+Waggle processes and for open handles on the store, and any uncertainty blocks
+it. Processes are matched by their argv[0] name (`ps comm`) under every user
+account, using the canonical `waggle` name and the converter's own basename.
+Other aliases and spoofed argv[0] names can evade that match; the open-handle
+survey is the primary proof. Open handles are only visible for your own
+processes: one held by root or by another
+account cannot be seen without privilege, and the report says as much in its
+`CensusScope` field. Converting a store another account may be writing is not
+covered yet; that is machine-wide cutover work (M2).
+
+**Refusals you may see**, each as a `code` in the command's JSON:
+
+- `CONVERSION_BLOCKED` — the survey found an old Waggle process or an open
+  handle on the store, or could not run at all. Stop every broker and anything
+  holding the store, then convert again. On a platform whose survey tools this
+  project has not verified, conversion is refused outright rather than guessed at.
+- `NOT_LEGACY` — the store is not schema v1, so there is nothing to convert. Run
+  `waggle store inspect` to see what state it is actually in.
+- `NOT_NATIVE` — the store's schema is not the native one this binary serves, so
+  it cannot be activated. Convert it first.
+- `NOT_PREPARED` — rollback was asked of a store that is not prepared, usually
+  because it has already been activated.
+- `NO_PROVENANCE` — the store is prepared but records no conversion origin, so
+  there is no snapshot to restore.
+- `BROKER_RUNNING` — a live broker owns the store. Run `waggle stop` first.
+- `SHUTDOWN_INCOMPLETE` — a previous owner did not finish releasing the store.
+  Find that process before retrying.
+- `CONVERSION_FAILED`, `ACTIVATION_FAILED`, `ROLLBACK_FAILED`,
+  `INSPECTION_FAILED` — the operation's own failure, with the cause in `error`.
+  Before the transaction commits, an interrupted conversion leaves the store
+  exactly as it was and any completed snapshot in place. After commit, a prepared
+  store may still need the journal switch and endpoint retirement described above.
+
 ### Socket Path Too Long
 
-Waggle uses `~/.waggle/sockets/<hash>/broker.sock` to avoid macOS 104-byte limit.
+Waggle uses `~/.waggle/sockets/<hash>/broker-v2.sock` to avoid macOS 104-byte limit.
 
 If you see socket errors, check:
 ```bash

@@ -1,12 +1,3 @@
-## Waggle Runtime
+## Waggle coordination
 
-At the start of every session, run:
-
-    WAGGLE_AGENT_PPID=$PPID waggle adapter bootstrap augment --format markdown
-
-What to do with the result:
-
-1. If the command succeeds, note the `Agent:` value from the output and use it for any subsequent waggle commands in this session. If you need to rediscover it later, run `waggle whoami`.
-2. If the command fails or waggle is not installed, continue normally — this is not an error.
-
-Do not start background listeners or invent a separate transport path. The bootstrap command is the single entry point for waggle coordination.
+Native messaging is unsupported for this provider. Do not enroll through shell commands, infer identity from process or terminal IDs, or create a listener. Use `waggle task --help` for the separate broker task contract with an explicit worker name. Missing broker prerequisites must be reported; they do not establish task or message success.

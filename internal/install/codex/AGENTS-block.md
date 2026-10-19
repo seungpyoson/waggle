@@ -1,7 +1,7 @@
-## Waggle Runtime
+## Waggle coordination
 
-At the start of every session, run:
+Messaging requires broker-verified enrollment of the exact native conversation. Codex native enrollment and per-thread credential propagation are not yet implemented in this build; sending and receiving through Codex are unsupported. Do not run a shell command to invent enrollment, choose identity by PID or directory, or start a background listener.
 
-  WAGGLE_AGENT_PPID=$PPID waggle adapter bootstrap codex --format markdown
+The selected integration requires a user-owned App Server with the interactive TUI explicitly attached to its registered Unix endpoint. Plain sessions are not assumed to share that endpoint. Runtime conformance remains required before this integration can report readiness.
 
-Do not skip this step. If the command fails or waggle is not installed, continue normally. Use the agent name from the output for any subsequent waggle commands in this session. If you need to rediscover your identity later, run `waggle whoami`; it reads the same runtime mapping used for pushed message delivery.
+Existing task operations remain available through `waggle task --help` with an explicit task-worker name. Task labels cannot authenticate messages.

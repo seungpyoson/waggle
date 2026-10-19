@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"encoding/json"
+	"github.com/seungpyoson/waggle/internal/config"
 	"testing"
 )
 
@@ -28,8 +29,6 @@ func TestRequest_RoundTrip(t *testing.T) {
 		Last:           "last-id",
 		State:          "active",
 		Owner:          "worker-1",
-		PushListener:   true,
-		PushToken:      "push-token-789",
 	}
 
 	// Marshal to JSON
@@ -105,18 +104,13 @@ func TestRequest_RoundTrip(t *testing.T) {
 	if decoded.Owner != original.Owner {
 		t.Errorf("Owner mismatch: got %q, want %q", decoded.Owner, original.Owner)
 	}
-	if decoded.PushListener != original.PushListener {
-		t.Errorf("PushListener mismatch: got %t, want %t", decoded.PushListener, original.PushListener)
-	}
-	if decoded.PushToken != original.PushToken {
-		t.Errorf("PushToken mismatch: got %q, want %q", decoded.PushToken, original.PushToken)
-	}
 }
 
 // TestRequest_OmitsEmptyFields verifies empty fields are not present in JSON output
 func TestRequest_OmitsEmptyFields(t *testing.T) {
 	req := Request{
-		Cmd: CmdConnect,
+		Version: config.ProtocolVersion,
+		Cmd:     CmdConnect,
 	}
 
 	data, err := json.Marshal(req)
@@ -129,9 +123,12 @@ func TestRequest_OmitsEmptyFields(t *testing.T) {
 		t.Fatalf("Unmarshal to map failed: %v", err)
 	}
 
-	// Should only have "cmd" field
-	if len(m) != 1 {
-		t.Errorf("Expected 1 field, got %d: %v", len(m), m)
+	// Both protocol version and command are required.
+	if len(m) != 2 {
+		t.Errorf("Expected 2 fields, got %d: %v", len(m), m)
+	}
+	if m["version"] != float64(config.ProtocolVersion) {
+		t.Errorf("missing protocol version: %v", m)
 	}
 	if _, ok := m["cmd"]; !ok {
 		t.Error("Missing required 'cmd' field")
@@ -187,8 +184,7 @@ func TestCommandConstants_Unique(t *testing.T) {
 		CmdTaskCreate, CmdTaskList, CmdTaskClaim, CmdTaskComplete, CmdTaskFail,
 		CmdTaskHeartbeat, CmdTaskCancel, CmdTaskGet, CmdTaskUpdate,
 		CmdLock, CmdUnlock, CmdLocks, CmdStatus, CmdStop,
-		CmdReplay,
-		CmdPushReserve, CmdPushRelease,
+		CmdEnqueue, CmdReply, CmdWhoami, CmdConversationStop,
 	}
 
 	seen := make(map[string]bool)

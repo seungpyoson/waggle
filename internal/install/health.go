@@ -77,7 +77,6 @@ func CheckClaudeCode(homeDir string) ([]HealthIssue, AdapterState) {
 	// Step 2: Check if waggle files are present on disk
 	hookPath := filepath.Join(claudeDir, "hooks", "waggle-connect.sh")
 	heartbeatPath := filepath.Join(claudeDir, "hooks", "waggle-heartbeat.sh")
-	pushPath := filepath.Join(claudeDir, "hooks", "waggle-push.js")
 	skillDir := filepath.Join(claudeDir, "skills", "waggle")
 	unsafePaths := make(map[string]bool)
 
@@ -87,7 +86,6 @@ func CheckClaudeCode(homeDir string) ([]HealthIssue, AdapterState) {
 	}{
 		{hookPath, "waggle-connect.sh"},
 		{heartbeatPath, "waggle-heartbeat.sh"},
-		{pushPath, "waggle-push.js"},
 		{skillDir, "skills directory"},
 	} {
 		if issue := unsafePathIssue(item.path, homeDir, item.name, repairCmd); issue != nil {
@@ -98,9 +96,8 @@ func CheckClaudeCode(homeDir string) ([]HealthIssue, AdapterState) {
 
 	hookExists := fileExists(hookPath)
 	heartbeatExists := fileExists(heartbeatPath)
-	pushExists := fileExists(pushPath)
 	skillDirExists := fileExists(skillDir)
-	anyFileExists := hookExists || heartbeatExists || pushExists || skillDirExists
+	anyFileExists := hookExists || heartbeatExists || skillDirExists
 
 	if settingsErr != nil {
 		issues = append(issues, HealthIssue{
@@ -163,14 +160,6 @@ func CheckClaudeCode(homeDir string) ([]HealthIssue, AdapterState) {
 		})
 	}
 
-	if !pushExists && !unsafePaths[pushPath] {
-		issues = append(issues, HealthIssue{
-			Asset:   pushPath,
-			Problem: "waggle-push.js missing",
-			Repair:  repairCmd,
-		})
-	}
-
 	if !skillDirExists && !unsafePaths[skillDir] {
 		issues = append(issues, HealthIssue{
 			Asset:   skillDir,
@@ -200,9 +189,6 @@ func CheckClaudeCode(homeDir string) ([]HealthIssue, AdapterState) {
 	}
 	if heartbeatExists {
 		appendEmbeddedFileIssue(&issues, heartbeatPath, claudeCodeFiles, "claude-code/heartbeat.sh", "waggle-heartbeat.sh", repairCmd)
-	}
-	if pushExists {
-		appendEmbeddedFileIssue(&issues, pushPath, claudeCodeFiles, "claude-code/waggle-push.js", "waggle-push.js", repairCmd)
 	}
 	if skillDirExists {
 		for _, skill := range claudeCodeSkillFiles {

@@ -1,0 +1,111 @@
+RUST_MIN_STACK=8388608 NEXTEST_PROFILE=local cargo nextest run --no-fail-fast "$@"
+    Finished `dev-small` profile [unoptimized] target(s) in 1.64s
+────────────
+ Nextest run ID 51c7ead2-7a23-42a6-86c1-48d243970e0b with nextest profile: local
+    Starting 104 tests across 1 binary
+        PASS [   0.026s] (  1/104) codex-analytics accepted_lines::tests::parses_accepted_line_counts
+        PASS [   0.028s] (  2/104) codex-analytics accepted_lines::tests::skips_added_file_metadata_headers
+        PASS [   0.033s] (  3/104) codex-analytics analytics_client_tests::aborted_server_request_publishes_aborted_user_review_event_once
+        PASS [   0.033s] (  4/104) codex-analytics analytics_client_tests::accepted_turn_interrupt_records_requested_at_on_turn_event
+        PASS [   0.034s] (  5/104) codex-analytics accepted_lines::tests::parses_hunk_lines_that_look_like_file_headers
+        PASS [   0.069s] (  6/104) codex-analytics analytics_client_tests::accepted_steers_increment_turn_steer_count
+        PASS [   0.069s] (  7/104) codex-analytics analytics_client_tests::accepted_line_fingerprints_event_serializes_expected_shape
+        PASS [   0.074s] (  8/104) codex-analytics analytics_client_tests::accepted_turn_interrupt_retries_preserve_earliest_requested_at
+        PASS [   0.075s] (  9/104) codex-analytics analytics_client_tests::accepted_turn_steer_emits_expected_event
+        PASS [   0.087s] ( 10/104) codex-analytics analytics_client_tests::app_used_dedupe_is_keyed_by_turn_and_connector
+        PASS [   0.085s] ( 11/104) codex-analytics analytics_client_tests::app_used_event_serializes_expected_shape
+        PASS [   0.094s] ( 12/104) codex-analytics analytics_client_tests::app_mentioned_event_serializes_expected_shape
+        PASS [   0.088s] ( 13/104) codex-analytics analytics_client_tests::command_execution_approval_response_publishes_user_review_event
+        PASS [   0.051s] ( 14/104) codex-analytics analytics_client_tests::compaction_event_serializes_expected_shape
+        PASS [   0.051s] ( 15/104) codex-analytics analytics_client_tests::compaction_event_ingests_custom_fact
+        PASS [   0.142s] ( 16/104) codex-analytics analytics_client_tests::analytics_flush_delivers_completed_turn_with_file_diff
+        PASS [   0.109s] ( 17/104) codex-analytics analytics_client_tests::code_mode_exec_wait_and_child_events_share_cell_and_response_ids
+        PASS [   0.025s] ( 18/104) codex-analytics analytics_client_tests::effective_session_permissions_response_publishes_session_user_review_event
+        PASS [   0.034s] ( 19/104) codex-analytics analytics_client_tests::external_agent_config_import_failure_event_serializes_expected_shape
+        PASS [   0.037s] ( 20/104) codex-analytics analytics_client_tests::guardian_completed_notification_publishes_review_event_with_thread_metadata
+        PASS [   0.048s] ( 21/104) codex-analytics analytics_client_tests::completed_background_tool_item_emits_after_turn_event
+        PASS [   0.035s] ( 22/104) codex-analytics analytics_client_tests::guardian_events_keep_thread_source_and_originator_with_explicit_turn_connection
+        PASS [   0.088s] ( 23/104) codex-analytics analytics_client_tests::command_execution_event_serializes_expected_shape
+        PASS [   0.025s] ( 24/104) codex-analytics analytics_client_tests::hook_run_metadata_maps_sources_and_statuses
+        PASS [   0.038s] ( 25/104) codex-analytics analytics_client_tests::guardian_review_event_ingests_custom_fact_with_optional_target_item
+        PASS [   0.025s] ( 26/104) codex-analytics analytics_client_tests::hook_run_metadata_maps_stopped_status
+        PASS [   0.027s] ( 27/104) codex-analytics analytics_client_tests::hook_run_event_serializes_expected_shape
+        PASS [   0.027s] ( 28/104) codex-analytics analytics_client_tests::image_generation_events_preserve_transparent_background_metadata
+        PASS [   0.106s] ( 29/104) codex-analytics analytics_client_tests::compaction_implementation_serializes_remote_v2
+        PASS [   0.030s] ( 30/104) codex-analytics analytics_client_tests::image_preparation_fact_is_included_in_turn_event
+        PASS [   0.027s] ( 31/104) codex-analytics analytics_client_tests::item_lifecycle_notifications_publish_command_execution_event
+        PASS [   0.030s] ( 32/104) codex-analytics analytics_client_tests::item_review_summaries_do_not_cross_threads_with_reused_item_ids
+        PASS [   0.035s] ( 33/104) codex-analytics analytics_client_tests::initialize_caches_client_and_thread_lifecycle_publishes_once_initialized
+        PASS [   0.033s] ( 34/104) codex-analytics analytics_client_tests::normalize_path_for_skill_id_admin_scoped_uses_absolute_path
+        PASS [   0.037s] ( 35/104) codex-analytics analytics_client_tests::item_completed_without_turn_state_does_not_create_turn_state
+        PASS [   0.034s] ( 36/104) codex-analytics analytics_client_tests::normalize_path_for_skill_id_repo_root_not_in_skill_path_uses_absolute_path
+        PASS [   0.034s] ( 37/104) codex-analytics analytics_client_tests::normalize_path_for_skill_id_repo_scoped_uses_relative_path
+        PASS [   0.029s] ( 38/104) codex-analytics analytics_client_tests::normalize_path_for_skill_id_user_scoped_uses_absolute_path
+        PASS [   0.023s] ( 39/104) codex-analytics analytics_client_tests::plugin_management_event_keeps_plugin_id_local_when_remote_id_exists
+        PASS [   0.034s] ( 40/104) codex-analytics analytics_client_tests::permissions_reviews_emit_events_without_denormalizing_onto_tool_items
+        PASS [   0.031s] ( 41/104) codex-analytics analytics_client_tests::plugin_install_failed_event_serializes_expected_shape
+        PASS [   0.029s] ( 42/104) codex-analytics analytics_client_tests::plugin_measurement_batch_emits_directly_and_filters_invalid_rows
+        PASS [   0.026s] ( 43/104) codex-analytics analytics_client_tests::plugin_used_dedupe_is_keyed_by_turn_and_plugin
+        PASS [   0.031s] ( 44/104) codex-analytics analytics_client_tests::plugin_management_event_serializes_expected_shape
+        PASS [   0.028s] ( 45/104) codex-analytics analytics_client_tests::plugin_used_event_serializes_expected_shape
+        PASS [   0.030s] ( 46/104) codex-analytics analytics_client_tests::reducer_ingests_app_and_plugin_facts
+        PASS [   0.036s] ( 47/104) codex-analytics analytics_client_tests::reducer_includes_plugin_ids_for_plugin_skill_invocations
+        PASS [   0.032s] ( 48/104) codex-analytics analytics_client_tests::reducer_ingests_artifact_operation_fact
+        PASS [   0.039s] ( 49/104) codex-analytics analytics_client_tests::reducer_ingests_external_agent_config_import_completed_fact
+        PASS [   0.036s] ( 50/104) codex-analytics analytics_client_tests::reducer_ingests_external_agent_config_import_failure_fact
+        PASS [   0.036s] ( 51/104) codex-analytics analytics_client_tests::reducer_ingests_hook_run_fact
+        PASS [   0.036s] ( 52/104) codex-analytics analytics_client_tests::reducer_ingests_plugin_install_failed_fact
+        PASS [   0.045s] ( 53/104) codex-analytics analytics_client_tests::reducer_ingests_plugin_install_failed_fact_without_detail
+        PASS [   0.046s] ( 54/104) codex-analytics analytics_client_tests::reducer_ingests_skill_invoked_fact
+        PASS [   0.091s] ( 55/104) codex-analytics analytics_client_tests::reducer_emits_accepted_line_fingerprints_once_from_latest_turn_diff_on_completion
+        PASS [   0.053s] ( 56/104) codex-analytics analytics_client_tests::reducer_ingests_plugin_install_requested_fact
+        PASS [   0.054s] ( 57/104) codex-analytics analytics_client_tests::reducer_ingests_plugin_state_changed_fact
+        PASS [   0.049s] ( 58/104) codex-analytics analytics_client_tests::rejected_turn_steer_maps_active_turn_not_steerable_error_type
+        PASS [   0.046s] ( 59/104) codex-analytics analytics_client_tests::rejected_turn_steer_uses_request_connection_metadata
+        PASS [   0.056s] ( 60/104) codex-analytics analytics_client_tests::rejected_turn_interrupt_does_not_tag_interrupted_turn_event
+        PASS [   0.056s] ( 61/104) codex-analytics analytics_client_tests::rejected_turn_steer_maps_input_too_large_error_type
+        PASS [   0.115s] ( 62/104) codex-analytics analytics_client_tests::reducer_emits_large_accepted_line_aggregates_without_fingerprints
+        PASS [   0.053s] ( 63/104) codex-analytics analytics_client_tests::review_event_serializes_expected_shape
+        PASS [   0.035s] ( 64/104) codex-analytics analytics_client_tests::subagent_thread_started_memory_consolidation_serializes_expected_shape
+        PASS [   0.029s] ( 65/104) codex-analytics analytics_client_tests::subagent_thread_started_publishes_without_initialize
+        PASS [   0.038s] ( 66/104) codex-analytics analytics_client_tests::subagent_thread_started_other_serializes_expected_shape
+        PASS [   0.041s] ( 67/104) codex-analytics analytics_client_tests::subagent_thread_started_other_serializes_explicit_parent_thread_id
+        PASS [   0.032s] ( 68/104) codex-analytics analytics_client_tests::subagent_thread_started_thread_spawn_serializes_thread_lineage
+        PASS [   0.030s] ( 69/104) codex-analytics analytics_client_tests::subagent_tool_items_inherit_parent_connection_metadata
+        PASS [   0.037s] ( 70/104) codex-analytics analytics_client_tests::subagent_thread_started_review_serializes_expected_shape
+        PASS [   0.038s] ( 71/104) codex-analytics analytics_client_tests::thread_initialized_event_serializes_expected_shape
+        PASS [   0.038s] ( 72/104) codex-analytics analytics_client_tests::terminal_reviews_denormalize_counts_onto_tool_item_events
+        PASS [   0.032s] ( 73/104) codex-analytics analytics_client_tests::thread_originator_overrides_shared_connection_across_thread_events
+        PASS [   0.031s] ( 74/104) codex-analytics analytics_client_tests::turn_and_tool_events_read_current_trusted_root
+        PASS [   0.031s] ( 75/104) codex-analytics analytics_client_tests::turn_completed_without_started_notification_emits_null_started_at
+        PASS [   0.032s] ( 76/104) codex-analytics analytics_client_tests::turn_does_not_emit_without_required_prerequisites
+        PASS [   0.027s] ( 77/104) codex-analytics analytics_client_tests::turn_event_counts_completed_tool_items
+        PASS [   0.024s] ( 78/104) codex-analytics analytics_client_tests::turn_event_serializes_expected_shape
+        PASS [   0.024s] ( 79/104) codex-analytics analytics_client_tests::turn_lifecycle_emits_failed_turn_event
+        PASS [   0.024s] ( 80/104) codex-analytics analytics_client_tests::turn_lifecycle_emits_turn_event
+        PASS [   0.022s] ( 81/104) codex-analytics analytics_client_tests::unrelated_client_responses_are_ignored_by_reducer
+        PASS [   0.026s] ( 82/104) codex-analytics analytics_client_tests::turn_start_error_response_discards_pending_start_request
+        PASS [   0.026s] ( 83/104) codex-analytics analytics_client_tests::unrelated_client_requests_are_ignored_by_reducer
+        PASS [   0.039s] ( 84/104) codex-analytics analytics_client_tests::turn_steer_does_not_emit_without_pending_request
+        PASS [   0.032s] ( 85/104) codex-analytics client::tests::analytics_destination_uses_http_without_capture_file
+        PASS [   0.038s] ( 86/104) codex-analytics client::tests::analytics_destination_uses_explicit_capture_file
+        PASS [   0.033s] ( 87/104) codex-analytics client::tests::capture_file_writes_exact_serialized_request
+        PASS [   0.045s] ( 88/104) codex-analytics client::tests::api_key_auth_sends_only_plugin_events_to_codex_backend
+        PASS [   0.036s] ( 89/104) codex-analytics client::tests::flush_is_noop_when_analytics_is_disabled
+        PASS [   0.045s] ( 90/104) codex-analytics client::tests::capture_write_failure_still_consumes_delivery
+        PASS [   0.034s] ( 91/104) codex-analytics client::tests::track_event_request_batches_only_isolates_accepted_line_fingerprint_events
+        PASS [   0.049s] ( 92/104) codex-analytics client::tests::capture_file_writes_final_batches_as_separate_lines
+        PASS [   0.035s] ( 93/104) codex-analytics client::tests::track_plugin_measurements_rejects_unbounded_inputs_before_queueing
+        PASS [   0.038s] ( 94/104) codex-analytics client::tests::track_notification_only_enqueues_analytics_relevant_notifications
+        PASS [   0.035s] ( 95/104) codex-analytics client::tests::track_request_only_enqueues_analytics_relevant_requests
+        PASS [   0.034s] ( 96/104) codex-analytics client::tests::track_response_ignores_unserializable_thread_responses
+        PASS [   0.026s] ( 97/104) codex-analytics hook_run_tests::startup_hook_analytics_has_no_fabricated_turn
+        PASS [   0.027s] ( 98/104) codex-analytics reducer::tests::command_execution_script_paths_reject_unsafe_values
+        PASS [   0.034s] ( 99/104) codex-analytics client::tests::track_response_only_enqueues_analytics_relevant_responses
+        PASS [   0.033s] (100/104) codex-analytics reducer::tests::dynamic_content_counts_include_audio
+        PASS [   0.036s] (101/104) codex-analytics reducer::tests::guardian_review_result_maps_terminal_statuses
+        PASS [   0.074s] (102/104) codex-analytics client::tests::flush_waits_for_preceding_fact_delivery
+        PASS [   0.025s] (103/104) codex-analytics reducer::tests::managed_full_disk_with_restricted_network_reports_external_sandbox
+        PASS [   0.026s] (104/104) codex-analytics reducer::tests::rejected_turn_interrupt_removes_pending_analytics_request
+────────────
+     Summary [   0.463s] 104 tests run: 104 passed, 0 skipped

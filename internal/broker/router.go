@@ -1,18 +1,16 @@
 package broker
 
 import (
-	"crypto/subtle"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
-	"sort"
+	"github.com/seungpyoson/waggle/internal/brokerstate"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/seungpyoson/waggle/internal/config"
-	"github.com/seungpyoson/waggle/internal/messages"
 	"github.com/seungpyoson/waggle/internal/protocol"
 	"github.com/seungpyoson/waggle/internal/tasks"
 )
@@ -20,21 +18,16 @@ import (
 // Commands that work without a session handshake.
 // Everything else requires connect first.
 var noSessionRequired = map[string]bool{
-	protocol.CmdConnect: true,
-	protocol.CmdStatus:  true,
-	protocol.CmdStop:    true,
-	// Replay and ack are local-runtime catch-up commands. They deliberately
-	// avoid session registration so catch-up cannot collide with a live agent
-	// session; the broker socket is the local same-user trust boundary.
-	protocol.CmdReplay:      true,
-	protocol.CmdAck:         true,
-	protocol.CmdPushReserve: true,
-	protocol.CmdPushRelease: true,
+	protocol.CmdEnroll: true, protocol.CmdRetire: true,
+	protocol.CmdConnect: true, protocol.CmdStatus: true, protocol.CmdStop: true,
+	protocol.CmdSend: true, protocol.CmdEnqueue: true, protocol.CmdInbox: true,
+	protocol.CmdAck: true, protocol.CmdReply: true, protocol.CmdWhoami: true,
+	protocol.CmdPresence: true, protocol.CmdConversationStop: true,
 }
 
 // route dispatches a request to the appropriate handler.
 // Session check is enforced here once — individual handlers do not check.
-func route(s *Session, req protocol.Request) protocol.Response {
+func route(s *call, req protocol.Request) protocol.Response {
 	if !noSessionRequired[req.Cmd] && s.name == "" {
 		return protocol.ErrResponse(protocol.ErrNotConnected, "not connected")
 	}
@@ -48,175 +41,44 @@ func route(s *Session, req protocol.Request) protocol.Response {
 		return handlePublish(s, req)
 	case protocol.CmdSubscribe:
 		return handleSubscribe(s, req)
-	case protocol.CmdTaskCreate:
-		return handleTaskCreate(s, req)
-	case protocol.CmdTaskList:
-		return handleTaskList(s, req)
-	case protocol.CmdTaskClaim:
-		return handleTaskClaim(s, req)
-	case protocol.CmdTaskComplete:
-		return handleTaskComplete(s, req)
-	case protocol.CmdTaskFail:
-		return handleTaskFail(s, req)
-	case protocol.CmdTaskHeartbeat:
-		return handleTaskHeartbeat(s, req)
-	case protocol.CmdTaskCancel:
-		return handleTaskCancel(s, req)
-	case protocol.CmdTaskGet:
-		return handleTaskGet(s, req)
-	case protocol.CmdTaskUpdate:
-		return handleTaskUpdate(s, req)
+	case protocol.CmdTaskCreate, protocol.CmdTaskList, protocol.CmdTaskClaim,
+		protocol.CmdTaskComplete, protocol.CmdTaskFail, protocol.CmdTaskHeartbeat,
+		protocol.CmdTaskCancel, protocol.CmdTaskGet, protocol.CmdTaskUpdate, protocol.CmdStatus:
+		return routeTasks(s, req)
 	case protocol.CmdLock:
 		return handleLock(s, req)
 	case protocol.CmdUnlock:
 		return handleUnlock(s, req)
 	case protocol.CmdLocks:
 		return handleLocks(s)
-	case protocol.CmdStatus:
-		return handleStatus(s)
 	case protocol.CmdStop:
 		return handleStop(s)
-	case protocol.CmdSend:
-		return handleSend(s, req)
-	case protocol.CmdInbox:
-		return handleInbox(s, req)
-	case protocol.CmdReplay:
-		return handleReplay(s, req)
-	case protocol.CmdAck:
-		return handleAck(s, req)
-	case protocol.CmdPresence:
-		return handlePresence(s)
-	case protocol.CmdPushReserve:
-		return handlePushReserve(s, req)
-	case protocol.CmdPushRelease:
-		return handlePushRelease(s, req)
-	case protocol.CmdSpawnRegister:
-		return handleSpawnRegister(s, req)
-	case protocol.CmdSpawnUpdatePID:
-		return handleSpawnUpdatePID(s, req)
+	case protocol.CmdSend, protocol.CmdEnqueue, protocol.CmdInbox, protocol.CmdAck,
+		protocol.CmdReply, protocol.CmdWhoami, protocol.CmdPresence, protocol.CmdConversationStop, protocol.CmdEnroll, protocol.CmdRetire:
+		return routeMessages(s, req)
 	default:
 		return protocol.ErrResponse(protocol.ErrInvalidRequest, "unknown command")
 	}
 }
 
-func handlePushReserve(s *Session, req protocol.Request) protocol.Response {
-	if req.Name == "" {
-		return protocol.ErrResponse(protocol.ErrInvalidRequest, "name required")
-	}
-	if len(req.Name) > config.Defaults.MaxFieldLength {
-		return protocol.ErrResponse(protocol.ErrInvalidRequest, fmt.Sprintf("name too long (max %d chars)", config.Defaults.MaxFieldLength))
-	}
-	if strings.HasSuffix(req.Name, "-push") {
-		return protocol.ErrResponse(protocol.ErrInvalidRequest, `push.reserve requires a base agent name, not a "-push" listener name`)
-	}
-
-	// The local Unix socket permission is the auth boundary. Runtime listeners
-	// reserve broker-owned tokens before any base agent session exists, and
-	// ordinary base-agent CLI connects must not take ownership of those tokens.
-	pushToken, err := s.broker.GeneratePushToken(req.Name)
-	if err != nil {
-		return protocol.ErrResponse(protocol.ErrInternalError, err.Error())
-	}
-	data, err := json.Marshal(connectResponseData{PushToken: pushToken})
-	if err != nil {
-		return protocol.ErrResponse(protocol.ErrInternalError, err.Error())
-	}
-	return protocol.OKResponse(data)
-}
-
-func handlePushRelease(s *Session, req protocol.Request) protocol.Response {
-	if req.Name == "" {
-		return protocol.ErrResponse(protocol.ErrInvalidRequest, "name required")
-	}
-	if len(req.Name) > config.Defaults.MaxFieldLength {
-		return protocol.ErrResponse(protocol.ErrInvalidRequest, fmt.Sprintf("name too long (max %d chars)", config.Defaults.MaxFieldLength))
-	}
-	if strings.HasSuffix(req.Name, "-push") {
-		return protocol.ErrResponse(protocol.ErrInvalidRequest, `push.release requires a base agent name, not a "-push" listener name`)
-	}
-	if req.PushToken == "" {
-		return protocol.ErrResponse(protocol.ErrInvalidRequest, "push token required")
-	}
-
-	s.broker.mu.Lock()
-	expectedToken, exists := s.broker.pushTokens[req.Name]
-	if !exists || subtle.ConstantTimeCompare([]byte(req.PushToken), []byte(expectedToken)) != 1 {
-		s.broker.mu.Unlock()
-		return protocol.ErrResponse(protocol.ErrForbidden, "invalid push listener token")
-	}
-	delete(s.broker.pushTokens, req.Name)
-	if base, ok := s.broker.sessions[req.Name]; ok && !strings.HasSuffix(base.name, "-push") {
-		base.ownsPushToken = false
-	}
-	s.broker.mu.Unlock()
-
-	return protocol.OKResponse(nil)
-}
-
-type connectResponseData struct {
-	PushToken string `json:"push_token,omitempty"`
-}
-
-func handleConnect(s *Session, req protocol.Request) protocol.Response {
-	if req.Name == "" {
-		return protocol.ErrResponse(protocol.ErrInvalidRequest, "name required")
-	}
-	if len(req.Name) > config.Defaults.MaxFieldLength {
-		return protocol.ErrResponse(protocol.ErrInvalidRequest, fmt.Sprintf("name too long (max %d chars)", config.Defaults.MaxFieldLength))
-	}
-	// Reserve -push suffix for push listeners — prevents routing collisions
-	if strings.HasSuffix(req.Name, "-push") && !req.PushListener {
-		return protocol.ErrResponse(protocol.ErrInvalidRequest, `names ending in "-push" are reserved; set push_listener: true to connect as a push listener`)
+func handleConnect(s *call, req protocol.Request) protocol.Response {
+	if req.Name == "" || len(req.Name) > config.Defaults.MaxFieldLength {
+		return protocol.ErrResponse(protocol.ErrInvalidRequest, "connection name outside configured bounds")
 	}
 	if s.name != "" {
 		return protocol.ErrResponse(protocol.ErrAlreadyConnected, "already connected")
 	}
-
-	var pushToken string
 	s.broker.mu.Lock()
-	if existing, ok := s.broker.sessions[req.Name]; ok && existing != s {
-		s.broker.mu.Unlock()
-		return protocol.ErrResponse(protocol.ErrAlreadyConnected, "session name already in use")
-	}
-	if strings.HasSuffix(req.Name, "-push") {
-		baseName := strings.TrimSuffix(req.Name, "-push")
-		expectedToken, exists := s.broker.pushTokens[baseName]
-		if !exists || req.PushToken == "" || subtle.ConstantTimeCompare([]byte(req.PushToken), []byte(expectedToken)) != 1 {
-			s.broker.mu.Unlock()
-			return protocol.ErrResponse(protocol.ErrForbidden, "invalid push listener token")
-		}
-	} else {
-		if existingToken, exists := s.broker.pushTokens[req.Name]; exists {
-			pushToken = existingToken
-		} else {
-			var err error
-			pushToken, err = newPushToken()
-			if err != nil {
-				s.broker.mu.Unlock()
-				return protocol.ErrResponse(protocol.ErrInternalError, err.Error())
-			}
-			s.broker.pushTokens[req.Name] = pushToken
-			s.ownsPushToken = true
-		}
+	defer s.broker.mu.Unlock()
+	if _, exists := s.broker.sessions[req.Name]; exists {
+		return protocol.ErrResponse(protocol.ErrAlreadyConnected, "connection name already in use")
 	}
 	s.name = req.Name
-	s.broker.sessions[s.name] = s
-	s.broker.mu.Unlock()
-
-	// Publish presence.online event
-	publishPresenceEvent(s.broker, "presence.online", s.name)
-
-	if pushToken != "" {
-		data, err := json.Marshal(connectResponseData{PushToken: pushToken})
-		if err != nil {
-			return protocol.ErrResponse(protocol.ErrInternalError, err.Error())
-		}
-		return protocol.OKResponse(data)
-	}
+	s.broker.sessions[s.name] = s.Session
 	return protocol.OKResponse(nil)
 }
 
-func handleDisconnect(s *Session) protocol.Response {
+func handleDisconnect(s *call) protocol.Response {
 	s.cleanDisconnect.Store(true)
 	// Don't call cleanup() here — readLoop will return after encoding
 	// this response (see cleanDisconnect check), triggering deferred cleanup.
@@ -224,7 +86,7 @@ func handleDisconnect(s *Session) protocol.Response {
 	return protocol.OKResponse(nil)
 }
 
-func handlePublish(s *Session, req protocol.Request) protocol.Response {
+func handlePublish(s *call, req protocol.Request) protocol.Response {
 	if req.Topic == "" {
 		return protocol.ErrResponse(protocol.ErrInvalidRequest, "topic required")
 	}
@@ -250,7 +112,7 @@ func handlePublish(s *Session, req protocol.Request) protocol.Response {
 	return protocol.OKResponse(nil)
 }
 
-func handleSubscribe(s *Session, req protocol.Request) protocol.Response {
+func handleSubscribe(s *call, req protocol.Request) protocol.Response {
 	if req.Topic == "" {
 		return protocol.ErrResponse(protocol.ErrInvalidRequest, "topic required")
 	}
@@ -260,7 +122,9 @@ func handleSubscribe(s *Session, req protocol.Request) protocol.Response {
 	// Switch to streaming mode
 	// Messages from the hub are already marshaled Event objects
 	// Write them directly to the connection without wrapping
+	s.streams.Add(1)
 	go func() {
+		defer s.streams.Done()
 		for msg := range ch {
 			// msg is already a marshaled Event, write it directly
 			// CLASS 1 FIX (B1): Hold writeMu to prevent race with readLoop enc.Encode
@@ -274,7 +138,7 @@ func handleSubscribe(s *Session, req protocol.Request) protocol.Response {
 	return protocol.OKResponse(nil)
 }
 
-func handleTaskCreate(s *Session, req protocol.Request) protocol.Response {
+func handleTaskCreate(s *taskCall, req protocol.Request) protocol.Response {
 
 	// Validate priority
 	if req.Priority < 0 || req.Priority > config.Defaults.MaxPriority {
@@ -316,7 +180,7 @@ func handleTaskCreate(s *Session, req protocol.Request) protocol.Response {
 			fmt.Sprintf("ttl exceeds maximum (%d seconds)", config.Defaults.MaxTaskTTL))
 	}
 
-	task, err := s.broker.store.Create(tasks.CreateParams{
+	task, err := s.store.Create(tasks.CreateParams{
 		IdempotencyKey: req.IdempotencyKey,
 		Type:           req.Type,
 		Tags:           tags,
@@ -332,15 +196,15 @@ func handleTaskCreate(s *Session, req protocol.Request) protocol.Response {
 	}
 
 	// Publish task.created event
-	publishTaskEvent(s.broker, "task.created", task)
+	s.event("task.created", task)
 
 	data, _ := json.Marshal(task)
 	return protocol.OKResponse(data)
 }
 
-func handleTaskList(s *Session, req protocol.Request) protocol.Response {
+func handleTaskList(s *taskCall, req protocol.Request) protocol.Response {
 
-	taskList, err := s.broker.store.List(tasks.ListFilter{
+	taskList, err := s.store.List(tasks.ListFilter{
 		State: req.State,
 		Type:  req.Type,
 		Owner: req.Owner,
@@ -353,14 +217,14 @@ func handleTaskList(s *Session, req protocol.Request) protocol.Response {
 	return protocol.OKResponse(data)
 }
 
-func handleTaskClaim(s *Session, req protocol.Request) protocol.Response {
+func handleTaskClaim(s *taskCall, req protocol.Request) protocol.Response {
 
 	var tags []string
 	if req.Tags != "" {
 		tags = strings.Split(req.Tags, ",")
 	}
 
-	task, err := s.broker.store.Claim(s.name, tasks.ClaimFilter{
+	task, err := s.store.Claim(s.name, tasks.ClaimFilter{
 		Type: req.Type,
 		Tags: tags,
 	})
@@ -372,20 +236,20 @@ func handleTaskClaim(s *Session, req protocol.Request) protocol.Response {
 	}
 
 	// Publish task.claimed event
-	publishTaskEvent(s.broker, "task.claimed", task)
+	s.event("task.claimed", task)
 
 	data, _ := json.Marshal(task)
 	return protocol.OKResponse(data)
 }
 
-func handleTaskComplete(s *Session, req protocol.Request) protocol.Response {
+func handleTaskComplete(s *taskCall, req protocol.Request) protocol.Response {
 
 	taskID, err := strconv.ParseInt(req.TaskID, 10, 64)
 	if err != nil {
 		return protocol.ErrResponse(protocol.ErrInvalidRequest, "invalid task_id")
 	}
 
-	err = s.broker.store.Complete(taskID, req.ClaimToken, string(req.Result))
+	err = s.store.Complete(taskID, req.ClaimToken, string(req.Result))
 	if err != nil {
 		if strings.Contains(err.Error(), "invalid claim token") {
 			return protocol.ErrResponse(protocol.ErrInvalidToken, err.Error())
@@ -397,27 +261,36 @@ func handleTaskComplete(s *Session, req protocol.Request) protocol.Response {
 	}
 
 	// Get updated task and publish event
-	task, _ := s.broker.store.Get(taskID)
-	publishTaskEvent(s.broker, "task.completed", task)
+	task, err := s.store.Get(taskID)
+	if err != nil {
+		return protocol.ErrResponse(protocol.ErrInternalError, err.Error())
+	}
+	s.event("task.completed", task)
 
 	// Resolve dependencies
-	unblocked, _ := tasks.ResolveDeps(s.broker.store, taskID)
+	unblocked, err := tasks.ResolveDeps(s.store, taskID)
+	if err != nil {
+		return protocol.ErrResponse(protocol.ErrInternalError, err.Error())
+	}
 	for _, id := range unblocked {
-		t, _ := s.broker.store.Get(id)
-		publishTaskEvent(s.broker, "task.unblocked", t)
+		t, err := s.store.Get(id)
+		if err != nil {
+			return protocol.ErrResponse(protocol.ErrInternalError, err.Error())
+		}
+		s.event("task.unblocked", t)
 	}
 
 	return protocol.OKResponse(nil)
 }
 
-func handleTaskFail(s *Session, req protocol.Request) protocol.Response {
+func handleTaskFail(s *taskCall, req protocol.Request) protocol.Response {
 
 	taskID, err := strconv.ParseInt(req.TaskID, 10, 64)
 	if err != nil {
 		return protocol.ErrResponse(protocol.ErrInvalidRequest, "invalid task_id")
 	}
 
-	err = s.broker.store.Fail(taskID, req.ClaimToken, req.Reason)
+	err = s.store.Fail(taskID, req.ClaimToken, req.Reason)
 	if err != nil {
 		if strings.Contains(err.Error(), "invalid claim token") {
 			return protocol.ErrResponse(protocol.ErrInvalidToken, err.Error())
@@ -429,27 +302,36 @@ func handleTaskFail(s *Session, req protocol.Request) protocol.Response {
 	}
 
 	// Get updated task and publish event
-	task, _ := s.broker.store.Get(taskID)
-	publishTaskEvent(s.broker, "task.failed", task)
+	task, err := s.store.Get(taskID)
+	if err != nil {
+		return protocol.ErrResponse(protocol.ErrInternalError, err.Error())
+	}
+	s.event("task.failed", task)
 
 	// Fail dependents
-	failed, _ := tasks.FailDependents(s.broker.store, taskID)
+	failed, err := tasks.FailDependents(s.store, taskID)
+	if err != nil {
+		return protocol.ErrResponse(protocol.ErrInternalError, err.Error())
+	}
 	for _, id := range failed {
-		t, _ := s.broker.store.Get(id)
-		publishTaskEvent(s.broker, "task.failed", t)
+		t, err := s.store.Get(id)
+		if err != nil {
+			return protocol.ErrResponse(protocol.ErrInternalError, err.Error())
+		}
+		s.event("task.failed", t)
 	}
 
 	return protocol.OKResponse(nil)
 }
 
-func handleTaskHeartbeat(s *Session, req protocol.Request) protocol.Response {
+func handleTaskHeartbeat(s *taskCall, req protocol.Request) protocol.Response {
 
 	taskID, err := strconv.ParseInt(req.TaskID, 10, 64)
 	if err != nil {
 		return protocol.ErrResponse(protocol.ErrInvalidRequest, "invalid task_id")
 	}
 
-	err = s.broker.store.Heartbeat(taskID, req.ClaimToken)
+	err = s.store.Heartbeat(taskID, req.ClaimToken)
 	if err != nil {
 		if strings.Contains(err.Error(), "invalid claim token") {
 			return protocol.ErrResponse(protocol.ErrInvalidToken, err.Error())
@@ -463,14 +345,14 @@ func handleTaskHeartbeat(s *Session, req protocol.Request) protocol.Response {
 	return protocol.OKResponse(nil)
 }
 
-func handleTaskCancel(s *Session, req protocol.Request) protocol.Response {
+func handleTaskCancel(s *taskCall, req protocol.Request) protocol.Response {
 
 	taskID, err := strconv.ParseInt(req.TaskID, 10, 64)
 	if err != nil {
 		return protocol.ErrResponse(protocol.ErrInvalidRequest, "invalid task_id")
 	}
 
-	err = s.broker.store.Cancel(taskID)
+	err = s.store.Cancel(taskID)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			return protocol.ErrResponse(protocol.ErrTaskNotFound, err.Error())
@@ -479,20 +361,23 @@ func handleTaskCancel(s *Session, req protocol.Request) protocol.Response {
 	}
 
 	// Get updated task and publish event
-	task, _ := s.broker.store.Get(taskID)
-	publishTaskEvent(s.broker, "task.canceled", task)
+	task, err := s.store.Get(taskID)
+	if err != nil {
+		return protocol.ErrResponse(protocol.ErrInternalError, err.Error())
+	}
+	s.event("task.canceled", task)
 
 	return protocol.OKResponse(nil)
 }
 
-func handleTaskGet(s *Session, req protocol.Request) protocol.Response {
+func handleTaskGet(s *taskCall, req protocol.Request) protocol.Response {
 
 	taskID, err := strconv.ParseInt(req.TaskID, 10, 64)
 	if err != nil {
 		return protocol.ErrResponse(protocol.ErrInvalidRequest, "invalid task_id")
 	}
 
-	task, err := s.broker.store.Get(taskID)
+	task, err := s.store.Get(taskID)
 	if err != nil {
 		return protocol.ErrResponse(protocol.ErrTaskNotFound, err.Error())
 	}
@@ -501,7 +386,7 @@ func handleTaskGet(s *Session, req protocol.Request) protocol.Response {
 	return protocol.OKResponse(data)
 }
 
-func handleTaskUpdate(s *Session, req protocol.Request) protocol.Response {
+func handleTaskUpdate(s *taskCall, req protocol.Request) protocol.Response {
 	taskID, err := strconv.ParseInt(req.TaskID, 10, 64)
 	if err != nil {
 		return protocol.ErrResponse(protocol.ErrInvalidRequest, "invalid task_id")
@@ -533,13 +418,13 @@ func handleTaskUpdate(s *Session, req protocol.Request) protocol.Response {
 		return protocol.ErrResponse(protocol.ErrInvalidRequest, "at least one field must be specified")
 	}
 
-	err = s.broker.store.Update(taskID, params)
+	err = s.store.Update(taskID, params)
 	if err != nil {
 		return protocol.ErrResponse(protocol.ErrTaskNotFound, err.Error())
 	}
 
 	// Return updated task
-	task, err := s.broker.store.Get(taskID)
+	task, err := s.store.Get(taskID)
 	if err != nil {
 		return protocol.ErrResponse(protocol.ErrTaskNotFound, err.Error())
 	}
@@ -548,7 +433,7 @@ func handleTaskUpdate(s *Session, req protocol.Request) protocol.Response {
 	return protocol.OKResponse(data)
 }
 
-func handleLock(s *Session, req protocol.Request) protocol.Response {
+func handleLock(s *call, req protocol.Request) protocol.Response {
 	if req.Resource == "" {
 		return protocol.ErrResponse(protocol.ErrInvalidRequest, "resource required")
 	}
@@ -561,7 +446,7 @@ func handleLock(s *Session, req protocol.Request) protocol.Response {
 	return protocol.OKResponse(nil)
 }
 
-func handleUnlock(s *Session, req protocol.Request) protocol.Response {
+func handleUnlock(s *call, req protocol.Request) protocol.Response {
 	if req.Resource == "" {
 		return protocol.ErrResponse(protocol.ErrInvalidRequest, "resource required")
 	}
@@ -570,20 +455,20 @@ func handleUnlock(s *Session, req protocol.Request) protocol.Response {
 	return protocol.OKResponse(nil)
 }
 
-func handleLocks(s *Session) protocol.Response {
+func handleLocks(s *call) protocol.Response {
 
 	locks := s.broker.lockMgr.List()
 	data, _ := json.Marshal(locks)
 	return protocol.OKResponse(data)
 }
 
-func handleStatus(s *Session) protocol.Response {
+func handleStatus(s *taskCall) protocol.Response {
 	s.broker.mu.RLock()
 	sessionCount := len(s.broker.sessions)
 	s.broker.mu.RUnlock()
 
 	// Get task counts by state
-	taskCounts, err := s.broker.store.CountByState()
+	taskCounts, err := s.store.CountByState()
 	if err != nil {
 		return protocol.ErrResponse(protocol.ErrInternalError, "failed to get task counts")
 	}
@@ -594,38 +479,26 @@ func handleStatus(s *Session) protocol.Response {
 		"subscribers": s.broker.hub.SubscriberCount(),
 		"locks":       s.broker.lockMgr.Count(),
 		"tasks":       taskCounts,
-		"spawned":     s.broker.spawnMgr.List(),
 	}
 
 	// Add queue health
-	health, err := s.broker.store.QueueHealth(s.broker.config.TaskStaleThreshold)
-	if err == nil {
-		status["queue_health"] = health
+	health, err := s.store.QueueHealth(s.broker.config.TaskStaleThreshold)
+	if err != nil {
+		return protocol.ErrResponse(protocol.ErrInternalError, err.Error())
 	}
+	status["queue_health"] = health
 
 	data, _ := json.Marshal(status)
 	return protocol.OKResponse(data)
 }
 
-func handleStop(s *Session) protocol.Response {
-	go s.broker.Shutdown()
+// handleStop records the operator's intent instead of draining inside the RPC.
+// Draining closes ingress and every accepted connection with it, so beginning
+// it here would destroy this connection before it could carry the
+// acknowledgement. The read loop begins draining once the reply has been written.
+func handleStop(s *call) protocol.Response {
+	s.stopCause = fmt.Errorf("stop requested by %s", s.name)
 	return protocol.OKResponse(nil)
-}
-
-// publishTaskEvent publishes a task event to the task.events topic
-func publishTaskEvent(b *Broker, event string, task *tasks.Task) {
-	if task == nil {
-		return
-	}
-
-	evt := protocol.Event{
-		Topic: "task.events",
-		Event: event,
-		Data:  mustMarshal(task),
-		TS:    time.Now().UTC().Format(time.RFC3339),
-	}
-
-	b.hub.Publish("task.events", mustMarshal(evt))
 }
 
 func mustMarshal(v interface{}) json.RawMessage {
@@ -636,282 +509,70 @@ func mustMarshal(v interface{}) json.RawMessage {
 	return data
 }
 
-func handleSend(s *Session, req protocol.Request) protocol.Response {
-	// CLASS 3 FIX (G3): Validate recipient name length
-	if req.Name == "" {
-		return protocol.ErrResponse(protocol.ErrInvalidRequest, "recipient name required")
-	}
-	if len(req.Name) > config.Defaults.MaxFieldLength {
-		return protocol.ErrResponse(protocol.ErrInvalidRequest, fmt.Sprintf("recipient name too long (max %d chars)", config.Defaults.MaxFieldLength))
-	}
-
-	// CLASS 3 FIX (G2): Validate message body size
-	if req.Message == "" {
-		return protocol.ErrResponse(protocol.ErrInvalidRequest, "message required")
-	}
-	if len(req.Message) > int(config.Defaults.MaxMessageSize) {
-		return protocol.ErrResponse(protocol.ErrInvalidRequest, fmt.Sprintf("message body too large (max %d bytes)", config.Defaults.MaxMessageSize))
-	}
-
-	// Parse priority (default to normal if empty)
-	priority := req.MsgPriority
-	if priority == "" {
-		priority = config.Defaults.DefaultMsgPriority
-	}
-
-	// Parse TTL (nil when 0)
-	var ttl *int
-	if req.TTL > 0 {
-		ttl = &req.TTL
-	}
-
-	// Send message
-	msg, err := s.broker.msgStore.Send(s.name, req.Name, req.Message, priority, ttl)
-	if err != nil {
-		return protocol.ErrResponse(protocol.ErrInternalError, err.Error())
-	}
-
-	// Handle --await-ack: Register waiter BEFORE push to avoid race
-	// If ack arrives between push and waiter registration, sender would timeout
-	var ackCh chan struct{}
-	if req.AwaitAck {
-		ackCh = make(chan struct{}, 1) // buffered: ack can arrive before select
-		s.broker.ackWaitersMu.Lock()
-		s.broker.ackWaiters[msg.ID] = ackCh
-		s.broker.ackWaitersMu.Unlock()
-	}
-
-	// Push to recipient if connected — fall back to name-push listener
-	s.broker.mu.RLock()
-	recipient, online := s.broker.sessions[req.Name]
-	usedPushFallback := false
-	if !online {
-		recipient, online = s.broker.sessions[req.Name+"-push"]
-		usedPushFallback = online
-	}
-	s.broker.mu.RUnlock()
-
-	// CLASS 2 FIX (B3): Skip push delivery when sending to self to prevent protocol corruption
-	if online && recipient != s {
-		pushMsg := protocol.Response{
-			OK: true,
-			Data: mustMarshal(map[string]any{
-				"type":    "message",
-				"id":      msg.ID,
-				"from":    msg.From,
-				"body":    msg.Body,
-				"sent_at": msg.CreatedAt,
-			}),
-		}
-		recipient.writeMu.Lock()
-		// CLASS 1 FIX (B2): Check encode error before marking as pushed
-		if err := recipient.enc.Encode(pushMsg); err != nil {
-			recipient.writeMu.Unlock()
-			// Don't mark as pushed if delivery failed
-			log.Printf("session %q: failed to push message %d to %q: %v", s.name, msg.ID, req.Name, err)
-		} else {
-			recipient.writeMu.Unlock()
-			if err := s.broker.msgStore.MarkPushed(msg.ID); err != nil {
-				log.Printf("session %q: failed to mark message %d as pushed: %v", s.name, msg.ID, err)
-			}
-		}
-	}
-
-	// Also push to persistent listener (<name>-push) if connected.
-	// Skip if fallback already sent to -push above (prevents double-push).
-	pushName := req.Name + "-push"
-	senderName := strings.TrimSuffix(s.name, "-push")
-	s.broker.mu.RLock()
-	pushRecipient, pushOnline := s.broker.sessions[pushName]
-	s.broker.mu.RUnlock()
-
-	if pushOnline && pushRecipient != s && !usedPushFallback && req.Name != senderName {
-		pushResp := protocol.Response{
-			OK: true,
-			Data: mustMarshal(map[string]any{
-				"type":    "message",
-				"id":      msg.ID,
-				"from":    msg.From,
-				"body":    msg.Body,
-				"sent_at": msg.CreatedAt,
-			}),
-		}
-		pushRecipient.writeMu.Lock()
-		if err := pushRecipient.enc.Encode(pushResp); err != nil {
-			pushRecipient.writeMu.Unlock()
-			log.Printf("session %q: failed to push message %d to %q: %v", s.name, msg.ID, pushName, err)
-		} else {
-			pushRecipient.writeMu.Unlock()
-		}
-	}
-
-	// Wait for ack if requested
-	if req.AwaitAck {
-		timeout := time.Duration(req.Timeout) * time.Second
-		if timeout <= 0 {
-			timeout = config.Defaults.AwaitAckDefaultTimeout
-		}
-
-		select {
-		case <-ackCh:
-			return protocol.OKResponse(mustMarshal(msg))
-		case <-time.After(timeout):
-			s.broker.ackWaitersMu.Lock()
-			delete(s.broker.ackWaiters, msg.ID) // no leak
-			s.broker.ackWaitersMu.Unlock()
-			return protocol.ErrResponse(protocol.ErrTimeout, "await-ack timed out")
-		case <-s.broker.stopCh:
-			s.broker.ackWaitersMu.Lock()
-			delete(s.broker.ackWaiters, msg.ID)
-			s.broker.ackWaitersMu.Unlock()
-			return protocol.ErrResponse(protocol.ErrInternalError, "broker shutting down")
-		}
-	}
-
-	return protocol.OKResponse(mustMarshal(msg))
+// call carries one admitted RPC lifetime through all of its transactions.
+type call struct {
+	*Session
+	op *brokerstate.Operation
 }
 
-func handleInbox(s *Session, req protocol.Request) protocol.Response {
-	caller := strings.TrimSuffix(s.name, "-push")
-	messages, err := s.broker.msgStore.Inbox(caller)
-	if err != nil {
-		return protocol.ErrResponse(protocol.ErrInternalError, err.Error())
-	}
-	return protocol.OKResponse(mustMarshal(messages))
+type taskCall struct {
+	*call
+	store   *tasks.Store
+	effects []protocol.Event
 }
 
-func handleReplay(s *Session, req protocol.Request) protocol.Response {
-	if req.Name == "" {
-		return protocol.ErrResponse(protocol.ErrInvalidRequest, "name required")
-	}
-	messages, err := s.broker.msgStore.Replay(req.Name)
-	if err != nil {
-		return protocol.ErrResponse(protocol.ErrInternalError, err.Error())
-	}
-	return protocol.OKResponse(mustMarshal(messages))
+func (s *taskCall) event(name string, task *tasks.Task) {
+	s.effects = append(s.effects, protocol.Event{Topic: "task.events", Event: name, Data: mustMarshal(task), TS: time.Now().UTC().Format(time.RFC3339)})
 }
 
-func handleAck(s *Session, req protocol.Request) protocol.Response {
-	if req.MessageID == 0 {
-		return protocol.ErrResponse(protocol.ErrInvalidRequest, "message_id required")
-	}
+type requestFailure struct{ response protocol.Response }
 
-	caller := req.Name
-	if caller == "" {
-		caller = strings.TrimSuffix(s.name, "-push")
-	}
-	if caller == "" {
-		return protocol.ErrResponse(protocol.ErrInvalidRequest, "name required")
-	}
-	err := s.broker.msgStore.Ack(req.MessageID, caller)
-	if err != nil {
-		if errors.Is(err, messages.ErrMessageNotFound) {
-			return protocol.ErrResponse(protocol.ErrMessageNotFound, err.Error())
+func (e *requestFailure) Error() string { return e.response.Error }
+
+func routeTasks(s *call, req protocol.Request) protocol.Response {
+	var response protocol.Response
+	var effects []protocol.Event
+	err := s.op.Write(context.Background(), func(tx *brokerstate.WriteTx) error {
+		task := &taskCall{call: s, store: tasks.NewStore(tx)}
+		switch req.Cmd {
+		case protocol.CmdTaskCreate:
+			response = handleTaskCreate(task, req)
+		case protocol.CmdTaskList:
+			response = handleTaskList(task, req)
+		case protocol.CmdTaskClaim:
+			response = handleTaskClaim(task, req)
+		case protocol.CmdTaskComplete:
+			response = handleTaskComplete(task, req)
+		case protocol.CmdTaskFail:
+			response = handleTaskFail(task, req)
+		case protocol.CmdTaskHeartbeat:
+			response = handleTaskHeartbeat(task, req)
+		case protocol.CmdTaskCancel:
+			response = handleTaskCancel(task, req)
+		case protocol.CmdTaskGet:
+			response = handleTaskGet(task, req)
+		case protocol.CmdTaskUpdate:
+			response = handleTaskUpdate(task, req)
+		case protocol.CmdStatus:
+			response = handleStatus(task)
+		default:
+			return fmt.Errorf("invalid task command %s", req.Cmd)
 		}
-		if errors.Is(err, messages.ErrNotRecipient) {
-			return protocol.ErrResponse(protocol.ErrForbidden, err.Error())
+		if !response.OK {
+			return &requestFailure{response}
+		}
+		effects = task.effects
+		return nil
+	})
+	if err != nil {
+		var rejected *requestFailure
+		if errors.As(err, &rejected) {
+			return rejected.response
 		}
 		return protocol.ErrResponse(protocol.ErrInternalError, err.Error())
 	}
-
-	// Signal --await-ack sender if blocked
-	s.broker.ackWaitersMu.Lock()
-	if ch, ok := s.broker.ackWaiters[req.MessageID]; ok {
-		delete(s.broker.ackWaiters, req.MessageID)
-		s.broker.ackWaitersMu.Unlock()
-		close(ch) // buffered ch, never blocks
-	} else {
-		s.broker.ackWaitersMu.Unlock()
+	for _, event := range effects {
+		s.broker.hub.Publish(event.Topic, mustMarshal(event))
 	}
-
-	return protocol.OKResponse(nil)
-}
-
-func handlePresence(s *Session) protocol.Response {
-	s.broker.mu.RLock()
-	// Collect all raw session names first
-	allNames := make(map[string]bool, len(s.broker.sessions))
-	for name := range s.broker.sessions {
-		allNames[name] = true
-	}
-	// Build presence list, hiding -push listeners only when the base agent exists
-	seen := make(map[string]bool)
-	agents := make([]map[string]string, 0, len(s.broker.sessions))
-	for name := range s.broker.sessions {
-		displayName := name
-		if base := strings.TrimSuffix(name, "-push"); base != name {
-			// This is a -push listener. Hide it if the base agent session exists.
-			if allNames[base] {
-				continue
-			}
-			// Base agent not connected — show the -push listener under the base name
-			// so the agent is still discoverable.
-			displayName = base
-		}
-		if seen[displayName] {
-			continue
-		}
-		seen[displayName] = true
-		agents = append(agents, map[string]string{"name": displayName, "state": "online"})
-	}
-	s.broker.mu.RUnlock()
-
-	sort.Slice(agents, func(i, j int) bool { return agents[i]["name"] < agents[j]["name"] })
-
-	return protocol.OKResponse(mustMarshal(agents))
-}
-
-// publishPresenceEvent publishes a presence event to the presence.events topic
-func publishPresenceEvent(b *Broker, event, name string) {
-	evt := protocol.Event{
-		Topic: "presence.events",
-		Event: event,
-		Data:  mustMarshal(map[string]string{"name": name}),
-		TS:    time.Now().UTC().Format(time.RFC3339),
-	}
-	b.hub.Publish("presence.events", mustMarshal(evt))
-}
-
-func handleSpawnRegister(s *Session, req protocol.Request) protocol.Response {
-	if req.Name == "" {
-		return protocol.ErrResponse(protocol.ErrInvalidRequest, "name required")
-	}
-
-	// Parse PID and type from Payload
-	var spawnData struct {
-		PID  int    `json:"pid"`
-		Type string `json:"type"`
-	}
-	if err := json.Unmarshal(req.Payload, &spawnData); err != nil {
-		return protocol.ErrResponse(protocol.ErrInvalidRequest, fmt.Sprintf("invalid spawn data: %v", err))
-	}
-	// Allow PID=0 as a fallback when PID detection fails (macOS limitation)
-	if spawnData.PID < 0 {
-		return protocol.ErrResponse(protocol.ErrInvalidRequest, "valid pid required")
-	}
-
-	if err := s.broker.spawnMgr.Add(req.Name, spawnData.Type, spawnData.PID); err != nil {
-		return protocol.ErrResponse(protocol.ErrInvalidRequest, err.Error())
-	}
-
-	return protocol.OKResponse(nil)
-}
-
-func handleSpawnUpdatePID(s *Session, req protocol.Request) protocol.Response {
-	if req.Name == "" {
-		return protocol.ErrResponse(protocol.ErrInvalidRequest, "name required")
-	}
-
-	var data struct {
-		PID int `json:"pid"`
-	}
-	if err := json.Unmarshal(req.Payload, &data); err != nil {
-		return protocol.ErrResponse(protocol.ErrInvalidRequest, fmt.Sprintf("invalid data: %v", err))
-	}
-
-	if err := s.broker.spawnMgr.UpdatePID(req.Name, data.PID); err != nil {
-		return protocol.ErrResponse(protocol.ErrInvalidRequest, err.Error())
-	}
-
-	return protocol.OKResponse(nil)
+	return response
 }

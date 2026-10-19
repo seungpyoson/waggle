@@ -1,6 +1,6 @@
 ---
 name: waggle-status
-description: Check waggle broker status — connected agents, task queue, spawned agents
+description: Check waggle broker status — broker connections and task queue
 ---
 
 Execute this command:
@@ -9,5 +9,7 @@ Execute this command:
 waggle status
 ```
 
-No agent name needed. Returns JSON with sessions, tasks, spawned agents, queue health.
+No agent name needed. Returns JSON with connection counts, tasks, and queue health.
 
+
+Use `waggle sessions` for canonical session identities and native readiness. Terminal launch requests are not session registrations.

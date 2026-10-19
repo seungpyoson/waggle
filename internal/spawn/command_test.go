@@ -15,7 +15,7 @@ func TestBuildShellCommand_Simple(t *testing.T) {
 	if !strings.Contains(got, "KEY='val'") {
 		t.Errorf("expected KEY='val' in output, got: %s", got)
 	}
-	if !strings.Contains(got, "echo 'hello'") {
+	if !strings.Contains(got, "'echo' 'hello'") {
 		t.Errorf("expected 'echo 'hello'' in output, got: %s", got)
 	}
 }
@@ -75,7 +75,7 @@ func TestBuildShellCommand_NoEnv(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(got, "echo 'test'") {
+	if !strings.Contains(got, "'echo' 'test'") {
 		t.Errorf("expected 'echo 'test'' in output, got: %s", got)
 	}
 }
@@ -103,7 +103,7 @@ func TestBuildShellCommand_MultipleArgs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(got, "echo 'arg1' 'arg2' 'arg3'") {
+	if !strings.Contains(got, "'echo' 'arg1' 'arg2' 'arg3'") {
 		t.Errorf("expected 'echo 'arg1' 'arg2' 'arg3'' in output, got: %s", got)
 	}
 }
@@ -114,7 +114,7 @@ func TestBuildShellCommand_ArgsWithSpaces(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	expected := "claude '--prompt=do this' '-v'"
+	expected := "'claude' '--prompt=do this' '-v'"
 	if result != expected {
 		t.Errorf("got %q, want %q", result, expected)
 	}
@@ -163,49 +163,5 @@ func TestBuildAppleScript_Both(t *testing.T) {
 	got := BuildAppleScript(TerminalApp, `echo "path\to"`)
 	if !strings.Contains(got, `\"path\\to\"`) {
 		t.Errorf("expected escaped \\\"path\\\\to\\\", got: %s", got)
-	}
-}
-
-// TestBuildPgrepPattern_Exact tests exact match - "worker-1" should not match "worker-10"
-func TestBuildPgrepPattern_Exact(t *testing.T) {
-	pattern := BuildPgrepPattern("worker-1")
-	// Pattern should match "WAGGLE_AGENT_NAME=worker-1 " but not "WAGGLE_AGENT_NAME=worker-10 "
-	// This is a design test - the pattern should use word boundaries or exact match
-	if pattern == "" {
-		t.Error("expected non-empty pattern")
-	}
-	// The pattern should prevent substring matches
-	// We'll verify this by checking the pattern structure
-	if !strings.Contains(pattern, "worker-1") {
-		t.Errorf("expected pattern to contain 'worker-1', got: %s", pattern)
-	}
-}
-
-// TestBuildPgrepPattern_Prefix tests prefix match - "w" should not match "worker"
-func TestBuildPgrepPattern_Prefix(t *testing.T) {
-	pattern := BuildPgrepPattern("w")
-	// Pattern should match "WAGGLE_AGENT_NAME=w " but not "WAGGLE_AGENT_NAME=worker "
-	if pattern == "" {
-		t.Error("expected non-empty pattern")
-	}
-	if !strings.Contains(pattern, "w") {
-		t.Errorf("expected pattern to contain 'w', got: %s", pattern)
-	}
-}
-
-// TestBuildPgrepPattern_Normal tests normal case - "worker-1" matches "WAGGLE_AGENT_NAME=worker-1 claude"
-func TestBuildPgrepPattern_Normal(t *testing.T) {
-	pattern := BuildPgrepPattern("worker-1")
-	// Pattern should match the full command line with WAGGLE_AGENT_NAME=worker-1
-	if pattern == "" {
-		t.Error("expected non-empty pattern")
-	}
-	// Should contain the agent name
-	if !strings.Contains(pattern, "worker-1") {
-		t.Errorf("expected pattern to contain 'worker-1', got: %s", pattern)
-	}
-	// Should reference WAGGLE_AGENT_NAME
-	if !strings.Contains(pattern, "WAGGLE_AGENT_NAME") {
-		t.Errorf("expected pattern to contain 'WAGGLE_AGENT_NAME', got: %s", pattern)
 	}
 }

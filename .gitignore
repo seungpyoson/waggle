@@ -9,6 +9,12 @@ waggle
 *.test
 *.out
 coverage.html
+# Scratch directories tests create beside the package they run in, to keep a
+# unix socket path inside the 104-byte limit. Cleaned up by the test itself,
+# unless it is killed mid-run.
+.ipc-*
+.convert-*
+.h-*
 
 # IDE
 .idea/

@@ -1,45 +1,14 @@
 package tasks
 
 import (
-	"database/sql"
 	"fmt"
 	"sync"
 	"testing"
 	"time"
 
-	_ "modernc.org/sqlite"
-
 	"github.com/seungpyoson/waggle/internal/config"
 )
 
-func newTestStore(t *testing.T) *Store {
-	t.Helper()
-	db, err := sql.Open("sqlite", ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	db.SetMaxOpenConns(1)
-
-	// Set pragmas (same as production)
-	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
-		db.Close()
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(fmt.Sprintf("PRAGMA busy_timeout=%d", config.Defaults.BusyTimeout.Milliseconds())); err != nil {
-		db.Close()
-		t.Fatal(err)
-	}
-
-	s, err := NewStore(db)
-	if err != nil {
-		db.Close()
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-	return s
-}
-
-// TestStore_CancelExpiredTTL verifies that tasks with expired TTL are canceled
 func TestStore_CancelExpiredTTL(t *testing.T) {
 	s := newTestStore(t)
 
@@ -337,86 +306,6 @@ func TestStore_QueueHealth_Empty(t *testing.T) {
 }
 
 // TestStore_TaskSchemaMigration verifies schema migration preserves existing tasks
-func TestStore_TaskSchemaMigration(t *testing.T) {
-	// Create v1 schema (without ttl column)
-	db, err := sql.Open("sqlite", ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	db.SetMaxOpenConns(1)
-
-	// Set pragmas
-	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(fmt.Sprintf("PRAGMA busy_timeout=%d", config.Defaults.BusyTimeout.Milliseconds())); err != nil {
-		t.Fatal(err)
-	}
-
-	// Create v1 schema (no ttl column)
-	schema := fmt.Sprintf(`
-	CREATE TABLE schema_version (version INTEGER NOT NULL);
-	INSERT INTO schema_version (version) VALUES (1);
-
-	CREATE TABLE tasks (
-		id              INTEGER PRIMARY KEY AUTOINCREMENT,
-		idempotency_key TEXT UNIQUE,
-		type            TEXT,
-		tags            TEXT,
-		payload         TEXT NOT NULL,
-		priority        INTEGER DEFAULT 0,
-		state           TEXT NOT NULL DEFAULT 'pending',
-		blocked         BOOLEAN DEFAULT FALSE,
-		depends_on      TEXT,
-		claim_token     TEXT,
-		claimed_by      TEXT,
-		claimed_at      TEXT,
-		lease_expires_at TEXT,
-		lease_duration  INTEGER DEFAULT %d,
-		max_retries     INTEGER DEFAULT %d,
-		retry_count     INTEGER DEFAULT 0,
-		result          TEXT,
-		failure_reason  TEXT,
-		created_at      TEXT NOT NULL DEFAULT (strftime('%%Y-%%m-%%dT%%H:%%M:%%SZ', 'now')),
-		updated_at      TEXT NOT NULL DEFAULT (strftime('%%Y-%%m-%%dT%%H:%%M:%%SZ', 'now'))
-	);
-	`, int(config.Defaults.LeaseDuration.Seconds()), config.Defaults.MaxRetries)
-
-	if _, err := db.Exec(schema); err != nil {
-		t.Fatal(err)
-	}
-
-	// Insert a task
-	_, err = db.Exec(`
-		INSERT INTO tasks (payload, type, state)
-		VALUES (?, ?, ?)
-	`, `{"desc":"v1 task"}`, "test", "pending")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Now create store (should run migration)
-	s, err := NewStore(db)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Verify task is intact
-	tasks, err := s.List(ListFilter{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(tasks) != 1 {
-		t.Fatalf("expected 1 task, got %d", len(tasks))
-	}
-	if tasks[0].Payload != `{"desc":"v1 task"}` {
-		t.Errorf("task payload mismatch: %s", tasks[0].Payload)
-	}
-	if tasks[0].TTL != 0 {
-		t.Errorf("expected TTL=0 for migrated task, got %d", tasks[0].TTL)
-	}
-}
 
 func TestStore_CreateAndGet(t *testing.T) {
 	s := newTestStore(t)
@@ -802,31 +691,6 @@ func TestStore_HeartbeatInvalidToken(t *testing.T) {
 	}
 }
 
-func TestStore_SchemaVersion(t *testing.T) {
-	// Create a store with in-memory DB
-	db, err := sql.Open("sqlite", ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	db.SetMaxOpenConns(1)
-
-	// Set pragmas
-	db.Exec("PRAGMA journal_mode=WAL")
-	db.Exec(fmt.Sprintf("PRAGMA busy_timeout=%d", config.Defaults.BusyTimeout.Milliseconds()))
-
-	s1, err := NewStore(db)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Should be able to use it
-	_, err = s1.Create(CreateParams{Payload: `{}`})
-	if err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestStore_CancelExpiredTTL_BlockedIgnored(t *testing.T) {
 	store := newTestStore(t)
 
@@ -911,7 +775,7 @@ func TestStore_CancelExpiredTTL_UnblockedAfterDependency(t *testing.T) {
 	}
 
 	// Resolve dependencies (this is what the broker does after Complete)
-	_, err = ResolveDeps(store, claimed.ID)
+	_, err = store.ResolveDeps(claimed.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

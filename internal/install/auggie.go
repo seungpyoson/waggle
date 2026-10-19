@@ -74,8 +74,8 @@ func installAuggie(homeDir string) error {
 		return err
 	}
 
-	if err := installShellHook(homeDir); err != nil {
-		return fmt.Errorf("installing shell hook: %w", err)
+	if err := uninstallShellHook(homeDir); err != nil {
+		return fmt.Errorf("retiring shell hook: %w", err)
 	}
 
 	return nil

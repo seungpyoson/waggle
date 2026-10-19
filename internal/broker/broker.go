@@ -1,336 +1,268 @@
 package broker
 
 import (
-	"crypto/rand"
+	"context"
 	"database/sql"
-	"encoding/hex"
+	"errors"
 	"fmt"
-	"log"
 	"net"
-	"os"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
-	_ "modernc.org/sqlite"
-
+	"github.com/seungpyoson/waggle/internal/broker/enrollment"
+	"github.com/seungpyoson/waggle/internal/brokerstate"
 	"github.com/seungpyoson/waggle/internal/config"
 	"github.com/seungpyoson/waggle/internal/events"
 	"github.com/seungpyoson/waggle/internal/locks"
 	"github.com/seungpyoson/waggle/internal/messages"
-	"github.com/seungpyoson/waggle/internal/spawn"
+	"github.com/seungpyoson/waggle/internal/protocol"
 	"github.com/seungpyoson/waggle/internal/tasks"
 )
 
-// Config holds broker configuration
-type Config struct {
-	SocketPath         string
-	DBPath             string
-	LeaseCheckPeriod   time.Duration
-	TTLCheckPeriod     time.Duration
-	TaskTTLCheckPeriod time.Duration
-	TaskStaleThreshold time.Duration
-	IdleTimeout        time.Duration
-}
-
 // Broker is the main broker orchestrator
 type Broker struct {
-	config       Config
-	hub          *events.Hub
-	store        *tasks.Store
-	msgStore     *messages.Store
-	lockMgr      *locks.Manager
-	spawnMgr     *spawn.Manager
-	listener     net.Listener
-	sessions     map[string]*Session
-	pushTokens   map[string]string
-	mu           sync.RWMutex
-	stopCh       chan struct{}
-	wg           sync.WaitGroup
-	ackWaiters   map[int64]chan struct{}
-	ackWaitersMu sync.Mutex
+	config     config.BrokerConfig
+	hub        *events.Hub
+	owner      *brokerstate.Owner
+	enrollment *enrollment.Supervisor
+	lockMgr    *locks.Manager
+	sessions   map[string]*Session
+	mu         sync.RWMutex
 }
 
-// New creates a new broker instance
-func New(cfg Config) (*Broker, error) {
-	if err := config.ValidateDefaults(); err != nil {
-		return nil, fmt.Errorf("invalid config: %w", err)
-	}
-
-	// Apply defaults and validate all duration fields.
-	// Pattern: default-then-validate pairs so no field can slip through.
-	type durField struct {
-		name string
-		val  *time.Duration
-		def  time.Duration
-	}
-	for _, f := range []durField{
-		{"LeaseCheckPeriod", &cfg.LeaseCheckPeriod, config.Defaults.LeaseCheckPeriod},
-		{"TTLCheckPeriod", &cfg.TTLCheckPeriod, config.Defaults.TTLCheckPeriod},
-		{"TaskTTLCheckPeriod", &cfg.TaskTTLCheckPeriod, config.Defaults.TaskTTLCheckPeriod},
-		{"TaskStaleThreshold", &cfg.TaskStaleThreshold, config.Defaults.TaskStaleThreshold},
-		{"IdleTimeout", &cfg.IdleTimeout, config.Defaults.IdleTimeout},
-	} {
-		if *f.val == 0 {
-			*f.val = f.def
-		}
-		if *f.val <= 0 {
-			return nil, fmt.Errorf("broker.Config.%s must be positive, got %v", f.name, *f.val)
-		}
-	}
-
-	// Open database
-	db, err := sql.Open("sqlite", cfg.DBPath)
+// New attaches the broker to an acquired canonical owner, binds its endpoints
+// and registers maintenance and enrollment work. It has no database
+// constructor and no endpoint cleanup authority of its own.
+func New(ctx context.Context, owner *brokerstate.Owner, cfg config.BrokerConfig, provider config.ProviderConfig) (*Broker, error) {
+	connector, err := enrollment.NewConnector(provider)
 	if err != nil {
-		return nil, fmt.Errorf("opening database: %w", err)
-	}
-	db.SetMaxOpenConns(1) // SQLite serializes writers
-
-	// Set pragmas
-	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("setting WAL mode: %w", err)
-	}
-	if _, err := db.Exec(fmt.Sprintf("PRAGMA busy_timeout=%d", config.Defaults.BusyTimeout.Milliseconds())); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("setting busy_timeout: %w", err)
-	}
-
-	// Open task store (shares DB connection)
-	store, err := tasks.NewStore(db)
-	if err != nil {
-		db.Close()
-		return nil, fmt.Errorf("opening task store: %w", err)
-	}
-
-	// Open message store (shares DB connection)
-	msgStore, err := messages.NewStore(db)
-	if err != nil {
-		db.Close()
-		return nil, fmt.Errorf("opening message store: %w", err)
-	}
-
-	// Clean up stale socket
-	if err := cleanupSocket(cfg.SocketPath); err != nil {
-		store.Close()
 		return nil, err
 	}
+	return newWithConnector(ctx, owner, cfg, provider.Transport, connector)
+}
 
-	// Create listener
-	listener, err := net.Listen("unix", cfg.SocketPath)
-	if err != nil {
-		store.Close()
-		return nil, fmt.Errorf("listening on socket: %w", err)
+func newWithConnector(ctx context.Context, owner *brokerstate.Owner, cfg config.BrokerConfig, transport config.NativeConfig, connector enrollment.Connector) (*Broker, error) {
+	if err := config.ValidateDefaults(); err != nil {
+		return nil, err
 	}
-
-	// Set socket permissions to 0700
-	if err := os.Chmod(cfg.SocketPath, 0700); err != nil {
-		listener.Close()
-		store.Close()
-		return nil, fmt.Errorf("setting socket permissions: %w", err)
+	if err := cfg.Validate(); err != nil {
+		return nil, err
 	}
-
+	// Complete startup persistence before binding or reporting daemon readiness.
+	if err := owner.Do(ctx, func(op *brokerstate.Operation) error {
+		return op.Write(ctx, func(tx *brokerstate.WriteTx) error {
+			if err := tx.RequireActive(); err != nil {
+				return err
+			}
+			if _, err := tasks.NewStore(tx).RequeueAllClaimed(); err != nil {
+				return err
+			}
+			_, err := messages.NewStore(tx, cfg.Messaging, time.Now()).Apply(messages.Restart{})
+			return err
+		})
+	}); err != nil {
+		return nil, fmt.Errorf("recover task claims: %w", err)
+	}
+	if err := owner.Bind(ctx, cfg.Endpoints); err != nil {
+		return nil, err
+	}
 	b := &Broker{
-		config:     cfg,
-		hub:        events.NewHub(),
-		store:      store,
-		msgStore:   msgStore,
-		lockMgr:    locks.NewManager(),
-		spawnMgr:   spawn.NewManager(),
-		listener:   listener,
-		sessions:   make(map[string]*Session),
-		pushTokens: make(map[string]string),
-		stopCh:     make(chan struct{}),
-		ackWaiters: make(map[int64]chan struct{}),
+		config: cfg, owner: owner, hub: events.NewHub(), lockMgr: locks.NewManager(),
+		sessions: make(map[string]*Session),
 	}
+	if err := owner.StartWork(ctx, "maintenance", brokerstate.ManagedWork{Run: b.maintain}); err != nil {
+		return nil, err
+	}
+	supervisor, err := enrollment.Start(ctx, owner, connector, cfg.Messaging, transport)
+	if err != nil {
+		return nil, err
+	}
+	b.enrollment = supervisor
 	return b, nil
 }
 
-func (b *Broker) GetPushToken(agent string) string {
-	if b == nil {
-		return ""
-	}
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	return b.pushTokens[agent]
-}
-
-func (b *Broker) GeneratePushToken(agent string) (string, error) {
-	if b == nil {
-		return "", fmt.Errorf("broker unavailable")
-	}
-	if agent == "" {
-		return "", fmt.Errorf("agent required")
-	}
-
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	if token := b.pushTokens[agent]; token != "" {
-		return token, nil
-	}
-
-	token, err := newPushToken()
-	if err != nil {
-		return "", err
-	}
-	b.pushTokens[agent] = token
-	return token, nil
-}
-
-func (b *Broker) DeletePushToken(agent string) {
-	if b == nil || agent == "" {
-		return
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	delete(b.pushTokens, agent)
-}
-
-func newPushToken() (string, error) {
-	buf := make([]byte, 32)
-	if _, err := rand.Read(buf); err != nil {
-		return "", fmt.Errorf("generate push token: %w", err)
-	}
-	return hex.EncodeToString(buf), nil
-}
-
-// Serve starts the broker's accept loop and background tasks
-func (b *Broker) Serve() error {
-	// Crash recovery: re-queue all claimed tasks
-	count, err := b.store.RequeueAllClaimed()
-	if err != nil {
-		log.Printf("broker: error requeuing claimed tasks on startup: %v", err)
-	} else if count > 0 {
-		log.Printf("broker: requeued %d claimed tasks on startup", count)
-	}
-
-	// Start lease checker
-	b.wg.Add(1)
-	go func() {
-		defer b.wg.Done()
-		tasks.StartLeaseChecker(b.store, b.config.LeaseCheckPeriod, b.stopCh)
-	}()
-
-	// Start TTL checker
-	b.wg.Add(1)
-	go func() {
-		defer b.wg.Done()
-		messages.StartTTLChecker(b.msgStore, b.config.TTLCheckPeriod, b.stopCh)
-	}()
-
-	// Start task TTL checker
-	b.wg.Add(1)
-	go func() {
-		defer b.wg.Done()
-		tasks.StartTaskTTLChecker(b.store, b.hub, b.config.TaskTTLCheckPeriod, b.config.TaskStaleThreshold, b.stopCh)
-	}()
-
-	// Start idle timeout monitor
-	b.wg.Add(1)
-	go func() {
-		defer b.wg.Done()
-		b.monitorIdleTimeout()
-	}()
-
-	// Accept loop
-	for {
-		conn, err := b.listener.Accept()
-		if err != nil {
-			select {
-			case <-b.stopCh:
-				return nil
-			default:
-				log.Printf("broker: accept error: %v", err)
-				continue
+// Initialize creates domain tables and activates an explicitly prepared fresh
+// store in one owned transaction. Opening an existing store never calls it.
+func Initialize(ctx context.Context, owner *brokerstate.Owner) error {
+	return owner.Do(ctx, func(op *brokerstate.Operation) error {
+		return op.Write(ctx, func(tx *brokerstate.WriteTx) error {
+			if err := domainSchema(tx, func(tx *brokerstate.WriteTx) error {
+				_, err := tx.Exec(tasks.Schema())
+				return err
+			}); err != nil {
+				return err
 			}
+			return tx.Activate()
+		})
+	})
+}
+
+// legacyMessagesTable is the retired broker's name-addressed message table. The
+// native schema takes that name for a different table, so conversion moves the
+// old one aside under retiredMessagesTable. Nothing in the native runtime reads
+// it: it is kept only so an operator can still see what the old store held, and
+// a rollback restores the snapshot regardless.
+const (
+	legacyMessagesTable  = "messages"
+	retiredMessagesTable = "legacy_messages"
+)
+
+// legacyStorageTables are the records a schema-v1 store legitimately carries
+// besides its domain tables: the shared version row, and SQLite's own tables.
+var legacyStorageTables = []string{"schema_version", "tasks"}
+
+// UpgradeDomain is the domain half of offline conversion: brokerstate owns the
+// transaction and the version record, this package owns what the schema is. It
+// refuses a store containing anything it does not recognize rather than run
+// CREATE statements into unknown state, and reports the legacy tables it moved
+// aside. The store it leaves behind is prepared, so activation remains separate.
+var UpgradeDomain = brokerstate.DomainUpgrade{Check: checkLegacyDomain, Apply: upgradeDomain}
+
+func checkLegacyDomain(tx brokerstate.Reader) error {
+	tables, err := userTables(tx)
+	if err != nil {
+		return err
+	}
+	for _, name := range tables {
+		switch {
+		case slices.Contains(legacyStorageTables, name):
+		case name == legacyMessagesTable:
+		case strings.HasPrefix(name, "sqlite_"):
+			// SQLite's own bookkeeping (sqlite_sequence, sqlite_stat1).
+		default:
+			return fmt.Errorf("legacy store carries unrecognized table %q; conversion refuses a store it cannot account for", name)
 		}
-
-		b.wg.Add(1)
-		go func() {
-			defer b.wg.Done()
-			sess := newSession(conn, b)
-			sess.readLoop()
-		}()
 	}
+	_, err = tasks.LegacyColumns(tx)
+	return err
 }
 
-// Shutdown gracefully shuts down the broker
-func (b *Broker) Shutdown() error {
-	// Broker shutdown forgets spawn registrations but must not kill coding-agent
-	// sessions by default. Those processes are owned by the host/user.
-	if b.spawnMgr != nil {
-		b.spawnMgr.ForgetAll()
+func upgradeDomain(tx *brokerstate.WriteTx) ([]string, error) {
+	tables, err := userTables(tx)
+	if err != nil {
+		return nil, err
 	}
-
-	close(b.stopCh)
-
-	// Close listener
-	if b.listener != nil {
-		b.listener.Close()
+	var preserved []string
+	if slices.Contains(tables, legacyMessagesTable) {
+		// Renaming carries the legacy index with the table, so the native
+		// schema's own index names stay free.
+		if _, err := tx.Exec("ALTER TABLE " + legacyMessagesTable + " RENAME TO " + retiredMessagesTable); err != nil {
+			return nil, fmt.Errorf("retire legacy messages table: %w", err)
+		}
+		preserved = append(preserved, retiredMessagesTable)
 	}
-
-	// Close all session connections (cleanup will be called by readLoop)
-	b.mu.Lock()
-	for _, sess := range b.sessions {
-		sess.conn.Close()
+	if err := domainSchema(tx, tasks.UpgradeFromV1); err != nil {
+		return nil, err
 	}
-	b.mu.Unlock()
-
-	// Wait for goroutines
-	b.wg.Wait()
-
-	// Close store
-	if b.store != nil {
-		b.store.Close()
-	}
-
-	// Remove socket file
-	if b.config.SocketPath != "" {
-		// Best-effort cleanup: listener shutdown may already have removed the socket.
-		os.Remove(b.config.SocketPath)
-	}
-
-	return nil
+	return preserved, nil
 }
 
-// monitorIdleTimeout monitors session count and shuts down broker after idle timeout
-func (b *Broker) monitorIdleTimeout() {
-	ticker := time.NewTicker(config.Defaults.IdleCheckInterval)
-	defer ticker.Stop()
+// domainSchema is the one statement of what a native store's domain tables are.
+// Fresh initialization creates the tasks table; conversion rebuilds it.
+func domainSchema(tx *brokerstate.WriteTx, installTasks func(*brokerstate.WriteTx) error) error {
+	if err := installTasks(tx); err != nil {
+		return err
+	}
+	_, err := tx.Exec(messages.Schema)
+	return err
+}
 
-	var idleStart time.Time
-
-	for {
-		select {
-		case <-b.stopCh:
-			return
-		case <-ticker.C:
-			b.mu.RLock()
-			sessionCount := len(b.sessions)
-			b.mu.RUnlock()
-
-			if sessionCount == 0 {
-				if idleStart.IsZero() {
-					idleStart = time.Now()
-				} else if time.Since(idleStart) >= b.config.IdleTimeout {
-					log.Printf("broker: idle timeout reached, shutting down")
-					// Shutdown the broker
-					go b.Shutdown()
-					return
+func userTables(tx brokerstate.Reader) ([]string, error) {
+	var names []string
+	if err := tx.Query("SELECT type, name FROM sqlite_schema WHERE type IN ('table','view','trigger','index') ORDER BY name", nil, func(rows *sql.Rows) error {
+		for rows.Next() {
+			var kind, name string
+			if err := rows.Scan(&kind, &name); err != nil {
+				return err
+			}
+			switch kind {
+			case "table":
+				names = append(names, name)
+			case "index":
+				if name == "idx_tasks_claimable" || name == "idx_tasks_idempotency" ||
+					name == "idx_messages_to_name" || strings.HasPrefix(name, "sqlite_autoindex_") {
+					continue
 				}
-			} else {
-				idleStart = time.Time{} // reset
+				fallthrough
+			default:
+				return fmt.Errorf("legacy store carries unrecognized %s %q; conversion refuses a store it cannot account for", kind, name)
 			}
 		}
+		return nil
+	}); err != nil {
+		return nil, fmt.Errorf("read legacy store catalogue: %w", err)
 	}
+	return names, nil
 }
 
-// cleanupSocket removes stale socket file
-func cleanupSocket(path string) error {
-	if _, err := os.Stat(path); err == nil {
-		if err := os.Remove(path); err != nil {
-			return fmt.Errorf("removing stale socket: %w", err)
+// Serve runs ingress until the owner closes the listener. Workers are
+// registered separately and joined by the owner, not by this call.
+func (b *Broker) Serve(ctx context.Context) error {
+	return b.owner.Serve(ctx, func(conn net.Conn) {
+		// Each connection holds its own admission so its cleanup transaction
+		// stays admitted until this read loop returns.
+		_ = b.owner.Do(ctx, func(lifetime *brokerstate.Operation) error { newSession(conn, b).readLoop(lifetime); return nil })
+	})
+}
+
+// Shutdown begins orderly draining and waits under the caller's bound only.
+func (b *Broker) Shutdown(ctx context.Context) error {
+	b.owner.BeginShutdown(nil)
+	return b.owner.Wait(ctx)
+}
+
+func (b *Broker) maintain(lifetime brokerstate.WorkLifetime, reportFatal func(error)) {
+	lease := time.NewTicker(b.config.LeaseCheckPeriod)
+	taskTTL := time.NewTicker(b.config.TaskTTLCheckPeriod)
+	defer lease.Stop()
+	defer taskTTL.Stop()
+	for {
+		var change func(*brokerstate.WriteTx) error
+		var effects []protocol.Event
+		select {
+		case <-lifetime.Stop:
+			return
+		case <-lease.C:
+			change = func(tx *brokerstate.WriteTx) error { _, err := tasks.NewStore(tx).RequeueExpiredLeases(); return err }
+		case <-taskTTL.C:
+			change = func(tx *brokerstate.WriteTx) error {
+				store := tasks.NewStore(tx)
+				if _, err := store.CancelExpiredTTL(); err != nil {
+					return err
+				}
+				health, err := store.QueueHealth(b.config.TaskStaleThreshold)
+				if err != nil {
+					return err
+				}
+				if health.StaleCount > 0 {
+					effects = append(effects, protocol.Event{
+						Topic: "task.events", Event: "task.stale",
+						Data: mustMarshal(map[string]any{
+							"stale_count": health.StaleCount, "oldest_age_seconds": health.OldestPendingAge,
+						}),
+						TS: time.Now().UTC().Format(time.RFC3339),
+					})
+				}
+				return nil
+			}
+		}
+		err := b.owner.Do(lifetime.Interrupt, func(op *brokerstate.Operation) error { return op.Write(lifetime.Interrupt, change) })
+		if errors.Is(err, brokerstate.ErrAdmissionClosed) {
+			return
+		}
+		if err != nil {
+			// An owner interruption cancels admitted work; it is the owner's
+			// own signal, not a new maintenance failure to report back to it.
+			if cause := lifetime.Interrupt.Err(); cause != nil && errors.Is(err, cause) {
+				return
+			}
+			reportFatal(fmt.Errorf("canonical maintenance: %w", err))
+			return
+		}
+		for _, event := range effects {
+			b.hub.Publish(event.Topic, mustMarshal(event))
 		}
 	}
-	return nil
 }

@@ -1,6 +1,10 @@
 package cmd
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 
 	"github.com/seungpyoson/waggle/internal/client"
@@ -14,130 +18,44 @@ func init() {
 	rootCmd.AddCommand(statusCmd)
 }
 
-var statusCmd = &cobra.Command{
-	Use:   "status",
-	Short: "Check broker and adapter status",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		// 1. Always run adapter health (file-based, no broker needed)
-		homeDir, _ := os.UserHomeDir()
-		adapters := map[string]any{}
-		if homeDir != "" {
-			adapters = buildAdapterStatus(homeDir)
-		}
+var statusCmd = newStatusCommand(func(ctx context.Context, socket string) (json.RawMessage, error) {
+	return client.Query(ctx, socket, config.Defaults.ConnectTimeout, protocol.Request{Cmd: protocol.CmdStatus})
+})
 
-		// 2. Resolve paths locally (cannot rely on package-level paths var
-		//    because status is broker-independent — PersistentPreRunE skips path setup)
-		projectID, err := config.ResolveProjectID()
-		if err != nil {
-			// Cannot determine project ID — no git repo, WAGGLE_PROJECT_ID, or WAGGLE_ROOT
-			printJSON(map[string]any{
-				"ok":       false,
-				"code":     "NO_PROJECT_CONTEXT",
-				"error":    err.Error(),
-				"broker":   map[string]any{"running": false, "reason": "no project context"},
-				"adapters": adapters,
-			})
-			os.Exit(1)
-			return nil
-		}
-
-		localPaths := config.NewPaths(projectID)
-		if localPaths.Socket == "" {
-			// Cannot determine socket path — HOME not set
-			printJSON(map[string]any{
-				"ok":       false,
-				"code":     "NO_HOME",
-				"error":    "cannot determine socket path: HOME not set",
-				"broker":   map[string]any{"running": false, "reason": "HOME not set"},
-				"adapters": adapters,
-			})
-			os.Exit(1)
-			return nil
-		}
-
-		// Self-healing hint for broker failure states. Status is read-only —
-		// it reports but does not mutate. Other commands auto-recover via PersistentPreRunE.
-		const brokerHint = "run any waggle command (e.g. 'waggle sessions') to auto-recover, or 'waggle stop && waggle start' to restart manually"
-
-		c, err := client.Connect(localPaths.Socket, config.Defaults.ConnectTimeout)
-		if err != nil {
-			// Broker not running or not reachable — show adapter health but report error
-			printJSON(map[string]any{
-				"ok":       false,
-				"code":     "BROKER_NOT_RUNNING",
-				"error":    err.Error(),
-				"hint":     brokerHint,
-				"broker":   map[string]any{"running": false},
-				"adapters": adapters,
-			})
-			os.Exit(1)
-			return nil
-		}
-		defer c.Close()
-
-		// Connect handshake
-		if err := c.SetDeadline(config.Defaults.ConnectTimeout); err != nil {
-			// Socket opened but can't set deadline — broker process exists but connection is broken
-			printJSON(map[string]any{
-				"ok":       false,
-				"code":     "BROKER_DEGRADED",
-				"error":    err.Error(),
-				"hint":     brokerHint,
-				"broker":   map[string]any{"running": false},
-				"adapters": adapters,
-			})
-			os.Exit(1)
-			return nil
-		}
-		resp, err := c.Send(protocol.Request{Cmd: protocol.CmdConnect, Name: "waggle-status"})
-		if err != nil || !resp.OK {
-			// Socket opened but handshake failed — zombie broker or explicit rejection
-			errMsg := "handshake failed"
-			if err != nil {
-				errMsg = err.Error()
-			} else if resp.Code != "" || resp.Error != "" {
-				errMsg = resp.Code + ": " + resp.Error
+// The request dependency permits deterministic transport faults through the
+// same command and result rendering used by the CLI.
+func newStatusCommand(request func(context.Context, string) (json.RawMessage, error)) *cobra.Command {
+	return &cobra.Command{
+		Use:   "status",
+		Short: "Check broker and adapter status",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			home, _ := os.UserHomeDir()
+			adapters := map[string]any{}
+			if home != "" {
+				adapters = buildAdapterStatus(home)
 			}
-			printJSON(map[string]any{
-				"ok":       false,
-				"code":     "BROKER_UNRESPONSIVE",
-				"error":    errMsg,
-				"hint":     brokerHint,
-				"broker":   map[string]any{"running": false},
-				"adapters": adapters,
-			})
-			os.Exit(1)
-			return nil
-		}
-		if err := c.ClearDeadline(); err != nil {
-			return err
-		}
+			report := func(err error) error {
+				output := map[string]any{"ok": false, "code": "BROKER_STATUS_UNCONFIRMED", "error": err.Error(),
+					"broker": map[string]any{"status": "unknown"}, "adapters": adapters}
+				return errors.Join(err, json.NewEncoder(cmd.OutOrStdout()).Encode(output))
+			}
+			projectID, err := config.ResolveProjectID(cmd.Context())
+			if err != nil {
+				return report(err)
+			}
+			localPaths := config.NewPaths(projectID)
+			if localPaths.Socket == "" {
+				return report(fmt.Errorf("cannot determine socket path: HOME not set"))
+			}
+			data, err := request(cmd.Context(), localPaths.Socket)
+			if err != nil {
+				return report(err)
+			}
 
-		// 4. Get broker status
-		resp, err = c.Send(protocol.Request{Cmd: protocol.CmdStatus})
-		if err != nil || !resp.OK {
-			// Connected and handshake OK but status RPC failed — broker running but degraded
-			printJSON(map[string]any{
-				"ok":       true,
-				"broker":   map[string]any{"running": true, "status": "degraded"},
-				"hint":     brokerHint,
-				"adapters": adapters,
-			})
-			return nil
-		}
-
-		// Disconnect cleanly
-		if err := c.SetDeadline(config.Defaults.DisconnectTimeout); err == nil {
-			_, _ = c.Send(protocol.Request{Cmd: protocol.CmdDisconnect})
-		}
-
-		printJSON(map[string]any{
-			"ok":       resp.OK,
-			"broker":   resp.Data,
-			"adapters": adapters,
-		})
-		return nil
-	},
+			return json.NewEncoder(cmd.OutOrStdout()).Encode(map[string]any{"ok": true, "broker": data, "adapters": adapters})
+		},
+	}
 }
 
 func buildAdapterStatus(homeDir string) map[string]any {

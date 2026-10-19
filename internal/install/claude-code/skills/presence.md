@@ -1,13 +1,7 @@
 ---
-name: waggle-presence
-description: List connected waggle agents and their status
+name: waggle-sessions
+description: Inspect enrolled incarnations and observed native readiness.
 ---
 
-Execute this command:
-
-```bash
-WAGGLE_AGENT_NAME="${WAGGLE_AGENT_NAME:-claude-$$}" waggle presence
-```
-
-Returns JSON array of connected agents with name and state (online).
+Run `waggle sessions`. Select by exact incarnation ID. Pending, disconnected, failed and retired states are not ready recipients. A name or open CLI connection does not establish native readiness.
 

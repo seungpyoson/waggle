@@ -1,0 +1,10 @@
+python3 app-server-protocol/scripts/write_schema_fixtures.py {args}
+RUST_MIN_STACK=8388608 NEXTEST_PROFILE=local cargo nextest run --no-fail-fast "$@"
+   Compiling codex-app-server-protocol v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/app-server-protocol)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 15.47s
+────────────
+ Nextest run ID 6faf2392-30ff-47cc-b235-1f75a175e472 with nextest profile: local
+    Starting 1 test across 1 binary (298 tests skipped)
+        PASS [   8.072s] (1/1) codex-app-server-protocol schema_fixtures_tests::write_schema_fixtures_from_env
+────────────
+     Summary [   8.074s] 1 test run: 1 passed, 298 skipped

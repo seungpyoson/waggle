@@ -28,7 +28,7 @@ func TestUpsertRejectsOrphanedEndMarker(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for orphaned end marker, got nil")
 	}
-	if !strings.Contains(err.Error(), "orphaned end marker") {
+	if !strings.Contains(err.Error(), "unpaired managed-block marker") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -74,7 +74,7 @@ func TestRemoveRejectsOrphanedEndMarker(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for orphaned end marker, got nil")
 	}
-	if !strings.Contains(err.Error(), "orphaned end marker") {
+	if !strings.Contains(err.Error(), "unpaired managed-block marker") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -189,80 +189,32 @@ func TestUpsertAcceptsEndAtEOF(t *testing.T) {
 	}
 }
 
-func TestUpsertAcceptsBeginOnlyWithLineStart(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "test.md")
-
-	content := "existing\n" + testBegin + "\npartial body"
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	// Should self-heal: replace from begin to EOF with canonical block
-	err := upsertManagedBlock(path, testBegin, testEnd, testBody, filepath.Dir(path))
-	if err != nil {
-		t.Fatalf("expected self-heal for begin-without-end, got error: %v", err)
-	}
-
-	after, _ := os.ReadFile(path)
-	if !strings.Contains(string(after), testEnd) {
-		t.Fatalf("end marker missing after self-heal: %s", string(after))
-	}
-}
-
-func TestUpsertSelfHealsBeginWithoutEnd(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "test.md")
-
-	// File with begin marker but no end marker (truncated)
-	content := "prefix\n" + testBegin + "\npartial body content"
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	err := upsertManagedBlock(path, testBegin, testEnd, testBody, filepath.Dir(path))
-	if err != nil {
-		t.Fatalf("expected self-heal, got error: %v", err)
-	}
-
-	after, _ := os.ReadFile(path)
-	result := string(after)
-
-	// Prefix must be preserved
-	if !strings.HasPrefix(result, "prefix\n") {
-		t.Fatalf("prefix not preserved: %s", result)
-	}
-	// Must contain both markers now
-	if !strings.Contains(result, testBegin) || !strings.Contains(result, testEnd) {
-		t.Fatalf("markers missing after self-heal: %s", result)
-	}
-	// Must contain the new body
-	if !strings.Contains(result, testBody) {
-		t.Fatalf("body missing after self-heal: %s", result)
-	}
-}
-
-func TestRemoveSelfHealsBeginWithoutEnd(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "test.md")
-
-	// File with begin marker but no end marker
-	content := "prefix\n" + testBegin + "\npartial body content"
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	err := removeManagedBlock(path, testBegin, testEnd, filepath.Dir(path))
-	if err != nil {
-		t.Fatalf("expected self-heal, got error: %v", err)
-	}
-
-	after, _ := os.ReadFile(path)
-	result := string(after)
-
-	// Prefix preserved, markers gone
-	if result != "prefix\n" {
-		t.Fatalf("expected only prefix after remove, got: %q", result)
+func TestTruncatedManagedBlockFailsWithoutChangingUserContent(t *testing.T) {
+	for _, operation := range []string{"install", "remove"} {
+		t.Run(operation, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "user-config")
+			original := "user prefix\n" + testBegin + "\npartial managed content\nuser content with no proven boundary\n"
+			if err := os.WriteFile(path, []byte(original), 0600); err != nil {
+				t.Fatal(err)
+			}
+			var err error
+			switch operation {
+			case "install":
+				err = upsertManagedBlock(path, testBegin, testEnd, testBody, filepath.Dir(path))
+			case "remove":
+				err = removeManagedBlock(path, testBegin, testEnd, filepath.Dir(path))
+			}
+			if err == nil {
+				t.Fatal("truncated ownership boundary was accepted")
+			}
+			after, readErr := os.ReadFile(path)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if string(after) != original {
+				t.Fatal("mutation deleted unrelated trailing contents")
+			}
+		})
 	}
 }
 

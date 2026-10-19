@@ -1,0 +1,37 @@
+RUST_MIN_STACK=8388608 NEXTEST_PROFILE=local cargo nextest run --no-fail-fast "$@"
+    Blocking waiting for file lock on artifact directory
+   Compiling codex-hooks v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/hooks)
+    Finished `dev-small` profile [unoptimized] target(s) in 7.01s
+────────────
+ Nextest run ID 659bbb68-c2d6-4147-bb4b-674251d383f1 with nextest profile: local
+    Starting 1 test across 1 binary (176 tests skipped)
+        FAIL [   0.011s] (1/1) codex-hooks engine::command_runner::tests::default_shell_uses_last_snapshot_value
+  stdout ───
+
+    running 1 test
+    test engine::command_runner::tests::default_shell_uses_last_snapshot_value ... FAILED
+
+    failures:
+
+    failures:
+        engine::command_runner::tests::default_shell_uses_last_snapshot_value
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 176 filtered out; finished in 0.00s
+
+  stderr ───
+
+    thread 'engine::command_runner::tests::default_shell_uses_last_snapshot_value' (338376303) panicked at hooks/src/engine/command_runner_tests.rs:257:5:
+    assertion failed: `(left == right)`
+
+    Diff < left / right > :
+    <"inherited-shell"
+    >"/captured/shell"
+
+
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+────────────
+     Summary [   0.016s] 1 test run: 0 passed, 1 failed, 176 skipped
+        FAIL [   0.011s] (1/1) codex-hooks engine::command_runner::tests::default_shell_uses_last_snapshot_value
+error: test run failed
+error: recipe `test` failed on line 88 with exit code 100

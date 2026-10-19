@@ -23,17 +23,16 @@ const (
 	CmdStatus = "status"
 	CmdStop   = "stop"
 
-	CmdSend     = "send"
-	CmdInbox    = "inbox"
-	CmdReplay   = "replay"
-	CmdAck      = "ack"
-	CmdPresence = "presence"
-
-	CmdPushReserve = "push.reserve"
-	CmdPushRelease = "push.release"
-
-	CmdSpawnRegister  = "spawn.register"
-	CmdSpawnUpdatePID = "spawn.update-pid"
+	CmdSend             = "send"
+	CmdInbox            = "inbox"
+	CmdAck              = "ack"
+	CmdPresence         = "presence"
+	CmdEnqueue          = "enqueue"
+	CmdReply            = "reply"
+	CmdWhoami           = "whoami"
+	CmdConversationStop = "conversation.stop"
+	CmdEnroll           = "enroll"
+	CmdRetire           = "incarnation.retire"
 )
 
 // Error code constants — the `code` field values in Response

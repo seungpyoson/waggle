@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+waggle_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd -P)"
+evidence_dir="$waggle_root/docs/reviews/native-messaging"
+native_root="$waggle_root/.worktrees/codex-native"
+
+# The relocation runner makes this path a link into the ws build allocation.
+# Resolve it once and require Envoy before creating any build or log output.
+export CARGO_TARGET_DIR="$(cd -- "$native_root/codex-rs/target" && pwd -P)"
+export TMPDIR="$(dirname -- "$CARGO_TARGET_DIR")/tmp"
+python3 -c '
+import os, pathlib, sys
+volume = pathlib.Path("/Volumes/Dev-OWC-Envoy")
+if not volume.is_mount():
+    sys.exit("Dev Envoy is not mounted; refusing to run")
+for name in ("CARGO_TARGET_DIR", "TMPDIR"):
+    configured = pathlib.Path(os.environ[name])
+    if not configured.is_absolute():
+        sys.exit(f"{name} must be an absolute path")
+    path = configured.resolve(strict=True)
+    if not path.is_dir() or volume not in path.parents or path.stat().st_dev != volume.stat().st_dev:
+        sys.exit(f"{name} must be an existing directory on Dev Envoy: {path}")
+    if not os.access(path, os.W_OK):
+        sys.exit(f"{name} is not writable: {path}")
+'
+export CARGO_TARGET_DIR TMPDIR
+run_log="$(mktemp "$CARGO_TARGET_DIR/codex-startup-terminal.log.XXXXXXXX")"
+printf 'Log: %s\n' "$run_log"
+
+verify_source() {
+  python3 -c '
+import hashlib, json, pathlib, subprocess, sys
+root = pathlib.Path(sys.argv[1])
+record = json.loads(pathlib.Path(sys.argv[2]).read_text())
+def git(*args):
+    return subprocess.check_output(["git", "-C", str(root), *args])
+head = git("rev-parse", "HEAD").decode().strip()
+assert head == record["base_commit"], "native HEAD changed"
+for entry in record["files"]:
+    assert hashlib.sha256((root / entry["path"]).read_bytes()).hexdigest() == entry["sha256"], entry["path"]
+assert not git("ls-files", "--others", "--exclude-standard"), "unrecorded native source files"
+digest = hashlib.sha256(git("diff", "--binary", "--full-index", "--no-ext-diff", "--no-renames", "HEAD", "--")).hexdigest()
+assert digest == record["patch_sha256"], "native patch changed"
+print("Native HEAD:", head)
+print("Native patch SHA256:", digest)
+' "$native_root" "$evidence_dir/codex-provider-source-2026-09-07.json"
+}
+
+(
+  verify_source
+  cd -- "$native_root/codex-rs"
+  printf '%s\n' 'Running public RPC subscription and startup regressions; retries disabled.'
+  set +e
+  just test --cargo-profile dev-small --offline --locked --build-jobs 2 -p codex-app-server --test all -E 'test(thread_subscribe) | test(session_start_precedes_first_turn_and_preserves_stop_and_context)' --retries 0
+  test_exit=$?
+  set -e
+  verify_source
+  printf 'Test exit: %s\n' "$test_exit"
+  exit "$test_exit"
+) 2>&1 | tee "$run_log"

@@ -1,14 +1,13 @@
 ---
 name: waggle-ack
-description: Acknowledge a waggle message (confirms receipt to sender)
+description: Record consumption of the exact native Waggle envelope.
 ---
 
-Execute this command:
+After consuming the envelope, execute the acknowledgement command in its Waggle-authored header:
 
-```bash
-WAGGLE_AGENT_NAME="${WAGGLE_AGENT_NAME:-claude-$$}" waggle ack <message_id>
+```sh
+waggle ack <message-id> --attempt=<attempt-id>
 ```
 
-Replace `<message_id>` with the numeric ID from your inbox.
-If the sender used `--await-ack`, this unblocks them.
+Use the original message and attempt IDs. This records consumption, including when declining the requested work; it does not mean work completed. Only the original enrolled recipient may acknowledge. A correlated `waggle reply <message-id> '<message>'` records consumption in the same broker transaction. Native policy may deny these tool calls; report that failure without claiming a receipt.
 

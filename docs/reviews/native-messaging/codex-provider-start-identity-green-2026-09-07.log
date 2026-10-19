@@ -1,0 +1,9 @@
+RUST_MIN_STACK=8388608 NEXTEST_PROFILE=local cargo nextest run --no-fail-fast "$@"
+   Compiling codex-hooks v0.153.4 (/Users/spson/Projects/Claude/waggle/.worktrees/codex-native/codex-rs/hooks)
+    Finished `dev-small` profile [unoptimized] target(s) in 4.33s
+────────────
+ Nextest run ID 25fcd540-f0ea-4f6b-aaf3-a6cee66ca196 with nextest profile: local
+    Starting 1 test across 1 binary (175 tests skipped)
+        PASS [   0.021s] (1/1) codex-hooks engine::session_start_identity_tests::start_hook_payload_preserves_session_and_exact_thread_identity
+────────────
+     Summary [   0.022s] 1 test run: 1 passed, 175 skipped

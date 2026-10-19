@@ -1,0 +1,6 @@
+cargo clippy --fix --tests --allow-dirty {args}
+error: failed to bind TCP listener to manage locking
+
+Caused by:
+  Operation not permitted (os error 1)
+error: recipe `fix` failed on line 58 with exit code 101

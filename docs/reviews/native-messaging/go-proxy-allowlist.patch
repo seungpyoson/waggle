@@ -1,0 +1,10 @@
+--- requirements.toml
++++ requirements.toml
+@@ -29,6 +29,7 @@
+ enabled = true
+ 
+ [permissions.github_workspace.network.domains]
++"proxy.golang.org" = "allow"
+ "**.github.com" = "allow"
+ "**.githubusercontent.com" = "allow"
+ "api.mergify.com" = "allow"

@@ -1,0 +1,78 @@
+{
+  "scope": "Bound Codex driver attachment; transport fakes only, native conformance unconfirmed",
+  "base_commit": "5fac0530a789f54b2a87fb10d9d21a14b2dded91",
+  "files": [
+    {
+      "path": "internal/driver/driver.go",
+      "sha256": "66dc1855d2d57a19cf040cad459f5de171d0bb68ab3bf25b4f919c873f55b48c"
+    },
+    {
+      "path": "internal/driver/codex/attachment.go",
+      "sha256": "736709e52d369336be3abee0e1b9cf93cc608b545ea13c203b24714af97eb455"
+    },
+    {
+      "path": "internal/driver/codex/attachment_test.go",
+      "sha256": "e686d0b82a62770ee4649a0e56dca670bf1b3c507ef6294e24454db0630b33e1"
+    },
+    {
+      "path": "internal/driver/codex/connection.go",
+      "sha256": "b69d58933f0ff713274d84f526d5e57bb07369e5d3ca8e3dbecf8d071671ff4e"
+    },
+    {
+      "path": "internal/driver/codex/connection_test.go",
+      "sha256": "2db161077a9814b096791cc5d01f7b1558dc877ccd80cc9176106eaec980d7bc"
+    },
+    {
+      "path": "internal/driver/codex/thread.go",
+      "sha256": "1979fc45b7d97442a79df451d1afa7afefbf78e9a32bd79e5e8a076ee13115a1"
+    },
+    {
+      "path": "internal/driver/codex/thread_test.go",
+      "sha256": "2e6645891b55b748b41fd562f305e1206179fd81d2219d7144ea8d3bbdc71b45"
+    },
+    {
+      "path": "internal/native/connector.go",
+      "sha256": "08f9c4b98f671df340985b1179933456f996e4e88e8051025842522d2d22c7dc"
+    },
+    {
+      "path": "internal/broker/scheduler.go",
+      "sha256": "ce83790e2891d5b5b2317c1f224b4eaf2f5cb68e252ea332b769b2aa175cb72c"
+    },
+    {
+      "path": "internal/broker/native_fixture_test.go",
+      "sha256": "50253bc17c9d9b37990370ae866d4560df2c202df8238cd01385b1a32c82b5ec"
+    }
+  ],
+  "checks": [
+    {
+      "command": "go test -race ./internal/driver/codex -count=1 -v -timeout=90s",
+      "exit": 0,
+      "result": "13 top-level tests passed, including table subcases"
+    },
+    {
+      "command": "go test -race ./... -run '^$' -count=1",
+      "exit": 0,
+      "result": "All test packages compiled; no behavioral tests selected"
+    },
+    {
+      "command": "git diff --check",
+      "exit": 0,
+      "result": "Tracked patch whitespace only; untracked sources excluded"
+    },
+    {
+      "command": "go build -o /Volumes/Dev-OWC-Envoy/waggle-native-builds/work/build--native-messaging/target/waggle .",
+      "exit": 0
+    },
+    {
+      "command": "go vet ./...",
+      "exit": 0
+    }
+  ],
+  "build_storage": "/Volumes/Dev-OWC-Envoy/waggle-native-builds/work/build--native-messaging",
+  "remaining": [
+    "Scheduler still opens and closes drivers per observation and submission",
+    "Native provider execution and per-thread credential handoff remain unconfirmed",
+    "Existing terminal spawn PID-zero fallback remains",
+    "Full behavioral suite has not been rerun for this source"
+  ]
+}

@@ -1,158 +1,81 @@
 package cmd
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
+	"github.com/seungpyoson/waggle/internal/client"
 	"github.com/seungpyoson/waggle/internal/config"
 	"github.com/seungpyoson/waggle/internal/protocol"
-	rt "github.com/seungpyoson/waggle/internal/runtime"
 	"github.com/seungpyoson/waggle/internal/spawn"
 	"github.com/spf13/cobra"
 )
 
 var (
-	spawnName string
-	spawnType string
+	spawnName     string
+	spawnType     string
+	spawnTerminal string
 )
 
 func init() {
-	spawnCmd.Flags().StringVar(&spawnName, "name", "", "Agent name (required)")
+	spawnCmd.Flags().StringVar(&spawnName, "name", "", "Session label (required; identity is assigned by enrollment)")
 	spawnCmd.Flags().StringVar(&spawnType, "type", "", "Agent type (default: from config)")
+	spawnCmd.Flags().StringVar(&spawnTerminal, "terminal", "", "Terminal to launch (default: from agent config)")
 	spawnCmd.MarkFlagRequired("name")
 	rootCmd.AddCommand(spawnCmd)
 }
 
 var spawnCmd = &cobra.Command{
 	Use:   "spawn",
-	Short: "Launch an agent in a new terminal tab",
+	Short: "Request an agent launch in a new terminal tab",
+	Long:  "Request an agent launch in a new terminal tab. Native enrollment establishes session identity and readiness. Launching does not reserve a name or confirm that the agent is running.",
+	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// 1. Load agent config
+		if strings.TrimSpace(spawnName) == "" || len(spawnName) > config.Defaults.MaxFieldLength {
+			return fmt.Errorf("session label outside configured bounds")
+		}
+		// Require the independently started broker without creating a session
+		// registration or any launch record.
+		if _, err := client.Query(cmd.Context(), paths.Socket, config.Defaults.ConnectTimeout, protocol.Request{Cmd: protocol.CmdStatus}); err != nil {
+			return fmt.Errorf("broker unavailable; run waggle start: %w", err)
+		}
+
 		home, err := os.UserHomeDir()
 		if err != nil {
-			printErr("CONFIG_ERROR", "failed to get home directory")
-			return nil
+			return fmt.Errorf("resolve agent config home: %w", err)
 		}
-		configDir := filepath.Join(home, config.Defaults.DirName)
-		agentCfg, err := spawn.LoadAgentConfig(configDir)
+		agentCfg, err := config.LoadAgentConfig(filepath.Join(home, config.Defaults.DirName))
 		if err != nil {
-			printErr("CONFIG_ERROR", err.Error())
-			return nil
+			return err
 		}
-
-		// 2. Resolve agent type
-		agent, err := agentCfg.GetAgent(spawnType)
+		agentType, agent, err := agentCfg.GetAgent(spawnType)
 		if err != nil {
-			printErr("AGENT_ERROR", err.Error())
-			return nil
+			return err
 		}
-
-		// 3. Connect to broker FIRST — fail if broker not running
-		c, err := connectToBroker("")
+		terminal := agentCfg.Terminal
+		if cmd.Flags().Changed("terminal") {
+			terminal = spawnTerminal
+		}
+		launcher, err := spawn.ResolveTerminal(terminal)
 		if err != nil {
-			printErr("BROKER_NOT_RUNNING", fmt.Sprintf("cannot spawn: broker not running (%v)", err))
-			return nil
-		}
-		defer disconnectAndClose(c)
-
-		// 4. Detect terminal
-		term := spawn.Detect()
-		if term == spawn.Unknown {
-			printErr("TERMINAL_ERROR", "cannot detect terminal emulator")
-			return nil
+			return err
 		}
 
-		// 5. Build env
 		env := map[string]string{
 			"WAGGLE_AGENT_NAME": spawnName,
+			"WAGGLE_PROJECT_ID": paths.ProjectID,
 		}
-		// Add project ID if available
-		projectID, err := config.ResolveProjectID()
-		if err == nil {
-			env["WAGGLE_PROJECT_ID"] = projectID
+		if err := launcher.OpenTab(cmd.Context(), agent.Cmd, agent.Args, env); err != nil {
+			return err
 		}
-
-		// 6. Determine actual agent type for output
-		agentType := spawnType
-		if agentType == "" {
-			agentType = agentCfg.Default
-		}
-
-		runtimeWatchRegistered, runtimeWatchErr := registerSpawnRuntimeWatch(projectID, spawnName)
-
-		// 7. Register with broker FIRST (PID=0, will update after tab opens)
-		spawnData, _ := json.Marshal(map[string]any{
-			"pid":  0,
-			"type": agentType,
-		})
-		resp, err := c.Send(protocol.Request{
-			Cmd:     protocol.CmdSpawnRegister,
-			Name:    spawnName,
-			Payload: spawnData,
-		})
-		if err != nil {
-			printErr("SPAWN_ERROR", fmt.Sprintf("registration failed: %v", err))
-			return nil
-		}
-		if !resp.OK {
-			printErr(resp.Code, fmt.Sprintf("registration failed: %s", resp.Error))
-			return nil
-		}
-
-		// 8. Open tab (registration succeeded, name is reserved)
-		pid, err := spawn.OpenTab(term, spawnName, agent.Cmd, agent.Args, env)
-		if err != nil {
-			// Tab failed — deregister (best effort, ignore errors)
-			// We don't have a deregister command, so the entry stays with PID=0/alive=false
-			// which is harmless and will be cleaned up on broker stop
-			printErr("SPAWN_ERROR", err.Error())
-			return nil
-		}
-
-		// 9. Update PID with broker (if we got a real PID)
-		if pid > 0 {
-			pidData, _ := json.Marshal(map[string]any{"pid": pid})
-			c.Send(protocol.Request{
-				Cmd:     protocol.CmdSpawnUpdatePID,
-				Name:    spawnName,
-				Payload: pidData,
-			})
-			// Non-fatal if this fails — agent is still registered with PID=0
-		}
-
-		// 10. Print success
 		printJSON(map[string]any{
-			"ok":                       true,
-			"message":                  fmt.Sprintf("spawned %s (%s) in new tab — PID %d", spawnName, agentType, pid),
-			"name":                     spawnName,
-			"type":                     agentType,
-			"pid":                      pid,
-			"runtime_watch_registered": runtimeWatchRegistered,
-			"runtime_watch_error":      runtimeWatchErr,
+			"ok":    true,
+			"state": "launch_requested",
+			"name":  spawnName,
+			"type":  agentType,
 		})
 		return nil
 	},
-}
-
-func registerSpawnRuntimeWatch(projectID, agentName string) (bool, string) {
-	if projectID == "" || agentName == "" {
-		return false, ""
-	}
-
-	paths := config.NewPaths(projectID)
-	if paths.RuntimeDB == "" {
-		return false, "runtime database path unavailable"
-	}
-
-	err := rt.RegisterWatch(paths, rt.Watch{
-		ProjectID: projectID,
-		AgentName: agentName,
-		Source:    "spawn",
-	})
-	if err != nil {
-		return false, err.Error()
-	}
-	return true, ""
 }

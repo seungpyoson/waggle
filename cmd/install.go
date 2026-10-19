@@ -85,7 +85,7 @@ func installPlatform(platform string) bool {
 				printErr("INSTALL_ERROR", err.Error())
 				return false
 			}
-			printJSON(map[string]any{"ok": true, "message": "Claude Code integration installed. Restart Claude Code to activate."})
+			printJSON(map[string]any{"ok": true, "message": install.InstallMessage(platform)})
 		}
 	case install.PlatformCodex:
 		if installUninstall {
@@ -99,7 +99,7 @@ func installPlatform(platform string) bool {
 				printErr("INSTALL_ERROR", err.Error())
 				return false
 			}
-			printJSON(map[string]any{"ok": true, "message": "Codex integration installed. Restart Codex to activate."})
+			printJSON(map[string]any{"ok": true, "message": install.InstallMessage(platform)})
 		}
 	case install.PlatformGemini:
 		if installUninstall {
@@ -113,7 +113,7 @@ func installPlatform(platform string) bool {
 				printErr("INSTALL_ERROR", err.Error())
 				return false
 			}
-			printJSON(map[string]any{"ok": true, "message": "Gemini integration installed. Restart Gemini to activate."})
+			printJSON(map[string]any{"ok": true, "message": install.InstallMessage(platform)})
 		}
 	case install.PlatformAuggie:
 		if installUninstall {
@@ -127,7 +127,7 @@ func installPlatform(platform string) bool {
 				printErr("INSTALL_ERROR", err.Error())
 				return false
 			}
-			printJSON(map[string]any{"ok": true, "message": "Auggie integration installed. Restart Auggie to activate."})
+			printJSON(map[string]any{"ok": true, "message": install.InstallMessage(platform)})
 		}
 	case install.PlatformAugment:
 		if installUninstall {
@@ -141,7 +141,7 @@ func installPlatform(platform string) bool {
 				printErr("INSTALL_ERROR", err.Error())
 				return false
 			}
-			printJSON(map[string]any{"ok": true, "message": "Augment integration installed. Restart Augment to activate."})
+			printJSON(map[string]any{"ok": true, "message": install.InstallMessage(platform)})
 		}
 	default:
 		printErr("INVALID_REQUEST", fmt.Sprintf("unknown platform: %s (supported: %s)", platform, strings.Join(install.SupportedPlatforms(), ", ")))

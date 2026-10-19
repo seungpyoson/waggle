@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "date": "2026-09-05",
+  "base_head": "5fac0530a789f54b2a87fb10d9d21a14b2dded91",
+  "design_sha256": "e18636f22a2b970cc5a75384fe29abd6eb6a21361920f109a5435ffee62473b4",
+  "scope": "Native entrypoint feasibility before runtime implementation",
+  "runtime_source_changed": false,
+  "checks": [
+    {
+      "id": "installed_versions",
+      "commands": ["codex --version", "claude --version"],
+      "results": {"codex": "0.153.4", "claude": "2.1.261"},
+      "status": "observed"
+    },
+    {
+      "id": "codex_ordinary_shell_identity",
+      "entrypoint": "Current interactive agent's ordinary exec_command shell tool",
+      "checked_environment_names": ["CODEX_THREAD_ID", "CODEX_SESSION_ID"],
+      "both_present": true,
+      "both_valid_uuid": true,
+      "values_equal_in_this_session": true,
+      "values_recorded": false,
+      "status": "observed_in_one_existing_session",
+      "limits": [
+        "Not SessionStart enrollment evidence",
+        "No exact thread-to-endpoint membership verification",
+        "No proof of credential propagation or authentication",
+        "No same-directory, fork, resume or switch isolation proof",
+        "No conclusion that thread and session IDs are generally interchangeable"
+      ]
+    },
+    {
+      "id": "codex_default_daemon",
+      "command": "codex app-server daemon version",
+      "exit_code": 1,
+      "error": "failed to connect to /Users/spson/.codex/app-server-control/app-server-control.sock: No such file or directory (os error 2)",
+      "status": "default_endpoint_unavailable",
+      "limits": ["Does not establish whether other Codex clients use another endpoint"]
+    },
+    {
+      "id": "unix_socket_bind",
+      "operation": "Create AF_UNIX/SOCK_STREAM socket and bind a new temporary path beneath the allowed temporary root",
+      "temporary_root": "/private/var/folders/y5/syb9vj4n3l10028h1jst4_tm0000gn/T",
+      "attempts": 3,
+      "second_attempt_purpose": "Identify the failing syscall; same root and transport",
+      "third_attempt_purpose": "On the user's subsequent unblock request, test the available scoped execution approval",
+      "scoped_execution_approval_attempt": {"requested": true, "command_executed": true, "failed_phase": "bind", "errno": 1},
+      "failed_phase": "bind",
+      "error": "PermissionError: [Errno 1] Operation not permitted",
+      "status": "environment_blocked",
+      "roundtrip_confirmed": false,
+      "temporary_resources_cleaned": true
+    },
+    {
+      "id": "codex_normal_interactive_start",
+      "command": "codex --no-alt-screen",
+      "working_directory": "/private/var/folders/y5/syb9vj4n3l10028h1jst4_tm0000gn/T/waggle-m1/entrypoint",
+      "tty": true,
+      "initial_result": "TERM=dumb warning; continued past the terminal warning",
+      "error": "Network access to ab.chatgpt.com was blocked: domain is not on the allowlist for the current sandbox mode",
+      "status": "environment_blocked",
+      "model_prompt_submitted": false,
+      "followup_process_status": "Execution service no longer recognized the returned process session ID",
+      "limits": ["No ready session, enrollment or native receive capability established"]
+    },
+    {
+      "id": "claude_normal_interactive_start",
+      "command": "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 claude",
+      "working_directory": "/private/var/folders/y5/syb9vj4n3l10028h1jst4_tm0000gn/T/waggle-m1/entrypoint",
+      "tty": true,
+      "exit_code": 1,
+      "error": "EEXIST: file already exists, mkdir '/tmp/claude-501'",
+      "status": "startup_failed",
+      "optional_telemetry_opt_out": true,
+      "model_prompt_submitted": false,
+      "denied_path_inspected": false,
+      "limits": ["Cause inside denied path not confirmed", "No native inbox or outcome semantics established"]
+    }
+  ],
+  "not_confirmed": [
+    "Normal-entrypoint session enrollment",
+    "Broker-path native submission and acknowledgement",
+    "Fresh-idle delivery and busy-session behavior",
+    "Native permissions and retained-input outcome matrix",
+    "Cross-session identity and credential isolation",
+    "Interruption, failure and restart guarantees"
+  ]
+}
